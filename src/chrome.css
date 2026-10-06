@@ -879,6 +879,20 @@ body {
 .share-overlay[hidden] {
   display: none;
 }
+/* The scrim fades on the modal recipe's timing while the card scales (see Motion). */
+.share-overlay {
+  opacity: 0;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.share-overlay.is-open {
+  opacity: 1;
+}
+.share-overlay.is-closing {
+  transition: opacity var(--modal-close-dur) var(--modal-ease);
+}
+.share-overlay.is-closing[hidden] {
+  display: grid;
+}
 .share-card {
   width: min(520px, 100%);
   max-height: min(760px, calc(100vh - 32px));
@@ -1649,6 +1663,10 @@ body {
 .prompt-input:focus-within {
   border-color: var(--ring);
 }
+.prompt-input.is-error,
+.prompt-input.is-error:focus-within {
+  border-color: var(--destructive);
+}
 .prompt-input .chat-attachments {
   grid-area: attachments;
   padding: 8px 8px 0;
@@ -1886,16 +1904,16 @@ body.layout-gate-active iframe#artifact {
   width: 32px;
   height: 32px;
 }
-.rail-unread {
-  position: absolute;
+/* The unread mark is the notification badge recipe (see Motion): it stays mounted and data-open
+   pops it in and out. */
+.rail-unread.t-badge {
   top: 6px;
   right: 6px;
+}
+.rail-unread .t-badge-dot {
   width: 7px;
   height: 7px;
   background: var(--accent);
-}
-.rail-unread[hidden] {
-  display: none;
 }
 /* After the shared button styles above, so the hidden default wins outside the desktop block. */
 .layout-switch,
@@ -1916,10 +1934,17 @@ body.layout-gate-active iframe#artifact {
   :root[data-chat-layout="rail"] {
     --panel-col: 48px;
   }
+  /* Card resize timing on the panel column, so rail and sidebar ease into each other. A drag sets
+     the width directly and a side flip reorders the tracks, so both land without it. */
   .layout {
     grid-template-columns: var(--panel-col) minmax(0, 1fr);
     grid-template-areas: "panel frame";
     position: relative;
+    transition: grid-template-columns var(--resize-dur) var(--resize-ease);
+  }
+  body.is-resizing-panel .layout,
+  body.is-flipping-side .layout {
+    transition: none;
   }
   .frame {
     grid-area: frame;
@@ -2020,10 +2045,23 @@ body.layout-gate-active iframe#artifact {
     background: color-mix(in oklch, var(--popover) 88%, transparent);
     backdrop-filter: blur(18px) saturate(1.4);
     box-shadow: var(--shadow-floating);
-    transition: opacity var(--dur) var(--ease);
+    /* Opening and closing Peek grows the panel between its content height and --peek-h. */
+    interpolate-size: allow-keywords;
+    transition:
+      opacity var(--dur) var(--ease),
+      height var(--resize-dur) var(--resize-ease);
   }
   body.peek-open .panel {
     height: var(--peek-h);
+  }
+  body.is-resizing-peek .panel {
+    transition: opacity var(--dur) var(--ease);
+  }
+  /* Panel reveal when the user switches to Peek. It animates translate rather than transform,
+     which already centres the panel. */
+  :root[data-chat-layout="peek"] .panel.is-revealing {
+    --panel-translate-y: 48px;
+    animation: peek-reveal var(--panel-open-dur) var(--panel-ease) both;
   }
   body.peek-see-through .panel {
     opacity: 0.1;
@@ -2098,9 +2136,6 @@ body.layout-gate-active iframe#artifact {
   :root[data-chat-layout="peek"] .panel-toggle:hover {
     background: var(--muted);
     color: var(--fg);
-  }
-  body.peek-open .panel-toggle svg {
-    transform: rotate(180deg);
   }
   :root[data-chat-layout="peek"] body:not(.peek-open) .panel-scroll {
     display: none;
@@ -2272,10 +2307,6 @@ body.layout-gate-active iframe#artifact {
   }
   .panel-toggle svg {
     display: block;
-    transition: transform var(--dur) var(--ease);
-  }
-  body.sheet-open .panel-toggle svg {
-    transform: rotate(180deg);
   }
   .panel-head.is-fresh .panel-toggle {
     animation: dock-pulse 700ms var(--ease);
@@ -2354,8 +2385,7 @@ body.layout-gate-active iframe#artifact {
 }
 @media (max-width: 860px) and (prefers-reduced-motion: reduce) {
   .panel,
-  .panel-scrim,
-  .panel-toggle svg {
+  .panel-scrim {
     transition: none;
   }
   .panel-head.is-fresh .panel-toggle {
@@ -2460,10 +2490,6 @@ body.layout-gate-active iframe#artifact {
   grid-area: 1 / 1;
   display: inline-flex;
 }
-.theme-toggle[aria-pressed="false"] .theme-icon-sun,
-.theme-toggle[aria-pressed="true"] .theme-icon-moon {
-  visibility: hidden;
-}
 .menu-check {
   margin-left: auto;
   display: inline-flex;
@@ -2499,5 +2525,358 @@ body.layout-gate-active iframe#artifact {
   * {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent) transparent;
+  }
+}
+
+/* ---- Motion. Recipes and tokens from transitions.dev, pasted as published with their
+   reduced-motion guards; chrome-client.js ("Motion") adds the state classes. ---- */
+:root {
+  /* Card resize */
+  --resize-dur: 300ms;
+  --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Number pop-in */
+  --digit-dur: 500ms;
+  --digit-distance: 8px;
+  --digit-stagger: 70ms;
+  --digit-blur: 2px;
+  --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --digit-dir-x: 0;
+  --digit-dir-y: 1;
+  /* Notification badge */
+  --badge-slide-dur: 260ms;
+  --badge-pop-dur: 500ms;
+  --badge-pop-close-dur: 180ms;
+  --badge-fade-dur: 400ms;
+  --badge-fade-close-dur: 180ms;
+  --badge-blur: 2px;
+  --badge-offset-x: -8.2px;
+  --badge-offset-y: 12.4px;
+  --badge-slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --badge-pop-ease: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --badge-close-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Text states swap */
+  --text-swap-dur: 200ms;
+  --text-swap-translate-y: 8px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-out;
+  /* Menu dropdown */
+  --dropdown-open-dur: 250ms;
+  --dropdown-close-dur: 150ms;
+  --dropdown-pre-scale: 0.97;
+  --dropdown-closing-scale: 0.99;
+  --dropdown-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Modal open / close */
+  --modal-open-dur: 250ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.96;
+  --modal-scale-close: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Panel reveal */
+  --panel-open-dur: 400ms;
+  --panel-close-dur: 350ms;
+  --panel-translate-y: 100px;
+  --panel-blur: 2px;
+  --panel-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Icon swap */
+  --icon-swap-dur: 200ms;
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: 0.25;
+  --icon-swap-ease: ease-in-out;
+  /* Error state shake */
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Number pop-in */
+@keyframes t-digit-pop-in {
+  0% {
+    transform: translate(
+      calc(var(--digit-distance) * var(--digit-dir-x)),
+      calc(var(--digit-distance) * var(--digit-dir-y))
+    );
+    opacity: 0;
+    filter: blur(var(--digit-blur));
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+.t-digit-group {
+  display: inline-flex;
+  align-items: baseline;
+}
+.t-digit {
+  display: inline-block;
+  will-change: transform, opacity, filter;
+}
+.t-digit-group.is-animating .t-digit {
+  animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
+}
+.t-digit-group.is-animating .t-digit[data-stagger="1"] {
+  animation-delay: var(--digit-stagger);
+}
+.t-digit-group.is-animating .t-digit[data-stagger="2"] {
+  animation-delay: calc(var(--digit-stagger) * 2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-digit-group .t-digit {
+    animation: none !important;
+  }
+}
+
+/* Notification badge */
+@keyframes t-badge-slide-in {
+  from {
+    transform: translate(var(--badge-offset-x), var(--badge-offset-y));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+.t-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  pointer-events: none;
+  will-change: transform;
+}
+.t-badge[data-open="true"] {
+  animation: t-badge-slide-in var(--badge-slide-dur) var(--badge-slide-ease);
+}
+.t-badge-dot {
+  display: block;
+  transform-origin: center;
+  transform: scale(1);
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    transform var(--badge-pop-dur) var(--badge-pop-ease),
+    opacity var(--badge-fade-dur) var(--badge-pop-ease),
+    filter var(--badge-pop-dur) var(--badge-pop-ease);
+  will-change: transform, opacity, filter;
+}
+.t-badge[data-open="false"] .t-badge-dot {
+  transform: scale(0);
+  opacity: 0;
+  filter: blur(var(--badge-blur));
+  transition:
+    transform var(--badge-pop-close-dur) var(--badge-close-ease),
+    opacity var(--badge-fade-close-dur) var(--badge-close-ease),
+    filter var(--badge-pop-close-dur) var(--badge-close-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-badge,
+  .t-badge-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Text states swap */
+.t-text-swap {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter var(--text-swap-dur) var(--text-swap-ease),
+    opacity var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap {
+    transition: none !important;
+  }
+}
+
+/* Menu dropdown */
+.t-dropdown {
+  transform-origin: top left;
+  transform: scale(var(--dropdown-pre-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity var(--dropdown-open-dur) var(--dropdown-ease);
+  will-change: transform, opacity;
+}
+.t-dropdown[data-origin="top-right"] {
+  transform-origin: top right;
+}
+.t-dropdown[data-origin="top-center"] {
+  transform-origin: top center;
+}
+.t-dropdown[data-origin="bottom-left"] {
+  transform-origin: bottom left;
+}
+.t-dropdown[data-origin="bottom-center"] {
+  transform-origin: bottom center;
+}
+.t-dropdown[data-origin="bottom-right"] {
+  transform-origin: bottom right;
+}
+.t-dropdown.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-dropdown.is-closing {
+  transform: scale(var(--dropdown-closing-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-close-dur) var(--dropdown-ease),
+    opacity var(--dropdown-close-dur) var(--dropdown-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-dropdown {
+    transition: none !important;
+  }
+}
+
+/* Modal open / close */
+.t-modal {
+  transform-origin: center;
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.t-modal.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-modal.is-closing {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-modal {
+    transition: none !important;
+  }
+}
+
+/* Panel reveal, as a one-shot keyframe on translate (Peek's transform already centres it). */
+@keyframes peek-reveal {
+  from {
+    translate: 0 var(--panel-translate-y);
+    opacity: 0;
+    filter: blur(var(--panel-blur));
+  }
+  to {
+    translate: 0 0;
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* Icon swap */
+.t-icon-swap {
+  position: relative;
+  display: inline-grid;
+}
+.t-icon-swap .t-icon {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--icon-swap-dur) var(--icon-swap-ease),
+    filter var(--icon-swap-dur) var(--icon-swap-ease),
+    transform var(--icon-swap-dur) var(--icon-swap-ease);
+  will-change: opacity, filter, transform;
+}
+.t-icon-swap[data-state="a"] .t-icon[data-icon="a"],
+.t-icon-swap[data-state="b"] .t-icon[data-icon="b"] {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+.t-icon-swap[data-state="a"] .t-icon[data-icon="b"],
+.t-icon-swap[data-state="b"] .t-icon[data-icon="a"] {
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+  transform: scale(var(--icon-swap-start-scale));
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-icon-swap .t-icon {
+    transition: none !important;
+  }
+}
+
+/* Error state shake */
+.t-input {
+  transition: border-color 150ms ease-out;
+  will-change: transform;
+}
+.t-input.is-error {
+  transition: border-color var(--revert-dur, 280ms) ease-out;
+}
+.t-input.is-shaking {
+  animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear;
+}
+@keyframes t-input-shake {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: var(--shake-ease);
+  }
+  28.57% {
+    transform: translateX(var(--shake-distance));
+    animation-timing-function: var(--shake-ease);
+  }
+  57.14% {
+    transform: translateX(calc(var(--shake-distance) * -1));
+    animation-timing-function: var(--shake-ease);
+  }
+  78.57% {
+    transform: translateX(var(--shake-overshoot));
+    animation-timing-function: var(--shake-ease);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-input {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+/* A closing menu keeps painting through its exit transition. `hidden` is already set, so the rest
+   of the chrome and the accessibility tree treat it as closed; this only holds the pixels. */
+.menu.t-dropdown.is-closing[hidden] {
+  display: block;
+}
+.warnings-drawer.t-dropdown.is-closing[hidden] {
+  display: flex;
+}
+@media (prefers-reduced-motion: reduce) {
+  .share-overlay,
+  .panel.is-revealing {
+    transition: none !important;
+    animation: none !important;
   }
 }

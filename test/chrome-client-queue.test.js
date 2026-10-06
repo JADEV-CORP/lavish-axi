@@ -274,6 +274,8 @@ async function createChromeHarness({
         for (const child of this.children) child.parentElement = null;
         this.children = [];
         for (const child of next) this.appendChild(child);
+        // The real DOM's textContent is its children's text, which is what a digit-by-digit count reads.
+        if (next.length) this.textContent = next.map((child) => child.textContent).join("");
       },
       click(event = {}) {
         this.clicked = true;
@@ -8999,14 +9001,14 @@ test("rail mode collapses the panel and counts replies until it is opened", asyn
   assert.equal(layoutState(chrome).mode, "rail");
   assert.equal(chrome.element("panelScroll").inert, true);
   assert.equal(chrome.element("chatComposer").inert, true);
-  assert.equal(chrome.element("railUnread").hidden, true);
+  assert.equal(chrome.element("railUnread").dataset.open, "false");
 
   chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Renamed the payment step." }) });
-  assert.equal(chrome.element("railUnread").hidden, false);
+  assert.equal(chrome.element("railUnread").dataset.open, "true");
 
   chrome.element("railOpen").dispatch("click", {});
   assert.equal(layoutState(chrome).mode, "sidebar");
-  assert.equal(chrome.element("railUnread").hidden, true);
+  assert.equal(chrome.element("railUnread").dataset.open, "false");
   assert.equal(chrome.element("panelScroll").inert, false);
   assert.equal(chrome.element("chatComposer").inert, false);
 });
@@ -9049,8 +9051,11 @@ test("the top bar status follows agent presence", async () => {
   const chrome = await createChromeHarness();
   const status = chrome.element("agentStatus");
   const text = chrome.element("agentStatusText");
-  const presence = (state, mode) =>
+  // The label swaps out and back in, so the new text lands once the exit half has run.
+  const presence = (state, mode) => {
     chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify(mode ? { state, mode } : { state }) });
+    chrome.runTimers(200);
+  };
 
   presence("listening");
   assert.equal(status.dataset.state, "listening");

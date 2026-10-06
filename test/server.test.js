@@ -879,7 +879,7 @@ test("chrome top bar follows the design mock wordmark and overflow menu treatmen
   assert.doesNotMatch(css, /text-transform:uppercase/);
   assert.doesNotMatch(css, /font-family:var\(--font-serif\)/);
   assert.match(html, /class="more-button" id="moreButton"/);
-  assert.match(html, /class="menu more-menu" id="moreMenu" hidden/);
+  assert.match(html, /class="menu more-menu t-dropdown" data-origin="top-right" id="moreMenu" hidden/);
   assert.doesNotMatch(html, /class="file-input"/);
   assert.doesNotMatch(html, /class="divider"/);
   assert.doesNotMatch(html, /class="file-icon"/);
@@ -1107,7 +1107,7 @@ test("composer offers two always-visible top-level send actions", async () => {
   // actions on the right. The hint sits right above the box, next to the actions it explains.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="prompt-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
+    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="prompt-input t-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
   );
   assert.match(
     html,
@@ -6752,7 +6752,10 @@ test("chrome offers the conversation layouts and a keyboard-operable resize hand
     html,
     /<button class="rail-button" id="railOpen" type="button" aria-label="Open the conversation" title="Open the conversation">/,
   );
-  assert.match(html, /<span class="rail-unread" id="railUnread" hidden><\/span>/);
+  assert.match(
+    html,
+    /<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot"><\/span><\/span>/,
+  );
   assert.match(
     html,
     /<button class="panel-see-through" id="panelSeeThrough" type="button" aria-label="Hold to see the artifact through the panel" title="Hold to see the artifact through the panel">/,
@@ -6792,7 +6795,7 @@ test("top bar shows whether the agent is listening", () => {
 
   assert.match(
     html,
-    /<span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"><\/span><span class="agent-status-text" id="agentStatusText">Agent not listening<\/span><\/span>/,
+    /<span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"><\/span><span class="agent-status-text t-text-swap" id="agentStatusText">Agent not listening<\/span><\/span>/,
   );
   // It sits before the Annotate switch, at the start of the controls.
   assert.ok(html.indexOf('id="agentStatus"') < html.indexOf('id="annotation"'));

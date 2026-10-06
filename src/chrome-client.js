@@ -118,6 +118,7 @@ const panel = /** @type {HTMLElement} */ (document.getElementById("panel"));
 const panelHead = /** @type {HTMLDivElement} */ (document.getElementById("panelHead"));
 const panelSummary = /** @type {HTMLSpanElement} */ (document.getElementById("panelSummary"));
 const panelToggle = /** @type {HTMLButtonElement} */ (document.getElementById("panelToggle"));
+const panelToggleIcon = /** @type {HTMLSpanElement} */ (document.getElementById("panelToggleIcon"));
 const panelScrim = /** @type {HTMLDivElement} */ (document.getElementById("panelScrim"));
 const sendButton = /** @type {HTMLButtonElement} */ (document.getElementById("send"));
 const sendAndEndButton = /** @type {HTMLButtonElement} */ (document.getElementById("sendAndEnd"));
@@ -188,6 +189,7 @@ const revisionsDrawer = /** @type {HTMLDivElement} */ (document.getElementById("
 const revisionsSummary = /** @type {HTMLParagraphElement} */ (document.getElementById("revisionsSummary"));
 const revisionsList = /** @type {HTMLDivElement} */ (document.getElementById("revisionsList"));
 const sendHint = /** @type {HTMLDivElement} */ (document.getElementById("sendHint"));
+const promptInput = /** @type {HTMLDivElement} */ (document.getElementById("promptInput"));
 const whiteboardOverlay = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardOverlay"));
 const whiteboardFrame = /** @type {HTMLIFrameElement} */ (document.getElementById("whiteboardFrame"));
 const whiteboardCloseButton = /** @type {HTMLButtonElement} */ (document.getElementById("whiteboardClose"));
@@ -331,6 +333,7 @@ let artifactSilenceTimer;
 let copyHintTimer;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let sendHintTimer;
+let sendShakeTimer;
 let sendHintPersistent = false;
 /** @type {{ kind: "preparation" | "submission" | "terminal", operation: object, preparationType?: string } | null} */
 let sendFailureOwner = null;
@@ -808,8 +811,22 @@ function showSendHint(message = DEFAULT_SEND_HINT, holdMs = 2600, focusInput = t
     sendHint.hidden = true;
     sendHint.textContent = DEFAULT_SEND_HINT;
     sendHintPersistent = false;
+    promptInput.classList.remove("is-error");
   }, holdMs);
   if (focusInput) chatInput.focus();
+}
+
+// Error state shake: an empty send shakes the prompt box and reddens its border for as long as the
+// hint explains why.
+function rejectEmptySend() {
+  showSendHint();
+  promptInput.classList.add("is-error");
+  promptInput.classList.remove("is-shaking");
+  void promptInput.offsetWidth;
+  promptInput.classList.add("is-shaking");
+  clearTimeout(sendShakeTimer);
+  const shakeMs = motionMs("--shake-dur-a", 80) * 2 + motionMs("--shake-dur-b", 60) * 2;
+  sendShakeTimer = setTimeout(() => promptInput.classList.remove("is-shaking"), shakeMs + 20);
 }
 
 function hideSendHint(force = false) {
@@ -818,6 +835,7 @@ function hideSendHint(force = false) {
   sendHint.hidden = true;
   sendHint.textContent = DEFAULT_SEND_HINT;
   sendHint.classList.remove("persistent");
+  promptInput.classList.remove("is-error");
   sendHintPersistent = false;
   sendAcknowledgementWarningVisible = false;
 }
@@ -864,8 +882,125 @@ function clearPreparationFailure(preparationType) {
   clearPersistentSendFailure();
 }
 
+// ---- Motion: drives the transitions.dev recipes in the "Motion" section of chrome.css. State
+// still lives on `hidden`, aria-*, and textContent, and each changes at once as it always did; these
+// helpers only add the classes that animate between states, and under prefers-reduced-motion they
+// jump straight to the end state. ----
+
+function prefersReducedMotion() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// A recipe duration token such as --dropdown-close-dur, in milliseconds.
+function motionMs(token, fallback) {
+  const root = document.documentElement;
+  if (typeof window.getComputedStyle !== "function" || !root) return fallback;
+  const value = parseFloat(window.getComputedStyle(root).getPropertyValue(token));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+/** @type {WeakMap<Element, ReturnType<typeof setTimeout>>} */
+const layerCloseTimers = new WeakMap();
+
+// Opens or closes a menu or dialog. `hidden` flips immediately, so every check of it and the
+// accessibility tree see the new state at once; on close, `is-closing` keeps the layer painted
+// (the `.is-closing[hidden]` rules) until its exit transition ends. A dialog passes its card as
+// `surface` so the card scales while the layer behind it fades.
+function setLayerOpen(layer, open, { surface = null, closeToken = "--dropdown-close-dur" } = {}) {
+  const parts = surface ? [layer, surface] : [layer];
+  // Closing a closed layer is a no-op, so a second close cannot cut short an exit already running.
+  if (!open && layer.hidden) return;
+  clearTimeout(layerCloseTimers.get(layer));
+  layerCloseTimers.delete(layer);
+  if (open) {
+    const wasHidden = layer.hidden;
+    layer.hidden = false;
+    for (const part of parts) part.classList.remove("is-closing");
+    // Lay out the closed pose first so the open transition has somewhere to start from.
+    if (wasHidden) void layer.offsetWidth;
+    for (const part of parts) part.classList.add("is-open");
+    return;
+  }
+  layer.hidden = true;
+  for (const part of parts) part.classList.remove("is-open");
+  if (prefersReducedMotion()) {
+    for (const part of parts) part.classList.remove("is-closing");
+    return;
+  }
+  for (const part of parts) part.classList.add("is-closing");
+  layerCloseTimers.set(
+    layer,
+    setTimeout(
+      () => {
+        layerCloseTimers.delete(layer);
+        for (const part of parts) part.classList.remove("is-closing");
+      },
+      motionMs(closeToken, 150),
+    ),
+  );
+}
+
+/** @type {WeakMap<Element, { timer: ReturnType<typeof setTimeout>, text: string }>} */
+const pendingTextSwaps = new WeakMap();
+
+// Text states swap: the old text leaves upward, the new one rises in. A label shown for the first
+// time just appears.
+function swapText(node, text) {
+  const pending = pendingTextSwaps.get(node);
+  if (pending) {
+    if (pending.text === text) return;
+    clearTimeout(pending.timer);
+    pendingTextSwaps.delete(node);
+  }
+  if (node.textContent === text) {
+    node.classList.remove("is-exit");
+    return;
+  }
+  if (!node.textContent || prefersReducedMotion()) {
+    node.classList.remove("is-exit", "is-enter-start");
+    node.textContent = text;
+    return;
+  }
+  node.classList.remove("is-enter-start");
+  node.classList.add("is-exit");
+  const timer = setTimeout(
+    () => {
+      pendingTextSwaps.delete(node);
+      node.textContent = text;
+      node.classList.remove("is-exit");
+      node.classList.add("is-enter-start");
+      void node.offsetWidth;
+      node.classList.remove("is-enter-start");
+    },
+    motionMs("--text-swap-dur", 200),
+  );
+  pendingTextSwaps.set(node, { timer, text });
+}
+
+// Number pop-in: each digit rises into place, the last two a beat apart.
+function setCount(node, count) {
+  const text = String(count);
+  if (node.textContent === text) return;
+  if (prefersReducedMotion()) {
+    node.textContent = text;
+    return;
+  }
+  node.classList.remove("is-animating");
+  const digits = [...text].map((character, index) => {
+    const digit = document.createElement("span");
+    digit.className = "t-digit";
+    digit.textContent = character;
+    if (text.length > 1 && index === text.length - 2) digit.dataset.stagger = "1";
+    if (text.length > 1 && index === text.length - 1) digit.dataset.stagger = "2";
+    return digit;
+  });
+  node.replaceChildren(...digits);
+  void node.offsetWidth;
+  node.classList.add("is-animating");
+}
+
 function setMenuOpen(button, menu, open) {
-  menu.hidden = !open;
+  setLayerOpen(menu, open);
   button.setAttribute("aria-expanded", String(open));
 }
 
@@ -1142,7 +1277,7 @@ const AGENT_STATUS_TEXT = {
 
 function renderAgentStatus() {
   agentStatus.dataset.state = ended ? "ended" : agentPresence;
-  agentStatusText.textContent = ended ? "Session ended" : AGENT_STATUS_TEXT[agentPresence] || AGENT_STATUS_TEXT.waiting;
+  swapText(agentStatusText, ended ? "Session ended" : AGENT_STATUS_TEXT[agentPresence] || AGENT_STATUS_TEXT.waiting);
 }
 
 function setAgentPresence(state) {
@@ -1356,6 +1491,7 @@ chatSuggestions.addEventListener("click", (event) => {
 // toggle, the "Follow system theme" item, OS changes, and telling the artifact SDK.
 const THEME_STORAGE_KEY = "lavish-axi:theme";
 const themeToggle = /** @type {HTMLButtonElement} */ (document.getElementById("themeToggle"));
+const themeIconSwap = /** @type {HTMLSpanElement} */ (document.getElementById("themeIconSwap"));
 const followSystemThemeItem = /** @type {HTMLButtonElement} */ (document.getElementById("followSystemTheme"));
 const systemDarkMedia =
   typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -1389,6 +1525,7 @@ function applyTheme({ notifyFrame = true } = {}) {
   const dark = effectiveTheme() === "dark";
   const label = dark ? "Switch to light theme" : "Switch to dark theme";
   themeToggle.setAttribute("aria-pressed", String(dark));
+  themeIconSwap.dataset.state = dark ? "b" : "a";
   themeToggle.setAttribute("aria-label", label);
   themeToggle.setAttribute("title", label);
   followSystemThemeItem.setAttribute("aria-checked", String(!choice));
@@ -1508,6 +1645,7 @@ function applySheetState() {
     (rail ? railOpenButton : panelToggle).focus();
   }
   panelToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  panelToggleIcon.dataset.state = open ? "b" : "a";
   panelToggle.setAttribute("aria-label", open ? "Hide conversation" : "Show conversation");
   renderSheetSummary();
 }
@@ -1546,7 +1684,7 @@ function pulseSheetDock() {
 function noteAgentReply(text) {
   if (isRailLayout()) {
     railHasUnread = true;
-    railUnread.hidden = false;
+    railUnread.dataset.open = "true";
   }
   if (!isDockLayout() || sheetOpen) return;
   unreadAgentReply = String(text || "");
@@ -1620,6 +1758,7 @@ panelHead.addEventListener("pointermove", (event) => {
   if (peekDrag && event.pointerId === peekDrag.pointerId) {
     const offset = Number(event.clientY) - peekDrag.startY;
     if (Math.abs(offset) > 6) peekDrag.moved = true;
+    if (peekDrag.moved) document.body.classList.add("is-resizing-peek");
     if (peekDrag.moved && sheetOpen) setPeekHeight(peekDrag.startHeight - offset, { save: false });
     return;
   }
@@ -1638,6 +1777,7 @@ panelHead.addEventListener("pointerup", (event) => {
     const offset = Number(event.clientY) - peekDrag.startY;
     const moved = peekDrag.moved;
     peekDrag = null;
+    document.body.classList.remove("is-resizing-peek");
     if (!moved) return;
     suppressSheetClick = true;
     if (sheetOpen) saveChatLayout();
@@ -1649,6 +1789,7 @@ panelHead.addEventListener("pointerup", (event) => {
 panelHead.addEventListener("pointercancel", (event) => {
   if (peekDrag && event.pointerId === peekDrag.pointerId) {
     peekDrag = null;
+    document.body.classList.remove("is-resizing-peek");
     suppressSheetClick = false;
     return;
   }
@@ -1773,15 +1914,37 @@ function applyChatLayout() {
   }
   panelResizer.setAttribute("aria-valuenow", String(chatLayout.width));
   if (chatLayout.mode !== "rail") railHasUnread = false;
-  railUnread.hidden = !railHasUnread;
+  railUnread.dataset.open = String(railHasUnread);
   applySheetState();
 }
 
 /** @param {Partial<typeof chatLayout>} change */
 function setChatLayout(change) {
+  const enteringPeek = chatLayout.mode !== "peek" && change.mode === "peek";
+  // A side flip swaps the grid's column order; tweening the tracks across that would stretch the
+  // panel over the artifact, so the flip lands without the card-resize transition.
+  const flippingSide = change.side !== undefined && change.side !== chatLayout.side;
+  if (flippingSide) document.body.classList.add("is-flipping-side");
   chatLayout = { ...chatLayout, ...change };
   applyChatLayout();
   saveChatLayout();
+  if (flippingSide) {
+    void panel.offsetWidth;
+    document.body.classList.remove("is-flipping-side");
+  }
+  if (enteringPeek) revealPeek();
+}
+
+let peekRevealTimer;
+
+// Panel reveal: Peek rises into place when the user switches to it, not on a reload that restores it.
+function revealPeek() {
+  if (!isPeekLayout() || prefersReducedMotion()) return;
+  clearTimeout(peekRevealTimer);
+  panel.classList.remove("is-revealing");
+  void panel.offsetWidth;
+  panel.classList.add("is-revealing");
+  peekRevealTimer = setTimeout(() => panel.classList.remove("is-revealing"), motionMs("--panel-open-dur", 400));
 }
 
 function setPanelWidth(width, { save = true } = {}) {
@@ -2351,7 +2514,7 @@ function sendQueued(endAfter) {
   const shouldEnd = Boolean(endAfter && !chipsBlocked);
   const preparations = shouldEnd ? [...feedbackPreparations] : [];
   if (!queued.length && preparations.length === 0) {
-    if (!chipsBlocked && !sendFailureOwner) showSendHint();
+    if (!chipsBlocked && !sendFailureOwner) rejectEmptySend();
     return;
   }
   if (!sendFailureOwner) hideSendHint(true);
@@ -2401,7 +2564,7 @@ function completeTerminalPreparation(terminal, results) {
   clearPreparationFailure("terminal");
   if (!terminal.prompts.length) {
     releaseTerminalSubmission(terminal);
-    if (!sendFailureOwner) showSendHint();
+    if (!sendFailureOwner) rejectEmptySend();
     return;
   }
   // Only make the reservation durable once every preparation has joined the exact
@@ -3028,7 +3191,7 @@ function renderWarnings() {
 
   warningsWrap.hidden = count === 0 || ended;
   if (warningsWrap.hidden && warningsDrawerOpen) setWarningsDrawerOpen(false);
-  warningsCount.textContent = String(count);
+  setCount(warningsCount, count);
   warningsButton.setAttribute(
     "aria-label",
     count === 1 ? "1 unresolved layout issue" : count + " unresolved layout issues",
@@ -3077,7 +3240,7 @@ function toggleSelectAllWarnings() {
 
 function setWarningsDrawerOpen(open) {
   warningsDrawerOpen = open && !ended;
-  warningsDrawer.hidden = !warningsDrawerOpen;
+  setLayerOpen(warningsDrawer, warningsDrawerOpen);
   warningsButton.setAttribute("aria-expanded", String(warningsDrawerOpen));
   if (warningsDrawerOpen) {
     closeMenus();
@@ -3323,7 +3486,7 @@ function renderRevisionLegend() {
   const count = revisionEntries.length;
   revisionsWrap.hidden = count === 0 || ended;
   if (revisionsWrap.hidden && revisionsDrawerOpen) setRevisionsDrawerOpen(false);
-  revisionsCount.textContent = String(count);
+  setCount(revisionsCount, count);
   revisionsButton.setAttribute("aria-label", count === 1 ? "1 revision" : count + " revisions");
   revisionsSummary.textContent =
     (count === 1 ? "1 revision" : count + " revisions") +
@@ -3335,7 +3498,7 @@ function renderRevisionLegend() {
 
 function setRevisionsDrawerOpen(open) {
   revisionsDrawerOpen = open && !ended;
-  revisionsDrawer.hidden = !revisionsDrawerOpen;
+  setLayerOpen(revisionsDrawer, revisionsDrawerOpen);
   revisionsButton.setAttribute("aria-expanded", String(revisionsDrawerOpen));
   if (revisionsDrawerOpen) closeMenus();
 }
@@ -3593,7 +3756,7 @@ function publishedVisibilityText(isPublic, rendered, publicText) {
 
 function openShareDialog() {
   closeMenus();
-  shareDialog.hidden = false;
+  setLayerOpen(shareDialog, true, { surface: shareForm });
   shareStatus.textContent = "";
   shareStatus.classList.remove("error");
   renderShareResult();
@@ -3615,7 +3778,7 @@ function syncSharePasswordInput() {
 }
 
 function closeShareDialog() {
-  shareDialog.hidden = true;
+  setLayerOpen(shareDialog, false, { surface: shareForm, closeToken: "--modal-close-dur" });
 }
 
 async function copyToButton(value, button, label) {
