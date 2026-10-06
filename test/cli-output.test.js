@@ -3567,3 +3567,30 @@ test("createShareUnpublishOutput separates the immediate content swap from the l
   assert.match(output.next_step, /readable without the password/i);
   assert.doesNotMatch(output.next_step, /no visitor can read the old content/i);
 });
+
+test("update is refused in the Jadev fork instead of installing the upstream npm release", async () => {
+  const stateDir = await mkdtemp(`${os.tmpdir()}/lavish-axi-update-test-`);
+  try {
+    for (const args of [["update"], ["update", "--check"]]) {
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), ...args],
+        {
+          cwd: fileURLToPath(new URL("..", import.meta.url)),
+          encoding: "utf8",
+          env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir, LAVISH_AXI_TELEMETRY: "0" },
+        },
+      );
+      assert.notEqual(result.status, 0, args.join(" "));
+      assert.match(result.stdout, /FORK_UPDATE_DISABLED/);
+      assert.match(result.stdout, /Jadev fork/);
+    }
+    assert.match(getCommandHelp("update"), /Disabled in the Jadev fork/);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("the fork carries a jadev prerelease version so it is never mistaken for an npm release", () => {
+  assert.match(VERSION, /^\d+\.\d+\.\d+-jadev\.\d+$/);
+});

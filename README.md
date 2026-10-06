@@ -26,6 +26,8 @@
   <img alt="Lavish Editor demo" src="lavish-editor-marketing/renders/lavish-editor-marketing.gif" width="960" />
 </p>
 
+> **Jadev fork.** This is Jadev's fork of lavish-axi, versioned `<upstream>-jadev.<n>`. Install, upgrade, and upstream sync are in [docs/jadev-fork.md](docs/jadev-fork.md); `lavish-axi update` is disabled here because it would install the upstream npm release.
+
 HTML is the new markdown. Lavish is the new editor for your HTML artifacts.
 
 Agents are good at producing rich HTML artifacts, but the human-agent collaboration loop on such artifacts is lacking and falls back into screenshots and long responses for “tell me what to change.”
