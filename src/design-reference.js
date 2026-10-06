@@ -2,19 +2,70 @@ import { listPlaybooks, PLAYBOOK_ROUTER_INSTRUCTION } from "./playbooks.js";
 
 export const TAILWIND_BROWSER_VERSION = "4.2.4";
 export const DAISYUI_VERSION = "5.5.19";
+export const INTER_FONT_VERSION = "5.3.0";
 export const MERMAID_VERSION = "11.15.0";
 
 export const DESIGN_CDN_URLS = {
   tailwind: `https://cdn.jsdelivr.net/npm/@tailwindcss/browser@${TAILWIND_BROWSER_VERSION}/dist/index.global.js`,
   daisyui: `https://cdn.jsdelivr.net/npm/daisyui@${DAISYUI_VERSION}/daisyui.css`,
   daisyuiThemes: `https://cdn.jsdelivr.net/npm/daisyui@${DAISYUI_VERSION}/themes.css`,
+  inter: `https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@${INTER_FONT_VERSION}/index.css`,
 };
 
 export const MERMAID_CDN_URL = `https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dist/mermaid.esm.min.mjs`;
 
-export const DESIGN_CDN_SNIPPET = `<link rel="stylesheet" href="${DESIGN_CDN_URLS.daisyui}">
+// The Lavish theme for DaisyUI: the same mauve-and-rose palette, square corners, and flat surfaces
+// as the review chrome (shadcn/ui preset b50eA1ekc). The DaisyUI CDN only serves its built-in
+// themes, so this one travels inline in the snippet and the artifact stays one portable file.
+export const LAVISH_THEME_CSS = `<style>
+  [data-theme="lavish"], [data-theme="lavish-dark"] {
+    font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+    --radius-selector: 0rem; --radius-field: 0rem; --radius-box: 0rem;
+    --size-selector: 0.25rem; --size-field: 0.25rem;
+    --border: 1px; --depth: 0; --noise: 0;
+    --card-p: 1rem;
+  }
+  /* Inter sits about a pixel low in a fixed-height control; a 2px bottom inset centres its text,
+     and inputs share the 1rem inset cards, alerts, and tables use, so text lines up down a page. */
+  :is([data-theme="lavish"], [data-theme="lavish-dark"]) :is(.btn, .badge, .kbd, .tab, .input, .select) {
+    padding-bottom: 2px;
+  }
+  :is([data-theme="lavish"], [data-theme="lavish-dark"]) :is(.input, .select) {
+    padding-inline: 1rem;
+  }
+  [data-theme="lavish"] {
+    color-scheme: light;
+    --color-base-100: oklch(1 0 0); --color-base-200: oklch(0.96 0.003 325.6); --color-base-300: oklch(0.922 0.005 325.62);
+    --color-base-content: oklch(0.145 0.008 326);
+    --color-primary: oklch(0.514 0.222 16.935); --color-primary-content: oklch(0.969 0.015 12.422);
+    --color-secondary: oklch(0.967 0.001 286.375); --color-secondary-content: oklch(0.21 0.006 285.885);
+    --color-accent: oklch(0.96 0.003 325.6); --color-accent-content: oklch(0.212 0.019 322.12);
+    --color-neutral: oklch(0.212 0.019 322.12); --color-neutral-content: oklch(0.985 0 0);
+    --color-info: oklch(0.6 0.12 240); --color-info-content: oklch(0.985 0 0);
+    --color-success: oklch(0.55 0.13 150); --color-success-content: oklch(0.985 0 0);
+    --color-warning: oklch(0.7 0.15 70); --color-warning-content: oklch(0.2 0.03 70);
+    --color-error: oklch(0.577 0.245 27.325); --color-error-content: oklch(0.985 0 0);
+  }
+  [data-theme="lavish-dark"] {
+    color-scheme: dark;
+    --color-base-100: oklch(0.145 0.008 326); --color-base-200: oklch(0.212 0.019 322.12); --color-base-300: oklch(0.263 0.024 320.12);
+    --color-base-content: oklch(0.985 0 0);
+    --color-primary: oklch(0.455 0.188 13.697); --color-primary-content: oklch(0.969 0.015 12.422);
+    --color-secondary: oklch(0.274 0.006 286.033); --color-secondary-content: oklch(0.985 0 0);
+    --color-accent: oklch(0.263 0.024 320.12); --color-accent-content: oklch(0.985 0 0);
+    --color-neutral: oklch(0.274 0.006 286.033); --color-neutral-content: oklch(0.985 0 0);
+    --color-info: oklch(0.7 0.12 240); --color-info-content: oklch(0.145 0.008 326);
+    --color-success: oklch(0.72 0.15 150); --color-success-content: oklch(0.145 0.008 326);
+    --color-warning: oklch(0.78 0.14 75); --color-warning-content: oklch(0.2 0.03 70);
+    --color-error: oklch(0.704 0.191 22.216); --color-error-content: oklch(0.145 0.008 326);
+  }
+</style>`;
+
+export const DESIGN_CDN_SNIPPET = `<link rel="stylesheet" href="${DESIGN_CDN_URLS.inter}">
+<link rel="stylesheet" href="${DESIGN_CDN_URLS.daisyui}">
 <link rel="stylesheet" href="${DESIGN_CDN_URLS.daisyuiThemes}">
-<script src="${DESIGN_CDN_URLS.tailwind}"></script>`;
+<script src="${DESIGN_CDN_URLS.tailwind}"></script>
+${LAVISH_THEME_CSS}`;
 
 export const MERMAID_CDN_SNIPPET = `<script type="module">
   import mermaid from "${MERMAID_CDN_URL}";
@@ -151,12 +202,14 @@ export const REVISION_REGISTRY_SNIPPET = `<script type="application/json" data-l
 // summary, and the design command help. The installable skill does not embed this rule;
 // it points at `lavish-axi design`. Edit the rule here only.
 export const DESIGN_PRIORITY_RULE =
-  "Decide the design direction in this strict priority order, and only move to the next step when the current one truly yields nothing: (1) if the user asked for a specific look or named design system, use that; (2) otherwise you must first inspect the project the artifact is about - the subject or product whose content or UI it represents, which may differ from your current working directory - and match that project's design system: Tailwind or theme config, shared CSS variables or design tokens, component library, brand assets, or existing styled pages. If the artifact previews, proposes, or mocks a specific app's UI, render it in that app's own design system so it faithfully shows the product, even when you are running in a different repo; (3) only when both steps come up empty, use the Lavish-recommended Tailwind CSS browser runtime v4 + DaisyUI v5, available via CDN, and prefer that CDN snippet over hand-writing styles unless explicitly instructed otherwise by the user.";
+  "Decide the design direction in this priority order: (1) if the user asked for a specific look or named design system, use that; (2) otherwise use the Lavish design: paste the CDN snippet from `lavish-axi design` (Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme), set `<html data-theme=\"lavish\">` (or `lavish-dark`), and prefer that snippet over hand-writing styles unless explicitly instructed otherwise by the user; (3) the one exception to (2) is a screen that previews, proposes, or mocks a specific app's UI. For that screen only, inspect the project the artifact is about - the subject or product whose UI it represents, which may differ from your current working directory - and render the mock in the app's own design system (its Tailwind or theme config, design tokens, component library, and brand assets) inside a framed region, so it faithfully shows the product, while the page around the frame stays in the Lavish design.";
 
 export const DESIGN_SYSTEM_HINT =
   "Lavish does not auto-inject any design system - artifacts stay portable so they render identically when opened directly without lavish-axi running. Before writing any HTML: " +
   DESIGN_PRIORITY_RULE +
   " Run `lavish-axi design` for a content-to-playbook router, a copy-pasteable CDN snippet, the whiteboard (Mermaid) opt-in snippet, and the DaisyUI component reference. When you deliver the artifact, state which of the three design sources you used and why.";
+
+export const LAVISH_THEMES = ["lavish", "lavish-dark"];
 
 export const DAISYUI_THEMES = [
   "light",
@@ -204,12 +257,14 @@ export function createDesignOutput() {
     },
     design: {
       summary:
-        "Use this Lavish CDN fallback only if (1) the user gave no design direction and (2) you already inspected the project the artifact is about and found no design system or style conventions to match. If you have not checked the subject project yet, check first. Lavish does not auto-inject any design system; artifacts stay portable HTML. Paint an explicit page background and readable text. " +
+        "This is the Lavish design, the default for every artifact whose user gave no design direction. A screen that mocks a specific product keeps that product's own design system inside its frame. Lavish does not auto-inject any design system; artifacts stay portable HTML. Paint an explicit page background and readable text. " +
         DESIGN_PRIORITY_RULE +
         " Paste the CDN snippet below into your `<head>`.",
       cdn_snippet: DESIGN_CDN_SNIPPET,
+      lavish_theme_note:
+        'The snippet ends with the Lavish theme as an inline `<style>`: `data-theme="lavish"` (light) and `data-theme="lavish-dark"`. Keep it inline; the DaisyUI CDN cannot serve a custom theme.',
       cdn_urls: DESIGN_CDN_URLS,
-      versions: { tailwind: TAILWIND_BROWSER_VERSION, daisyui: DAISYUI_VERSION },
+      versions: { tailwind: TAILWIND_BROWSER_VERSION, daisyui: DAISYUI_VERSION, inter: INTER_FONT_VERSION },
       latest_docs: "https://daisyui.com/components/",
       docs_note:
         "Use this command for common syntax. Read the latest DaisyUI docs for full details when using advanced or unfamiliar components.",
@@ -233,14 +288,14 @@ export function createDesignOutput() {
       how: 'Append one entry per round to the `data-lavish-revisions` JSON (oldest first, stable `id`s), and put `data-lavish-revision="<id>"` on each block you actually edited or added. Lavish reads them and never restyles the page, so the saved file looks the same opened directly.',
     },
     theme_usage: [
-      'Default to `<html data-theme="luxury">` - it matches the Lavish look. Pick a different theme from the list below only when the user asked for one or the content clearly calls for it.',
+      'Default to `<html data-theme="lavish">`, or `lavish-dark` for a dark page. Both ship inline in the CDN snippet. Pick a DaisyUI theme from the list below only when the user asked for one.',
       'Set a nested section theme with `<section data-theme="night">`.',
       "Prefer semantic colors such as `bg-base-100`, `bg-base-200`, `text-base-content`, `bg-primary`, `text-primary-content`, `alert-warning`, and `btn-primary` so themes remain readable.",
       "Avoid hardcoded Tailwind color names for text and surfaces unless the user asked for exact colors.",
       "Use Tailwind responsive prefixes such as `sm:`, `md:`, `lg:`, and `xl:` for layout changes.",
       'Never `@apply` DaisyUI classes (such as `text-base-content/40`, `bg-base-200`, or `btn`) inside `<style type="text/tailwindcss">` - the Tailwind browser runtime does not know them, and one unknown utility aborts the entire compile, leaving the page with no Tailwind styles at all. Put DaisyUI classes directly on elements, or write plain CSS with theme variables such as `var(--color-base-200)`.',
     ],
-    themes: DAISYUI_THEMES,
+    themes: [...LAVISH_THEMES, ...DAISYUI_THEMES],
     components: {
       actions: ["button", "dropdown", "fab", "modal", "swap", "theme-controller"],
       data_display: [

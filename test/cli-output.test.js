@@ -156,17 +156,23 @@ test("home output teaches agents when and how to use Lavish Editor", () => {
 test("the design-priority rule is single-sourced and keeps its three-step semantics", () => {
   // Keyword-level checks on the one owner constant; every surface that needs the rule
   // embeds DESIGN_PRIORITY_RULE, so wording changes happen here and nowhere else.
-  assert.match(DESIGN_PRIORITY_RULE, /strict priority order/);
+  assert.match(DESIGN_PRIORITY_RULE, /priority order/);
   assert.match(DESIGN_PRIORITY_RULE, /\(1\)[\s\S]*\(2\)[\s\S]*\(3\)/);
   assert.match(DESIGN_PRIORITY_RULE, /user asked for a specific look or named design system/);
-  assert.match(DESIGN_PRIORITY_RULE, /project the artifact is about/);
-  assert.match(DESIGN_PRIORITY_RULE, /current working directory/);
-  assert.match(DESIGN_PRIORITY_RULE, /previews, proposes, or mocks/);
-  assert.match(DESIGN_PRIORITY_RULE, /app's own design system/);
+  // (2) The Lavish design is the default, not a last resort.
+  assert.match(DESIGN_PRIORITY_RULE, /\(2\) otherwise use the Lavish design/);
+  assert.match(DESIGN_PRIORITY_RULE, /data-theme="lavish"/);
   assert.match(DESIGN_PRIORITY_RULE, /Tailwind CSS browser runtime v4 \+ DaisyUI v5/);
-  assert.match(DESIGN_PRIORITY_RULE, /only when both steps come up empty/);
   assert.match(DESIGN_PRIORITY_RULE, /hand-writing styles/);
   assert.match(DESIGN_PRIORITY_RULE, /unless explicitly instructed/);
+  // (3) A product's own design system applies only inside a screen that mocks that product.
+  assert.match(DESIGN_PRIORITY_RULE, /previews, proposes, or mocks/);
+  assert.match(DESIGN_PRIORITY_RULE, /project the artifact is about/);
+  assert.match(DESIGN_PRIORITY_RULE, /current working directory/);
+  assert.match(DESIGN_PRIORITY_RULE, /app's own design system/);
+  assert.match(DESIGN_PRIORITY_RULE, /framed region/);
+  assert.match(DESIGN_PRIORITY_RULE, /page around the frame stays in the Lavish design/);
+  assert.doesNotMatch(DESIGN_PRIORITY_RULE, /only when both steps come up empty/);
   assert.doesNotMatch(DESIGN_PRIORITY_RULE, /inspect the current project/i);
 
   assert.ok(DESIGN_SYSTEM_HINT.includes(DESIGN_PRIORITY_RULE), "the home hint embeds the rule");
@@ -340,7 +346,7 @@ test("top-level help renders static home output without dynamic sessions", async
     assert.match(result.stdout, /same directory as the HTML file/);
     assert.match(result.stdout, /Tailwind CSS browser runtime v4/);
     assert.match(result.stdout, /lavish-axi design/);
-    assert.match(result.stdout, /strict priority order/);
+    assert.match(result.stdout, /otherwise use the Lavish design/);
     assert.match(result.stdout, /never kill it/);
     assert.match(result.stdout, /feedback remains queued until delivery/);
     assert.doesNotMatch(result.stdout, /above 10 minutes/);
@@ -363,9 +369,20 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
   );
   assert.ok(output.design.summary.includes(DESIGN_PRIORITY_RULE), "design summary embeds the single-sourced rule");
   assert.match(output.design.summary, /does not auto-inject/);
-  assert.match(output.design.summary, /^Use this .*fallback only if/i);
+  assert.match(output.design.summary, /^This is the Lavish design, the default/);
   assert.match(output.design.summary, /no design direction/i);
-  assert.match(output.design.summary, /check first/i);
+  assert.match(output.design.summary, /mocks a specific product/);
+  assert.match(
+    output.design.cdn_snippet,
+    /<style>[\s\S]*\[data-theme="lavish"\][\s\S]*\[data-theme="lavish-dark"\][\s\S]*<\/style>$/,
+  );
+  assert.match(output.design.cdn_snippet, /--color-primary: oklch\(0\.514 0\.222 16\.935\)/);
+  assert.match(output.design.cdn_snippet, /--radius-box: 0rem/);
+  assert.match(
+    output.design.cdn_snippet,
+    /cdn\.jsdelivr\.net\/npm\/@fontsource-variable\/inter@\d+\.\d+\.\d+\/index\.css/,
+  );
+  assert.match(output.design.lavish_theme_note, /inline/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/daisyui@/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/daisyui@.*\/themes\.css/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/@tailwindcss\/browser@/);
@@ -400,7 +417,8 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
   assert.equal("opt_out" in output.design, false);
   assert.equal("rule" in output.design, false);
   assert.equal(output.design.latest_docs, "https://daisyui.com/components/");
-  assert.equal(output.themes.length, 35);
+  assert.equal(output.themes.length, 37);
+  assert.deepEqual(output.themes.slice(0, 2), ["lavish", "lavish-dark"]);
   assert.ok(output.themes.includes("luxury"));
   assert.ok(output.themes.includes("silk"));
   assert.ok(output.components.actions.includes("button"));
@@ -414,10 +432,11 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
   assert.ok(output.reference.mockup.notes.some((item) => item.includes("line numbers")));
 });
 
-test("design output recommends luxury as the default theme and warns against @apply on DaisyUI classes", () => {
+test("design output recommends the lavish theme by default and warns against @apply on DaisyUI classes", () => {
   const output = createDesignOutput();
 
-  assert.ok(output.theme_usage.some((item) => /default.*luxury|luxury.*default/i.test(item)));
+  assert.ok(output.theme_usage.some((item) => /Default to `<html data-theme="lavish">`/.test(item)));
+  assert.ok(!output.theme_usage.some((item) => /default.*luxury/i.test(item)));
   assert.ok(output.theme_usage.some((item) => item.includes("@apply") && /daisyui/i.test(item)));
   assert.ok(output.theme_usage.some((item) => /aborts the entire|no Tailwind styles/i.test(item)));
 });
@@ -3045,8 +3064,8 @@ test("open can resume a session without opening another browser window", () => {
   assert.match(getCommandHelp("design"), /lavish-axi design/);
   assert.match(getCommandHelp("design"), /portable/);
   assert.ok(getCommandHelp("design").includes(DESIGN_PRIORITY_RULE), "design help embeds the single-sourced rule");
-  assert.match(getCommandHelp("design"), /fallback, not the default/i);
-  assert.match(getCommandHelp("design"), /inspect the subject project/i);
+  assert.match(getCommandHelp("design"), /the Lavish design, the default when the user gave no design direction/);
+  assert.match(getCommandHelp("design"), /with the inline Lavish theme/);
   assert.doesNotMatch(getCommandHelp("design"), /auto-injects/);
 });
 
