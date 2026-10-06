@@ -52,6 +52,14 @@ await copyFile("node_modules/daisyui/daisyui.css", "dist/design/daisyui.css");
 await copyFile("node_modules/daisyui/themes.css", "dist/design/daisyui-themes.css");
 await copyFile("node_modules/@tailwindcss/browser/dist/index.global.js", "dist/design/tailwindcss-browser.js");
 
+// Chrome font: Inter, vendored so the editor renders the same offline. Latin and Latin Extended
+// cover the languages the chrome is written in; the OFL travels with the files.
+await mkdir("dist/fonts", { recursive: true });
+for (const file of ["inter-latin-wght-normal.woff2", "inter-latin-ext-wght-normal.woff2"]) {
+  await copyFile(`node_modules/@fontsource-variable/inter/files/${file}`, `dist/fonts/${file}`);
+}
+await copyFile("node_modules/@fontsource-variable/inter/LICENSE", "dist/fonts/OFL.txt");
+
 // Whiteboard frame: a self-contained browser bundle (Excalidraw + the Mermaid
 // converter + its exactly-pinned mermaid + React) served from
 // /whiteboard-assets/ by an embedded frame for every rendered Mermaid diagram

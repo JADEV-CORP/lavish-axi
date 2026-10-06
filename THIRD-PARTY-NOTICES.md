@@ -57,6 +57,14 @@ The Xiaolai family (CJK glyphs) is intentionally not vendored; Excalidraw falls 
 | `daisyui.css`, `daisyui-themes.css` (daisyUI)     | MIT     |
 | `tailwindcss-browser.js` (`@tailwindcss/browser`) | MIT     |
 
+## Fonts vendored into `dist/fonts/` (from `@fontsource-variable/inter`)
+
+| Family                                                                       | License                   | Copyright                                                                |
+| ---------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------ |
+| Inter (`inter-latin-wght-normal.woff2`, `inter-latin-ext-wght-normal.woff2`) | SIL Open Font License 1.1 | Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) |
+
+The chrome serves these files at `/chrome-fonts/`. The full license text ships beside them as `dist/fonts/OFL.txt`.
+
 ## Pre-publication audit note
 
 Font license attributions above were compiled from each family's upstream project.

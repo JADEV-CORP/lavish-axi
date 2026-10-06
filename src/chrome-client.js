@@ -1278,6 +1278,80 @@ function scrollPanelToBottom() {
   panelScroll.scrollTop = panelScroll.scrollHeight;
 }
 
+// ---- Theme ----
+// Light or dark follows the OS until the reviewer picks one with the toggle. The choice is a
+// personal preference, not session state, so it lives in localStorage across every session. The
+// head bootstrap in server.js applies a stored choice before first paint; this controller owns the
+// toggle, the "Follow system theme" item, OS changes, and telling the artifact SDK.
+const THEME_STORAGE_KEY = "lavish-axi:theme";
+const themeToggle = /** @type {HTMLButtonElement} */ (document.getElementById("themeToggle"));
+const followSystemThemeItem = /** @type {HTMLButtonElement} */ (document.getElementById("followSystemTheme"));
+const systemDarkMedia =
+  typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+// Fallback for a page whose storage is unavailable: the choice holds for this tab only.
+/** @type {"light" | "dark" | null} */
+let sessionThemeChoice = null;
+
+/** @returns {"light" | "dark" | null} */
+function storedThemeChoice() {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY);
+    return value === "light" || value === "dark" ? value : null;
+  } catch {
+    return sessionThemeChoice;
+  }
+}
+
+/** @returns {"light" | "dark"} */
+function effectiveTheme() {
+  return storedThemeChoice() || (systemDarkMedia && systemDarkMedia.matches ? "dark" : "light");
+}
+
+// The frame learns the theme on every load (the frame "load" handler), so the boot call skips it.
+function applyTheme({ notifyFrame = true } = {}) {
+  const choice = storedThemeChoice();
+  const root = document.documentElement;
+  if (root) {
+    if (choice) root.dataset.theme = choice;
+    else delete root.dataset.theme;
+  }
+  const dark = effectiveTheme() === "dark";
+  const label = dark ? "Switch to light theme" : "Switch to dark theme";
+  themeToggle.setAttribute("aria-pressed", String(dark));
+  themeToggle.setAttribute("aria-label", label);
+  themeToggle.setAttribute("title", label);
+  followSystemThemeItem.setAttribute("aria-checked", String(!choice));
+  if (notifyFrame) postToFrame({ type: "lavish:theme", theme: effectiveTheme() });
+}
+
+/** @param {"light" | "dark" | null} choice */
+function setThemeChoice(choice) {
+  sessionThemeChoice = choice;
+  try {
+    if (choice) localStorage.setItem(THEME_STORAGE_KEY, choice);
+    else localStorage.removeItem(THEME_STORAGE_KEY);
+  } catch {
+    // Storage refused: sessionThemeChoice carries the choice for this tab.
+  }
+  applyTheme();
+}
+
+themeToggle.addEventListener("click", () => setThemeChoice(effectiveTheme() === "dark" ? "light" : "dark"));
+followSystemThemeItem.addEventListener("click", () => {
+  setThemeChoice(null);
+  closeMenus();
+});
+if (systemDarkMedia && typeof systemDarkMedia.addEventListener === "function") {
+  systemDarkMedia.addEventListener("change", () => {
+    if (!storedThemeChoice()) applyTheme();
+  });
+}
+// Another Lavish tab changed the choice.
+window.addEventListener("storage", (event) => {
+  if (event && event.key === THEME_STORAGE_KEY) applyTheme();
+});
+applyTheme({ notifyFrame: false });
+
 // ---- Phone-width conversation sheet ----
 // Below this width chrome.css turns the conversation panel into a dock the user raises as a
 // bottom sheet over the artifact. This controller owns intent, accessibility state, gestures,
@@ -3555,7 +3629,7 @@ const whiteboardSaveChains = new Map();
 const inlineWhiteboardChannels = new Map();
 
 function whiteboardTheme() {
-  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return effectiveTheme();
 }
 
 function postToWhiteboardOverlay(message) {
@@ -4570,6 +4644,7 @@ document.addEventListener(
 frame.addEventListener("load", () => {
   if (artifactSpokeToken !== artifactLoadToken) armArtifactAvailabilityProbe(artifactLoadToken);
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
+  postToFrame({ type: "lavish:theme", theme: effectiveTheme() });
   // Replay the pre-reload scroll position so hot reloads don't jump the artifact to the top.
   postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
   if (lastReviewState) postToFrame({ type: "lavish:restoreReviewState", state: lastReviewState });

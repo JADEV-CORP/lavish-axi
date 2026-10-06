@@ -762,8 +762,8 @@ test("annotation card title renders selected tag as an html element name", () =>
 test("annotation card shadow styles use Lavish design-system variables", () => {
   const js = createSdkJs("abc");
 
-  assert.match(js, /--ink-900:#0f1115/);
-  assert.match(js, /--accent:#f4c95d/);
+  assert.match(js, /--background:light-dark\(oklch\(1 0 0\),oklch\(0\.145 0\.008 326\)\)/);
+  assert.match(js, /--accent:var\(--primary\)/);
   assert.match(js, /--font-sans:/);
   assert.match(js, /font-family:var\(--font-sans\)/);
   assert.match(js, /:focus-visible\{outline:2px solid var\(--accent\);outline-offset:2px/);
@@ -791,11 +791,24 @@ test("annotate switch shows a brass track and ink knob when enabled", async () =
 test("chrome declares the Lavish design-system tokens", async () => {
   const css = await chromeCssSource();
 
-  assert.match(css, /--ink-900:#0f1115/);
-  assert.match(css, /--cream-100:#f7f3ea/);
-  assert.match(css, /--brass-500:#f4c95d/);
-  assert.match(css, /--font-serif:/);
-  assert.match(css, /--font-sans:/);
+  // shadcn/ui preset b50eA1ekc (Lyra, mauve, rose). Every colour token carries its light and dark
+  // value through light-dark(), so the root color-scheme alone decides the theme.
+  assert.match(css, /:root\{color-scheme:light dark;/);
+  assert.match(css, /:root\[data-theme="light"\]\{color-scheme:light;\}/);
+  assert.match(css, /:root\[data-theme="dark"\]\{color-scheme:dark;\}/);
+  assert.match(css, /--primary:light-dark\(oklch\(.514 .222 16.935\),oklch\(.455 .188 13.697\)\)/);
+  assert.match(css, /--background:light-dark\(oklch\(1 0 0\),oklch\(.145 .008 326\)\)/);
+  assert.match(css, /--accent:var\(--primary\)/);
+  assert.match(css, /--fg:var\(--foreground\)/);
+  assert.match(css, /--radius-md:0;/);
+  assert.match(css, /--radius-pill:0;/);
+  assert.doesNotMatch(css, /--ink-900|--cream-100|--brass-500|--font-serif/);
+  assert.doesNotMatch(css, /body\.lavish\{color-scheme:dark\}/);
+  assert.match(css, /--font-sans:"Inter Variable",/);
+  assert.match(
+    css,
+    /@font-face\{font-family:"Inter Variable";[^}]*src:url\("\/chrome-fonts\/inter-latin-wght-normal\.woff2"\) format\("woff2-variations"\)/,
+  );
   assert.match(css, /--text-display:92px/);
   assert.match(css, /--lh-display:1/);
   assert.match(css, /--space-32:64px/);
@@ -809,11 +822,20 @@ test("chrome declares the Lavish design-system tokens", async () => {
 test("artifact SDK uses design-token aliases for annotation highlight and shadow UI", () => {
   const js = createSdkJs("abc");
 
-  assert.match(js, /--lavish-accent:#f4c95d/);
+  assert.match(js, /--lavish-accent:oklch\(0\.586 0\.253 17\.585\)/);
   assert.match(js, /--lavish-annotate-outline:2px solid var\(--lavish-accent\)/);
-  assert.match(js, /el\.style\.outline\s*=\s*["']var\(--lavish-annotate-outline,2px solid #f4c95d\)["']/);
+  assert.match(
+    js,
+    /el\.style\.outline\s*=\s*["']var\(--lavish-annotate-outline,2px solid oklch\(0\.586 0\.253 17\.585\)\)["']/,
+  );
   assert.match(js, /el\.style\.outlineOffset\s*=\s*["']var\(--lavish-annotate-offset,2px\)["']/);
-  assert.match(js, /--fg-faint:var\(--steel-300\)/);
+  // The annotation card follows the chrome's theme: light-dark() tokens on the shadow host, with
+  // the chrome's explicit choice pinned through a data-theme attribute on that host.
+  assert.match(js, /:host\{all:initial;[^}]*color-scheme:light dark;/);
+  assert.match(js, /:host\(\[data-theme="dark"\]\)\{color-scheme:dark\}/);
+  assert.match(js, /msg\.type === "lavish:theme"/);
+  assert.doesNotMatch(js, /#f4c95d|--brass-|--ink-900/);
+  assert.match(js, /--fg-faint:var\(--muted-foreground\)/);
   assert.match(js, /textarea::placeholder\{color:var\(--fg-faint\)\}/);
   assert.doesNotMatch(js, /placeholder\{color:#aeb6c6\}/);
 });
@@ -850,10 +872,12 @@ test("chrome top bar follows the design mock wordmark and overflow menu treatmen
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
   const css = await chromeCssSource();
 
-  assert.match(html, /class="brand-mark">Lavish/);
-  assert.match(html, /class="brand-support">Editor/);
-  assert.match(css, /font-family:var\(--font-serif\)/);
-  assert.match(css, /letter-spacing:\.18em/);
+  assert.match(html, /<span class="brand-logo" aria-hidden="true"><svg [^>]*viewBox="0 0 24 24"/);
+  assert.match(html, /class="brand-mark">Lavish</);
+  assert.doesNotMatch(html, /brand-support/);
+  // Sentence case everywhere: no all-caps labels, kickers, or bubble names.
+  assert.doesNotMatch(css, /text-transform:uppercase/);
+  assert.doesNotMatch(css, /font-family:var\(--font-serif\)/);
   assert.match(html, /class="more-button" id="moreButton"/);
   assert.match(html, /class="menu more-menu" id="moreMenu" hidden/);
   assert.doesNotMatch(html, /class="file-input"/);
@@ -869,7 +893,7 @@ test("overflow menu shows the artifact path with a copy affordance", async () =>
   assert.match(html, /class="menu-file" id="copyPath"[^>]*title="Copy path · \/tmp\/artifact\/index\.html"/);
   assert.match(html, /class="copy-hint"/);
   assert.match(css, /\.menu-file\{[^}]*font-family:var\(--font-mono\)/);
-  assert.match(css, /\.copy-hint\.copied\{color:var\(--accent-hover\)/);
+  assert.match(css, /\.copy-hint\.copied\{color:var\(--accent-text-hover\)/);
 });
 
 test("overflow menu path keeps the file name visible and elides the directories", async () => {
@@ -1012,12 +1036,14 @@ test("clipboard copy falls back when navigator clipboard rejects", async () => {
   assert.doesNotMatch(js, /navigator\.clipboard\.writeText\(text\)\.catch/);
 });
 
-test("chrome centers the top bar row while bottom-aligning the identity cluster", async () => {
+test("chrome centers the top bar row and aligns the mark with the wordmark", async () => {
   const css = await chromeCssSource();
 
   assert.match(css, /\.bar\{[^}]*align-items:center/);
   assert.match(css, /\.brand\{[^}]*height:22px/);
-  assert.match(css, /\.brand\{[^}]*align-items:flex-end/);
+  assert.match(css, /\.brand\{[^}]*align-items:center/);
+  // Optical nudge: the speech bubble's tail would otherwise lift its body above the cap height.
+  assert.match(css, /\.brand-logo\{[^}]*position:relative;top:2px/);
 });
 
 test("chrome chat bubbles follow the preview mock shades", async () => {
@@ -3425,6 +3451,57 @@ test("event WebSocket validates a reverse proxy's forwarded origin", async () =>
   }
 });
 
+test("/chrome-fonts serves the vendored Inter font and nothing else", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
+  try {
+    for (const asset of ["inter-latin-wght-normal.woff2", "inter-latin-ext-wght-normal.woff2"]) {
+      const res = await fetch(`http://127.0.0.1:${server.port}/chrome-fonts/${asset}`);
+      const body = Buffer.from(await res.arrayBuffer());
+
+      assert.equal(res.status, 200, asset);
+      assert.match(res.headers.get("content-type") || "", /font\/woff2/);
+      assert.equal(body.subarray(0, 4).toString("latin1"), "wOF2", asset);
+    }
+
+    for (const asset of ["missing.woff2", "..%2Fpackage.json", "inter-latin-wght-normal.woff2.map"]) {
+      const miss = await fetch(`http://127.0.0.1:${server.port}/chrome-fonts/${asset}`);
+      assert.equal(miss.status, 404, asset);
+    }
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("chrome page applies a stored theme before first paint and offers a theme toggle", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+
+  // The stored override must land on <html> before the stylesheet paints, or a reviewer who chose
+  // light on a dark OS sees a dark flash on every load.
+  const head = html.slice(0, html.indexOf("</head>"));
+  const themeScript = head.indexOf('localStorage.getItem("lavish-axi:theme")');
+  assert.ok(themeScript > -1, "head carries the theme bootstrap");
+  assert.ok(themeScript < head.indexOf('<link rel="stylesheet" href="/chrome.css">'));
+  assert.match(
+    html,
+    /<button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">/,
+  );
+  assert.match(
+    html,
+    /<button class="menu-item" id="followSystemTheme" type="button" role="menuitemcheckbox" aria-checked="true">/,
+  );
+});
+
+test("chrome default favicon is the Lavish speech mark", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  const icon = html.match(/<link rel="icon" href="([^"]+)">/)?.[1] || "";
+
+  assert.match(icon, /^data:image\/svg\+xml,/);
+  assert.match(decodeURIComponent(icon), /M2 2h20v16H11l-5 4v-4H2z/);
+  assert.doesNotMatch(icon, /\u{1F48E}/u);
+});
+
 test("/chrome.css serves the extracted chrome stylesheet", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
   const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
@@ -3434,7 +3511,7 @@ test("/chrome.css serves the extracted chrome stylesheet", async () => {
 
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") || "", /text\/css/);
-    assert.match(normalizeCssForAssertions(body), /--ink-900:#0f1115/);
+    assert.match(normalizeCssForAssertions(body), /--primary:light-dark\(/);
     assert.match(
       normalizeCssForAssertions(body),
       /\.layout\{[^}]*grid-template-columns:minmax\(0,1fr\) ?var\(--panel-w\)/,
@@ -6210,8 +6287,8 @@ test("ended session shows an overlay card over the dimmed chrome", async () => {
   assert.match(html, /class="ended-copy">\/tmp\/artifact\.html</);
   assert.doesNotMatch(html, /The agent polling loop can stop\./);
   assert.match(css, /\.ended-overlay\{[^}]*inset:var\(--bar-h\) 0 0 0/);
-  assert.match(css, /\.ended-overlay\{[^}]*background:rgba\(15,17,21,.86\)/);
-  assert.match(css, /\.ended-title\{[^}]*font-family:var\(--font-serif\)/);
+  assert.match(css, /\.ended-overlay\{[^}]*background:var\(--scrim-strong\)/);
+  assert.match(css, /\.ended-title\{[^}]*font-family:var\(--font-sans\)/);
   assert.match(js, /endedOverlay\.hidden = false/);
   assert.match(js, /annotationSwitch\.disabled = true/);
   assert.match(js, /moreButton\.disabled = true/);

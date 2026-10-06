@@ -87,6 +87,8 @@ async function createChromeHarness({
   // chrome's sheet breakpoint, with `setMobile` flipping it the way a resize would. Left off, the
   // window has no matchMedia at all, which is the desktop the other tests run against.
   mobile = false,
+  /** @type {{ localStore: Map<string, string>, prefersDark?: boolean } | null} */
+  theme = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -483,6 +485,31 @@ async function createChromeHarness({
       const list = {
         media: query,
         matches: true,
+        changeHandlers: [],
+        addEventListener(type, handler) {
+          if (type === "change") this.changeHandlers.push(handler);
+        },
+      };
+      mediaQueries.push(list);
+      return list;
+    };
+  }
+  // Opt-in theme environment: localStorage, a root element, and a prefers-color-scheme query the
+  // test can flip. Left off, none of the three exist, which is what every other test boots with.
+  if (theme) {
+    const themeContext = /** @type {any} */ (context);
+    themeContext.localStorage = {
+      getItem: (key) => (theme.localStore.has(key) ? theme.localStore.get(key) : null),
+      setItem: (key, value) => theme.localStore.set(key, String(value)),
+      removeItem: (key) => theme.localStore.delete(key),
+    };
+    themeContext.document.documentElement = element("html");
+    const sheetMatchMedia = themeContext.window.matchMedia;
+    themeContext.window.matchMedia = (query) => {
+      if (!/prefers-color-scheme/.test(query)) return sheetMatchMedia ? sheetMatchMedia(query) : { matches: false };
+      const list = {
+        media: query,
+        matches: Boolean(theme.prefersDark),
         changeHandlers: [],
         addEventListener(type, handler) {
           if (type === "change") this.changeHandlers.push(handler);
@@ -6950,8 +6977,9 @@ test("desktop chrome never turns the conversation panel into a sheet", async () 
 test("phone chrome boots with the conversation docked and raises it on tap", async () => {
   const chrome = await createChromeHarness({ mobile: true });
 
-  assert.equal(chrome.mediaQueries.length, 1);
-  assert.match(chrome.mediaQueries[0].media, /max-width/);
+  // The theme also watches prefers-color-scheme; exactly one query owns the sheet breakpoint.
+  const sheetQueries = chrome.mediaQueries.filter((list) => /max-width/.test(list.media));
+  assert.equal(sheetQueries.length, 1);
   const docked = sheetState(chrome);
   assert.equal(docked.open, false);
   // The hidden part of the sheet must be unreachable: a focus landing in the off-screen
@@ -8819,4 +8847,61 @@ test("a transcript entry from before receipts renders no receipt and ignores pre
   chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify({ state: "working" }) });
   assert.equal(bubbles[0].innerHTML, '<small>You</small><div class="bubble-text">Old note</div>');
   assert.equal(receiptNote(bubbles[1].innerHTML), "Agent is busy; delivered on its next poll");
+});
+
+test("theme follows the system until the reviewer overrides it, and the artifact follows the chrome", async () => {
+  const localStore = new Map();
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    theme: { localStore, prefersDark: true },
+  });
+  const root = chrome.element("html");
+  const toggle = chrome.element("themeToggle");
+  const followSystem = chrome.element("followSystemTheme");
+  const themesSent = () =>
+    chrome.postedToFrame.filter((message) => message.type === "lavish:theme").map((message) => message.theme);
+
+  // No stored choice: the OS decides, nothing is pinned on <html>.
+  assert.equal(root.dataset.theme, undefined);
+  assert.equal(toggle["aria-pressed"], "true");
+  assert.equal(toggle["aria-label"], "Switch to light theme");
+  assert.equal(followSystem["aria-checked"], "true");
+  assert.equal(themesSent().at(-1), "dark");
+
+  // The toggle pins the opposite of what is showing and persists it across sessions.
+  toggle.dispatch("click", {});
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(localStore.get("lavish-axi:theme"), "light");
+  assert.equal(toggle["aria-pressed"], "false");
+  assert.equal(toggle["aria-label"], "Switch to dark theme");
+  assert.equal(followSystem["aria-checked"], "false");
+  assert.equal(themesSent().at(-1), "light");
+
+  // An OS change does not override an explicit choice.
+  const scheme = chrome.mediaQueries.find((list) => /prefers-color-scheme/.test(list.media));
+  scheme.matches = false;
+  for (const handler of scheme.changeHandlers) handler({ matches: false });
+  assert.equal(root.dataset.theme, "light");
+
+  // Following the system again clears the pin and the stored value.
+  followSystem.dispatch("click", {});
+  assert.equal(root.dataset.theme, undefined);
+  assert.equal(localStore.has("lavish-axi:theme"), false);
+  assert.equal(followSystem["aria-checked"], "true");
+  assert.equal(themesSent().at(-1), "light");
+
+  // With no pin, an OS change now flows through to the chrome and the artifact.
+  scheme.matches = true;
+  for (const handler of scheme.changeHandlers) handler({ matches: true });
+  assert.equal(toggle["aria-pressed"], "true");
+  assert.equal(themesSent().at(-1), "dark");
+});
+
+test("theme bootstrap tolerates a page without localStorage or a root element", async () => {
+  // Every other harness boots without either; booting must not throw, and the toggle still works
+  // for the session even though nothing persists.
+  const chrome = await createChromeHarness();
+  const toggle = chrome.element("themeToggle");
+  toggle.dispatch("click", {});
+  assert.equal(toggle["aria-pressed"], "true");
 });
