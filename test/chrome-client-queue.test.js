@@ -8905,3 +8905,142 @@ test("theme bootstrap tolerates a page without localStorage or a root element", 
   toggle.dispatch("click", {});
   assert.equal(toggle["aria-pressed"], "true");
 });
+
+// ---- Desktop layout: side, width, rail, Peek ----
+
+function layoutState(chrome) {
+  const root = chrome.element("html");
+  return {
+    side: root.dataset.panelSide,
+    mode: root.dataset.chatLayout,
+    width: root.style["--panel-w"],
+    peekHeight: root.style["--peek-h"],
+    pressed: ["layoutLeft", "layoutRight", "layoutRail", "layoutPeek"].filter(
+      (id) => chrome.element(id)["aria-pressed"] === "true",
+    ),
+  };
+}
+
+async function createLayoutHarness(options = {}) {
+  const localStore = options.localStore || new Map();
+  const chrome = await createChromeHarness({ ...options, theme: { localStore } });
+  const root = chrome.element("html");
+  root.style.setProperty = (name, value) => {
+    root.style[name] = value;
+  };
+  chrome.element("layout").getBoundingClientRect = () => ({ left: 0, right: 1400, width: 1400, top: 56, bottom: 900 });
+  return { chrome, localStore };
+}
+
+test("the conversation sits on the left by default and the layout switch moves it", async () => {
+  const { chrome, localStore } = await createLayoutHarness();
+  // Boot applies the stored (here: default) layout through the same path the switch uses.
+  chrome.element("layoutLeft").dispatch("click", {});
+  assert.deepEqual(layoutState(chrome), {
+    side: "left",
+    mode: "sidebar",
+    width: "360px",
+    peekHeight: "440px",
+    pressed: ["layoutLeft"],
+  });
+
+  chrome.element("layoutRight").dispatch("click", {});
+  assert.equal(layoutState(chrome).side, "right");
+  assert.deepEqual(layoutState(chrome).pressed, ["layoutRight"]);
+  assert.deepEqual(JSON.parse(localStore.get("lavish-axi:layout")), {
+    side: "right",
+    mode: "sidebar",
+    width: 360,
+    peekHeight: 440,
+  });
+
+  // A stored layout survives a reload.
+  const reloaded = await createLayoutHarness({ localStore });
+  assert.equal(layoutState(reloaded.chrome).side, "right");
+});
+
+test("dragging the panel edge resizes it within bounds and double-click resets it", async () => {
+  const { chrome, localStore } = await createLayoutHarness();
+  const resizer = chrome.element("panelResizer");
+
+  resizer.dispatch("pointerdown", { pointerId: 1, button: 0, clientX: 360, preventDefault() {} });
+  resizer.dispatch("pointermove", { pointerId: 1, clientX: 470 });
+  assert.equal(layoutState(chrome).width, "470px");
+  assert.equal(resizer["aria-valuenow"], "470");
+  // Never past 560px, never below 280px.
+  resizer.dispatch("pointermove", { pointerId: 1, clientX: 900 });
+  assert.equal(layoutState(chrome).width, "560px");
+  resizer.dispatch("pointermove", { pointerId: 1, clientX: 40 });
+  assert.equal(layoutState(chrome).width, "280px");
+  resizer.dispatch("pointermove", { pointerId: 1, clientX: 410 });
+  resizer.dispatch("pointerup", { pointerId: 1 });
+  assert.equal(JSON.parse(localStore.get("lavish-axi:layout")).width, 410);
+
+  // On the right side the edge is the panel's left border, so the drag runs the other way.
+  chrome.element("layoutRight").dispatch("click", {});
+  resizer.dispatch("pointerdown", { pointerId: 2, button: 0, clientX: 990, preventDefault() {} });
+  resizer.dispatch("pointermove", { pointerId: 2, clientX: 900 });
+  resizer.dispatch("pointerup", { pointerId: 2 });
+  assert.equal(layoutState(chrome).width, "500px");
+
+  // Keyboard: arrows grow toward the artifact, Home and End jump to the bounds.
+  resizer.dispatch("keydown", { key: "ArrowLeft", preventDefault() {} });
+  assert.equal(layoutState(chrome).width, "516px");
+  resizer.dispatch("keydown", { key: "Home", preventDefault() {} });
+  assert.equal(layoutState(chrome).width, "280px");
+
+  resizer.dispatch("dblclick", {});
+  assert.equal(layoutState(chrome).width, "360px");
+});
+
+test("rail mode collapses the panel and counts replies until it is opened", async () => {
+  const { chrome } = await createLayoutHarness();
+  chrome.element("layoutRail").dispatch("click", {});
+  assert.equal(layoutState(chrome).mode, "rail");
+  assert.equal(chrome.element("panelScroll").inert, true);
+  assert.equal(chrome.element("chatComposer").inert, true);
+  assert.equal(chrome.element("railUnread").hidden, true);
+
+  chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Renamed the payment step." }) });
+  assert.equal(chrome.element("railUnread").hidden, false);
+
+  chrome.element("railOpen").dispatch("click", {});
+  assert.equal(layoutState(chrome).mode, "sidebar");
+  assert.equal(chrome.element("railUnread").hidden, true);
+  assert.equal(chrome.element("panelScroll").inert, false);
+  assert.equal(chrome.element("chatComposer").inert, false);
+});
+
+test("Peek docks the conversation at the bottom with a live composer and an unread preview", async () => {
+  const { chrome } = await createLayoutHarness();
+  chrome.element("layoutPeek").dispatch("click", {});
+  assert.equal(layoutState(chrome).mode, "peek");
+
+  // Collapsed: the transcript is out of reach, the composer stays usable.
+  assert.equal(chrome.element("panelScroll").inert, true);
+  assert.equal(chrome.element("chatComposer").inert, false);
+  assert.equal(chrome.element("panelToggle")["aria-expanded"], "false");
+
+  chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Renamed the payment step." }) });
+  assert.equal(chrome.element("panelSummary").textContent, "Renamed the payment step.");
+  assert.match(String(chrome.element("panelSummary").classList), /is-unread/);
+
+  chrome.element("panelHead").dispatch("click", {});
+  assert.equal(chrome.element("panelToggle")["aria-expanded"], "true");
+  assert.equal(chrome.element("panelScroll").inert, false);
+  assert.match(String(chrome.element("body").classList), /peek-open/);
+  assert.doesNotMatch(String(chrome.element("body").classList), /sheet-open/);
+
+  // Dragging the open panel's head sets its height; the click that ends a drag does not toggle.
+  chrome.element("panelHead").dispatch("pointerdown", { pointerId: 3, button: 0, clientY: 460 });
+  chrome.element("panelHead").dispatch("pointermove", { pointerId: 3, clientY: 360 });
+  chrome.element("panelHead").dispatch("pointerup", { pointerId: 3, clientY: 360 });
+  chrome.element("panelHead").dispatch("click", {});
+  assert.equal(layoutState(chrome).peekHeight, "540px");
+  assert.equal(chrome.element("panelToggle")["aria-expanded"], "true");
+
+  // Leaving Peek drops the dock state entirely.
+  chrome.element("layoutLeft").dispatch("click", {});
+  assert.doesNotMatch(String(chrome.element("body").classList), /peek-open/);
+  assert.equal(chrome.element("panelScroll").inert, false);
+});

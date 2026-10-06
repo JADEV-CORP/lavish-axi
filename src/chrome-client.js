@@ -1384,6 +1384,20 @@ function isMobileSheet() {
   return Boolean(sheetMedia && sheetMedia.matches);
 }
 
+// Desktop Peek is the phone dock's geometry floated over the artifact, so it shares the dock's
+// open intent, summary, and unread preview. The phone layout always wins over a stored desktop mode.
+function isPeekLayout() {
+  return !isMobileSheet() && chatLayout.mode === "peek";
+}
+
+function isRailLayout() {
+  return !isMobileSheet() && chatLayout.mode === "rail";
+}
+
+function isDockLayout() {
+  return isMobileSheet() || isPeekLayout();
+}
+
 function setSheetOpen(open) {
   const next = Boolean(open);
   const changed = next !== sheetOpen;
@@ -1396,7 +1410,7 @@ function setSheetOpen(open) {
   }
   if (sheetOpen) unreadAgentReply = "";
   applySheetState();
-  if (!changed || !isMobileSheet()) return;
+  if (!changed || !isDockLayout()) return;
   if (sheetOpen) scrollPanelToBottom();
 }
 
@@ -1405,14 +1419,22 @@ function setSheetOpen(open) {
 // leave a closed dock trapping focus.
 function applySheetState() {
   const mobile = isMobileSheet();
-  const open = mobile && sheetOpen;
-  document.body.classList.toggle("sheet-open", open);
-  const docked = mobile && !open;
-  panelScroll.inert = ended || docked;
-  chatComposer.inert = ended || docked;
+  const peek = isPeekLayout();
+  const rail = isRailLayout();
+  const open = (mobile || peek) && sheetOpen;
+  document.body.classList.toggle("sheet-open", mobile && open);
+  document.body.classList.toggle("peek-open", peek && open);
+  const docked = (mobile || peek) && !open;
+  // A collapsed Peek keeps its composer live: typing a quick note should not need the transcript.
+  panelScroll.inert = ended || docked || rail;
+  chatComposer.inert = ended || (mobile && !open) || rail;
   const activeElement = document.activeElement;
-  if (docked && activeElement && (panelScroll.contains(activeElement) || chatComposer.contains(activeElement))) {
-    panelToggle.focus();
+  if (
+    (docked || rail) &&
+    activeElement &&
+    (panelScroll.contains(activeElement) || (chatComposer.inert && chatComposer.contains(activeElement)))
+  ) {
+    (rail ? railOpenButton : panelToggle).focus();
   }
   panelToggle.setAttribute("aria-expanded", open ? "true" : "false");
   panelToggle.setAttribute("aria-label", open ? "Hide conversation" : "Show conversation");
@@ -1443,7 +1465,7 @@ function renderSheetSummary() {
 // A brief pulse on the dock when something the user should notice lands while the sheet is
 // closed: a prompt they queued from the artifact, or an agent reply.
 function pulseSheetDock() {
-  if (!isMobileSheet() || sheetOpen) return;
+  if (!isDockLayout() || sheetOpen) return;
   panelHead.classList.remove("is-fresh");
   // Restart the animation even when the previous pulse is still running.
   void panelHead.offsetWidth;
@@ -1451,7 +1473,11 @@ function pulseSheetDock() {
 }
 
 function noteAgentReply(text) {
-  if (!isMobileSheet() || sheetOpen) return;
+  if (isRailLayout()) {
+    railHasUnread = true;
+    railUnread.hidden = false;
+  }
+  if (!isDockLayout() || sheetOpen) return;
   unreadAgentReply = String(text || "");
   renderSheetSummary();
   pulseSheetDock();
@@ -1495,7 +1521,7 @@ function finishSheetDrag(event) {
 }
 
 panelHead.addEventListener("click", () => {
-  if (!isMobileSheet()) return;
+  if (!isDockLayout()) return;
   if (suppressSheetClick) {
     suppressSheetClick = false;
     return;
@@ -1504,11 +1530,28 @@ panelHead.addEventListener("click", () => {
 });
 panelScrim.addEventListener("click", () => setSheetOpen(false));
 panelHead.addEventListener("pointerdown", (event) => {
-  if (!isMobileSheet() || event.button) return;
+  if (event.button) return;
+  if (isPeekLayout()) {
+    peekDrag = {
+      pointerId: event.pointerId,
+      startY: Number(event.clientY),
+      startHeight: chatLayout.peekHeight,
+      moved: false,
+    };
+    if (typeof panelHead.setPointerCapture === "function") panelHead.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (!isMobileSheet()) return;
   sheetDrag = { pointerId: event.pointerId, startY: Number(event.clientY), moved: false };
   if (typeof panelHead.setPointerCapture === "function") panelHead.setPointerCapture(event.pointerId);
 });
 panelHead.addEventListener("pointermove", (event) => {
+  if (peekDrag && event.pointerId === peekDrag.pointerId) {
+    const offset = Number(event.clientY) - peekDrag.startY;
+    if (Math.abs(offset) > 6) peekDrag.moved = true;
+    if (peekDrag.moved && sheetOpen) setPeekHeight(peekDrag.startHeight - offset, { save: false });
+    return;
+  }
   if (!sheetDrag || event.pointerId !== sheetDrag.pointerId) return;
   const offset = sheetDragOffset(event);
   if (Math.abs(offset) > 6) sheetDrag.moved = true;
@@ -1519,8 +1562,25 @@ panelHead.addEventListener("pointermove", (event) => {
     ? "translateY(" + Math.max(0, offset) + "px)"
     : "translateY(calc(100% - var(--dock-h) - env(safe-area-inset-bottom, 0px) + " + Math.min(0, offset) + "px))";
 });
-panelHead.addEventListener("pointerup", finishSheetDrag);
+panelHead.addEventListener("pointerup", (event) => {
+  if (peekDrag && event.pointerId === peekDrag.pointerId) {
+    const offset = Number(event.clientY) - peekDrag.startY;
+    const moved = peekDrag.moved;
+    peekDrag = null;
+    if (!moved) return;
+    suppressSheetClick = true;
+    if (sheetOpen) saveChatLayout();
+    else if (offset < -SHEET_DRAG_THRESHOLD_PX) setSheetOpen(true);
+    return;
+  }
+  finishSheetDrag(event);
+});
 panelHead.addEventListener("pointercancel", (event) => {
+  if (peekDrag && event.pointerId === peekDrag.pointerId) {
+    peekDrag = null;
+    suppressSheetClick = false;
+    return;
+  }
   if (!sheetDrag || event.pointerId !== sheetDrag.pointerId) return;
   clearSheetDrag();
   suppressSheetClick = false;
@@ -1545,6 +1605,184 @@ if (window.visualViewport && typeof window.visualViewport.addEventListener === "
 window.addEventListener("resize", syncVisualViewport);
 syncVisualViewport();
 
+// ---- Desktop conversation layout: side, width, rail, Peek ----
+// Layout is a personal preference, not session state, so it lives in one localStorage key across
+// every session. The head bootstrap in server.js applies a stored layout before first paint with
+// the same key and bounds; this controller owns the switch, the resize handle, the rail, and
+// Peek's height. Under the phone breakpoint none of it applies: the sheet owns the panel there.
+const LAYOUT_STORAGE_KEY = "lavish-axi:layout";
+const PANEL_WIDTH_MIN = 280;
+const PANEL_WIDTH_MAX = 560;
+const PANEL_WIDTH_DEFAULT = 360;
+// Never let the conversation take more than this share of the window from the artifact.
+const PANEL_WIDTH_WINDOW_SHARE = 0.6;
+const PANEL_WIDTH_KEY_STEP = 16;
+const PEEK_HEIGHT_MIN = 200;
+const PEEK_HEIGHT_DEFAULT = 440;
+const PEEK_EDGE_GAP = 32;
+const layoutRoot = /** @type {HTMLDivElement} */ (document.getElementById("layout"));
+const panelResizer = /** @type {HTMLDivElement} */ (document.getElementById("panelResizer"));
+const railOpenButton = /** @type {HTMLButtonElement} */ (document.getElementById("railOpen"));
+const railPeekButton = /** @type {HTMLButtonElement} */ (document.getElementById("railPeek"));
+const railUnread = /** @type {HTMLSpanElement} */ (document.getElementById("railUnread"));
+const panelSeeThrough = /** @type {HTMLButtonElement} */ (document.getElementById("panelSeeThrough"));
+const layoutOptionButtons = /** @type {Record<string, HTMLElement>} */ ({
+  left: document.getElementById("layoutLeft"),
+  right: document.getElementById("layoutRight"),
+  rail: document.getElementById("layoutRail"),
+  peek: document.getElementById("layoutPeek"),
+});
+/** @type {{ side: "left" | "right", mode: "sidebar" | "rail" | "peek", width: number, peekHeight: number }} */
+let chatLayout = readChatLayout();
+let railHasUnread = false;
+/** @type {{ pointerId: any } | null} */
+let panelResize = null;
+/** @type {{ pointerId: any, startY: number, startHeight: number, moved: boolean } | null} */
+let peekDrag = null;
+
+function readChatLayout() {
+  const layout = { side: "left", mode: "sidebar", width: PANEL_WIDTH_DEFAULT, peekHeight: PEEK_HEIGHT_DEFAULT };
+  try {
+    const stored = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || "null");
+    if (stored && typeof stored === "object") {
+      if (stored.side === "right") layout.side = "right";
+      if (stored.mode === "rail" || stored.mode === "peek") layout.mode = stored.mode;
+      const width = Number(stored.width);
+      if (width >= PANEL_WIDTH_MIN && width <= PANEL_WIDTH_MAX) layout.width = Math.round(width);
+      const peekHeight = Number(stored.peekHeight);
+      if (peekHeight >= PEEK_HEIGHT_MIN && peekHeight <= 2000) layout.peekHeight = Math.round(peekHeight);
+    }
+  } catch {
+    // No storage or a corrupt value: the defaults stand, and this tab keeps its changes in memory.
+  }
+  return /** @type {any} */ (layout);
+}
+
+function saveChatLayout() {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(chatLayout));
+  } catch {
+    // Storage refused: the layout holds for this tab only.
+  }
+}
+
+function layoutRect() {
+  return layoutRoot && typeof layoutRoot.getBoundingClientRect === "function"
+    ? layoutRoot.getBoundingClientRect()
+    : null;
+}
+
+function clampPanelWidth(width) {
+  const rect = layoutRect();
+  const share = rect && rect.width > 0 ? Math.floor(rect.width * PANEL_WIDTH_WINDOW_SHARE) : PANEL_WIDTH_MAX;
+  const max = Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, share));
+  return Math.round(Math.min(max, Math.max(PANEL_WIDTH_MIN, Number(width) || PANEL_WIDTH_DEFAULT)));
+}
+
+function clampPeekHeight(height) {
+  const rect = layoutRect();
+  const max =
+    rect && rect.bottom - rect.top > 0 ? Math.max(PEEK_HEIGHT_MIN, rect.bottom - rect.top - PEEK_EDGE_GAP) : 2000;
+  return Math.round(Math.min(max, Math.max(PEEK_HEIGHT_MIN, Number(height) || PEEK_HEIGHT_DEFAULT)));
+}
+
+function applyChatLayout() {
+  const root = document.documentElement;
+  if (root) {
+    root.dataset.panelSide = chatLayout.side;
+    root.dataset.chatLayout = chatLayout.mode;
+    if (root.style && typeof root.style.setProperty === "function") {
+      root.style.setProperty("--panel-w", chatLayout.width + "px");
+      root.style.setProperty("--peek-h", chatLayout.peekHeight + "px");
+    }
+  }
+  for (const [option, button] of Object.entries(layoutOptionButtons)) {
+    const pressed = option === chatLayout.mode || (chatLayout.mode === "sidebar" && option === chatLayout.side);
+    button.setAttribute("aria-pressed", String(pressed));
+  }
+  panelResizer.setAttribute("aria-valuenow", String(chatLayout.width));
+  if (chatLayout.mode !== "rail") railHasUnread = false;
+  railUnread.hidden = !railHasUnread;
+  applySheetState();
+}
+
+/** @param {Partial<typeof chatLayout>} change */
+function setChatLayout(change) {
+  chatLayout = { ...chatLayout, ...change };
+  applyChatLayout();
+  saveChatLayout();
+}
+
+function setPanelWidth(width, { save = true } = {}) {
+  chatLayout.width = clampPanelWidth(width);
+  applyChatLayout();
+  if (save) saveChatLayout();
+}
+
+function setPeekHeight(height, { save = true } = {}) {
+  chatLayout.peekHeight = clampPeekHeight(height);
+  applyChatLayout();
+  if (save) saveChatLayout();
+}
+
+layoutOptionButtons.left.addEventListener("click", () => setChatLayout({ side: "left", mode: "sidebar" }));
+layoutOptionButtons.right.addEventListener("click", () => setChatLayout({ side: "right", mode: "sidebar" }));
+layoutOptionButtons.rail.addEventListener("click", () => setChatLayout({ mode: "rail" }));
+layoutOptionButtons.peek.addEventListener("click", () => setChatLayout({ mode: "peek" }));
+railOpenButton.addEventListener("click", () => setChatLayout({ mode: "sidebar" }));
+railPeekButton.addEventListener("click", () => setChatLayout({ mode: "peek" }));
+
+// The handle sits on the panel's inner edge, so which way is "wider" depends on the side.
+panelResizer.addEventListener("pointerdown", (event) => {
+  if (event.button) return;
+  event.preventDefault();
+  panelResize = { pointerId: event.pointerId };
+  if (typeof panelResizer.setPointerCapture === "function") panelResizer.setPointerCapture(event.pointerId);
+  // The artifact iframe would swallow the drag the moment the pointer crossed into it.
+  document.body.classList.add("is-resizing-panel");
+});
+panelResizer.addEventListener("pointermove", (event) => {
+  if (!panelResize || event.pointerId !== panelResize.pointerId) return;
+  const rect = layoutRect();
+  if (!rect) return;
+  const x = Number(event.clientX);
+  setPanelWidth(chatLayout.side === "right" ? rect.right - x : x - rect.left, { save: false });
+});
+function finishPanelResize(event) {
+  if (!panelResize || event.pointerId !== panelResize.pointerId) return;
+  panelResize = null;
+  document.body.classList.remove("is-resizing-panel");
+  saveChatLayout();
+}
+panelResizer.addEventListener("pointerup", finishPanelResize);
+panelResizer.addEventListener("pointercancel", finishPanelResize);
+panelResizer.addEventListener("dblclick", () => setPanelWidth(PANEL_WIDTH_DEFAULT));
+panelResizer.addEventListener("keydown", (event) => {
+  const grow = chatLayout.side === "right" ? "ArrowLeft" : "ArrowRight";
+  const shrink = chatLayout.side === "right" ? "ArrowRight" : "ArrowLeft";
+  let width = null;
+  if (event.key === grow) width = chatLayout.width + PANEL_WIDTH_KEY_STEP;
+  else if (event.key === shrink) width = chatLayout.width - PANEL_WIDTH_KEY_STEP;
+  else if (event.key === "Home") width = PANEL_WIDTH_MIN;
+  else if (event.key === "End") width = PANEL_WIDTH_MAX;
+  if (width === null) return;
+  event.preventDefault();
+  setPanelWidth(width);
+});
+
+// Peek: hold the eye to fade the panel and read what is under it. The button lives in the dock
+// head, whose click toggles the panel, so its own click must not reach the head.
+function setSeeThrough(on) {
+  document.body.classList.toggle("peek-see-through", Boolean(on) && isPeekLayout());
+}
+panelSeeThrough.addEventListener("pointerdown", () => setSeeThrough(true));
+for (const type of ["pointerup", "pointerleave", "pointercancel"]) {
+  panelSeeThrough.addEventListener(type, () => setSeeThrough(false));
+}
+panelSeeThrough.addEventListener("click", (event) => {
+  if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+});
+
 function scrollElementIntoView(el) {
   el.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
@@ -1563,7 +1801,7 @@ function editQueuedPrompt(index, { reveal = true } = {}) {
   editingPromptId = id;
   editingDraft = String(prompt.prompt || "");
   editFocusPending = true;
-  if (isMobileSheet()) setSheetOpen(true);
+  if (isDockLayout()) setSheetOpen(true);
   render();
   if (reveal && prompt.selector) postToFrame({ type: "lavish:revealElement", selector: String(prompt.selector) });
 }
@@ -4623,7 +4861,7 @@ document.addEventListener("keydown", (event) => {
       closeWarningsDrawer({ restoreFocus: true });
     } else if (!moreMenu.hidden) {
       closeMenus();
-    } else if (sheetOpen && isMobileSheet()) {
+    } else if (sheetOpen && isDockLayout()) {
       setSheetOpen(false);
     } else {
       closeMenus();
@@ -4727,7 +4965,7 @@ events.set("layout-warnings", (data) => setLayoutWarnings(data.warnings || []));
 events.set("ended", () => markSessionEnded());
 connectLiveEvents();
 
-applySheetState();
+applyChatLayout();
 settleQueuedFromTranscript(initialChat, false);
 render();
 setChromeOutdated(false);

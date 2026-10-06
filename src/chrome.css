@@ -178,13 +178,10 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* The bubble's body (y 2 to 18 of 24) sits above the box centre because of the tail; 2px down puts
-   the body's centre on the wordmark's cap-height centre. */
+/* Matches the design mock: the 22px mark's box and the 20px wordmark line share one centre. */
 .brand-logo {
   display: inline-flex;
   flex-shrink: 0;
-  position: relative;
-  top: 2px;
 }
 .brand-logo-bubble {
   fill: var(--primary);
@@ -194,10 +191,10 @@ body {
 }
 .brand-mark {
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: var(--w-semi);
-  letter-spacing: -0.01em;
-  line-height: 1;
+  letter-spacing: -0.025em;
+  line-height: 20px;
   color: var(--fg);
 }
 .spacer {
@@ -1714,6 +1711,263 @@ body.layout-gate-active iframe#artifact {
    chrome-client.js) rather than the layout viewport, so an on-screen keyboard shrinks it instead
    of covering the composer, and every edge that can meet a notch or home indicator pads by the
    matching safe-area inset. */
+/* ---- Conversation layout controls. Hidden by default; the desktop block below shows them. ---- */
+.layout-option,
+.rail-button,
+.panel-see-through {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.layout-option {
+  width: 28px;
+  height: 26px;
+}
+.layout-option:hover,
+.rail-button:hover,
+.panel-see-through:hover {
+  background: var(--muted);
+  color: var(--fg);
+}
+.layout-option[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--fg);
+}
+.rail-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+}
+.rail-unread {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+}
+.rail-unread[hidden] {
+  display: none;
+}
+/* After the shared button styles above, so the hidden default wins outside the desktop block. */
+.layout-switch,
+.panel-resizer,
+.panel-rail,
+.panel-see-through {
+  display: none;
+}
+
+/* ---- Desktop layout: the conversation's side, width, rail, and Peek. Owned by the "Desktop
+   conversation layout" controller in chrome-client.js. Scoped to desktop so the phone sheet keeps
+   sole control of the panel below the breakpoint. ---- */
+@media (min-width: 861px) {
+  :root {
+    --panel-col: min(var(--panel-w), 60vw);
+    --peek-h: 440px;
+  }
+  :root[data-chat-layout="rail"] {
+    --panel-col: 48px;
+  }
+  .layout {
+    grid-template-columns: var(--panel-col) minmax(0, 1fr);
+    grid-template-areas: "panel frame";
+    position: relative;
+  }
+  .frame {
+    grid-area: frame;
+  }
+  .panel {
+    grid-area: panel;
+    position: relative;
+    width: auto;
+    border-left: 0;
+    border-right: var(--hairline-subtle);
+  }
+  :root[data-panel-side="right"] .layout {
+    grid-template-columns: minmax(0, 1fr) var(--panel-col);
+    grid-template-areas: "frame panel";
+  }
+  :root[data-panel-side="right"] .panel {
+    border-right: 0;
+    border-left: var(--hairline-subtle);
+  }
+  .layout-switch {
+    display: inline-flex;
+    flex-shrink: 0;
+    padding: 1px;
+    border: 1px solid var(--border);
+  }
+
+  /* Resize handle on the panel's inner edge: a 10px hit area, a 2px rose line when active. */
+  .panel-resizer {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -5px;
+    width: 10px;
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  :root[data-panel-side="right"] .panel-resizer {
+    right: auto;
+    left: -5px;
+  }
+  .panel-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 4px;
+    width: 2px;
+    background: transparent;
+    transition: background-color var(--dur-fast) var(--ease);
+  }
+  .panel-resizer:hover::after,
+  .panel-resizer:focus-visible::after,
+  body.is-resizing-panel .panel-resizer::after {
+    background: var(--accent);
+  }
+  .panel-resizer:focus-visible {
+    outline: none;
+  }
+  body.is-resizing-panel,
+  body.is-resizing-panel * {
+    cursor: col-resize !important;
+    user-select: none;
+  }
+  /* Otherwise the artifact iframe takes the pointer the moment the drag crosses into it. */
+  body.is-resizing-panel iframe {
+    pointer-events: none;
+  }
+
+  /* Rail: a 48px strip with the conversation's entry points; everything else waits. */
+  :root[data-chat-layout="rail"] .panel > :not(.panel-rail) {
+    display: none;
+  }
+  :root[data-chat-layout="rail"] .panel-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0;
+  }
+
+  /* Peek: the conversation floats over the bottom of the artifact. Collapsed, it is the dock head
+     plus a live composer; open, it grows to --peek-h, which dragging the head sets. */
+  :root[data-chat-layout="peek"] .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "frame";
+  }
+  :root[data-chat-layout="peek"] .panel {
+    position: absolute;
+    z-index: 30;
+    left: 50%;
+    bottom: 16px;
+    width: min(720px, calc(100% - 32px));
+    max-height: calc(100% - 32px);
+    transform: translateX(-50%);
+    border: 1px solid var(--border);
+    background: color-mix(in oklch, var(--popover) 88%, transparent);
+    backdrop-filter: blur(18px) saturate(1.4);
+    box-shadow: var(--shadow-floating);
+    transition: opacity var(--dur) var(--ease);
+  }
+  body.peek-open .panel {
+    height: var(--peek-h);
+  }
+  body.peek-see-through .panel {
+    opacity: 0.1;
+  }
+  :root[data-chat-layout="peek"] .panel-resizer {
+    display: none;
+  }
+  :root[data-chat-layout="peek"] .panel-head {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    padding: 4px 8px 6px 14px;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+  }
+  :root[data-chat-layout="peek"] .panel-handle {
+    display: block;
+    width: 36px;
+    height: 3px;
+    margin: 2px auto 6px;
+    background: var(--border-strong);
+  }
+  :root[data-chat-layout="peek"] .panel-head-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  :root[data-chat-layout="peek"] .panel h2 {
+    flex: 0 0 auto;
+    margin: 0;
+  }
+  :root[data-chat-layout="peek"] .panel-summary {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--fg-faint);
+    font-size: 12px;
+    line-height: 1.35;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  :root[data-chat-layout="peek"] .panel-summary.is-accent {
+    color: var(--accent-text);
+    font-weight: var(--w-semi);
+  }
+  :root[data-chat-layout="peek"] .panel-summary.is-unread::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    background: var(--accent);
+    vertical-align: 1px;
+  }
+  :root[data-chat-layout="peek"] .panel-see-through,
+  :root[data-chat-layout="peek"] .panel-toggle {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+  :root[data-chat-layout="peek"] .panel-toggle:hover {
+    background: var(--muted);
+    color: var(--fg);
+  }
+  body.peek-open .panel-toggle svg {
+    transform: rotate(180deg);
+  }
+  :root[data-chat-layout="peek"] body:not(.peek-open) .panel-scroll {
+    display: none;
+  }
+  :root[data-chat-layout="peek"] body:not(.peek-open) .composer {
+    padding-top: 0;
+  }
+}
+/* ---- end desktop layout ---- */
+
 @media (max-width: 860px) {
   /* The theme toggle costs the bar one control; the logo alone carries the brand on a phone. */
   .brand-mark {

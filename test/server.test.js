@@ -1042,8 +1042,9 @@ test("chrome centers the top bar row and aligns the mark with the wordmark", asy
   assert.match(css, /\.bar\{[^}]*align-items:center/);
   assert.match(css, /\.brand\{[^}]*height:22px/);
   assert.match(css, /\.brand\{[^}]*align-items:center/);
-  // Optical nudge: the speech bubble's tail would otherwise lift its body above the cap height.
-  assert.match(css, /\.brand-logo\{[^}]*position:relative;top:2px/);
+  // Same geometry as the design mock: the mark's box and a 14/20 wordmark line share one centre.
+  assert.doesNotMatch(css, /\.brand-logo\{[^}]*top:/);
+  assert.match(css, /\.brand-mark\{[^}]*font-size:14px;[^}]*letter-spacing:-\.025em;line-height:20px/);
 });
 
 test("chrome chat bubbles follow the preview mock shades", async () => {
@@ -6702,4 +6703,66 @@ test("chat-sync stamps a note seen when a poll takes it, working when the artifa
     await server.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("chrome offers the conversation layouts and a keyboard-operable resize handle", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+
+  assert.match(html, /<div class="layout" id="layout">/);
+  assert.match(html, /<div class="layout-switch" role="group" aria-label="Conversation layout">/);
+  for (const [id, label] of [
+    ["layoutLeft", "Conversation on the left"],
+    ["layoutRight", "Conversation on the right"],
+    ["layoutRail", "Collapse the conversation to a rail"],
+    ["layoutPeek", "Peek: float the conversation at the bottom"],
+  ]) {
+    assert.match(
+      html,
+      new RegExp(
+        `<button class="layout-option" id="${id}" type="button" aria-pressed="false" aria-label="${label}" title="${label}">`,
+      ),
+    );
+  }
+  assert.match(
+    html,
+    /<div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><\/div>/,
+  );
+  assert.match(html, /<div class="panel-rail" id="panelRail">/);
+  assert.match(
+    html,
+    /<button class="rail-button" id="railOpen" type="button" aria-label="Open the conversation" title="Open the conversation">/,
+  );
+  assert.match(html, /<span class="rail-unread" id="railUnread" hidden><\/span>/);
+  assert.match(
+    html,
+    /<button class="panel-see-through" id="panelSeeThrough" type="button" aria-label="Hold to see the artifact through the panel" title="Hold to see the artifact through the panel">/,
+  );
+
+  // The stored layout lands before first paint, like the theme.
+  const head = html.slice(0, html.indexOf("</head>"));
+  assert.ok(head.indexOf('localStorage.getItem("lavish-axi:layout")') > -1);
+});
+
+test("desktop layout rules stay out of the phone sheet's way", async () => {
+  const css = await chromeCssSource();
+  const desktop =
+    css.match(/@media \(min-width:861px\)\{([\s\S]*?)\n?\}\s*\/\* ---- end desktop layout ---- \*\//)?.[1] || "";
+
+  assert.ok(desktop, "desktop layout block exists");
+  // Left is the default; right, rail, and Peek are opt-in.
+  assert.match(
+    desktop,
+    /\.layout\{grid-template-columns:var\(--panel-col\) minmax\(0,1fr\);grid-template-areas:"panel frame"/,
+  );
+  assert.match(
+    desktop,
+    /:root\[data-panel-side="right"\] \.layout\{grid-template-columns:minmax\(0,1fr\) var\(--panel-col\);grid-template-areas:"frame panel"/,
+  );
+  assert.match(desktop, /:root\[data-chat-layout="rail"\]\{--panel-col:48px;?\}/);
+  assert.match(desktop, /:root\[data-chat-layout="peek"\] \.panel\{position:absolute;/);
+  // The phone sheet owns the panel below the breakpoint: no layout-mode selector may live outside
+  // the desktop block, where it could outrank the phone rules.
+  const outside = css.replace(/@media \(min-width:861px\)\{[\s\S]*?\}\s*\/\* ---- end desktop layout ---- \*\//, "");
+  assert.notEqual(outside, css);
+  assert.doesNotMatch(outside, /data-chat-layout|data-panel-side|peek-open|is-resizing-panel/);
 });
