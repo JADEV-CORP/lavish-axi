@@ -2483,6 +2483,12 @@ export function createArtifactSdk(
     endSession,
     getQueuedPrompts: () => [],
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
+    // One-click replies for the conversation composer ("Approve", "Show option B"). Calling it again
+    // replaces the set; an empty list clears it. The chrome bounds, deduplicates, and escapes them.
+    suggest: (items) =>
+      postArtifactMessage("lavish:suggestions", {
+        items: Array.isArray(items) ? items.filter((item) => typeof item === "string").slice(0, 20) : [],
+      }),
     snapshot,
   };
 

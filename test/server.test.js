@@ -1050,10 +1050,13 @@ test("chrome centers the top bar row and aligns the mark with the wordmark", asy
 test("chrome chat bubbles follow the preview mock shades", async () => {
   const css = await chromeCssSource();
 
+  // Only the reviewer's own messages sit in a bubble; agent replies read as plain prose.
   assert.match(css, /\.bubble\.user\{[^}]*background:var\(--bg-elevated\)/);
-  assert.match(css, /\.bubble\.user\{[^}]*border-color:var\(--border-strong\)/);
+  assert.match(css, /\.bubble\.user\{[^}]*border-color:transparent/);
   assert.match(css, /\.bubble\.agent\{[^}]*background:transparent/);
-  assert.match(css, /\.bubble\.agent\{[^}]*border-color:var\(--border-subtle\)/);
+  assert.match(css, /\.bubble\.agent\{[^}]*border:0/);
+  assert.match(css, /\.bubble\.agent\{[^}]*padding:0/);
+  assert.match(css, /\.bubble\.agent\{[^}]*max-width:100%/);
   assert.match(css, /border-top-color:var\(--accent\)/);
 });
 
@@ -1100,10 +1103,27 @@ test("composer offers two always-visible top-level send actions", async () => {
 
   assert.match(html, /class="button" id="send">Send to Agent</);
   assert.match(html, /class="button button-danger" id="sendAndEnd"[^<]*>.*Send &amp; End</);
+  // One prompt box: chips, the textarea, then a toolbar row with attach on the left and both send
+  // actions on the right. The hint sits right above the box, next to the actions it explains.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">.*<button class="button" id="send">Send to Agent<\/button><\/div>/,
+    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="prompt-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
   );
+  assert.match(
+    html,
+    /<button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">/,
+  );
+  // The actions stay the last element of the composer, so the phone layout can flatten the box
+  // with display: contents and keep them sticky exactly as before.
+  assert.match(
+    html,
+    /<div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">.*<button class="button" id="send">Send to Agent<\/button><\/div><\/div><\/div><\/aside>/,
+  );
+  assert.match(
+    css,
+    /\.prompt-input\{display:grid;grid-template-columns:minmax\(0,1fr\) auto;grid-template-areas:"attachments attachments" "input input" "tools actions"/,
+  );
+  assert.match(css, /@media \(max-width:860px\)\{[\s\S]*\.prompt-input\{display:contents;?\}/);
   assert.doesNotMatch(html, /id="sendCaret"/);
   assert.doesNotMatch(html, /id="sendMenu"/);
   assert.doesNotMatch(html, /id="sendFromMenu"/);
@@ -6765,4 +6785,28 @@ test("desktop layout rules stay out of the phone sheet's way", async () => {
   const outside = css.replace(/@media \(min-width:861px\)\{[\s\S]*?\}\s*\/\* ---- end desktop layout ---- \*\//, "");
   assert.notEqual(outside, css);
   assert.doesNotMatch(outside, /data-chat-layout|data-panel-side|peek-open|is-resizing-panel/);
+});
+
+test("top bar shows whether the agent is listening", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+
+  assert.match(
+    html,
+    /<span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"><\/span><span class="agent-status-text" id="agentStatusText">Agent not listening<\/span><\/span>/,
+  );
+  // It sits before the Annotate switch, at the start of the controls.
+  assert.ok(html.indexOf('id="agentStatus"') < html.indexOf('id="annotation"'));
+});
+
+test("composer offers suggested replies the artifact declares", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  const sdk = createSdkJs("abc");
+
+  assert.match(
+    html,
+    /<div class="chat-suggestions" id="chatSuggestions" role="group" aria-label="Suggested replies" hidden><\/div><div class="send-hint" id="sendHint"/,
+  );
+  // The artifact declares them; the SDK forwards them through the one artifact-to-chrome channel.
+  assert.match(sdk, /suggest: \(items\) =>/);
+  assert.match(sdk, /postArtifactMessage\("lavish:suggestions", \{\s*items:/);
 });

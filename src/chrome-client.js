@@ -156,6 +156,9 @@ const copyPathButton = /** @type {HTMLButtonElement} */ (document.getElementById
 const copyHint = /** @type {HTMLSpanElement} */ (document.getElementById("copyHint"));
 const copyHintText = /** @type {HTMLSpanElement} */ (document.getElementById("copyHintText"));
 const presenceBanner = /** @type {HTMLDivElement} */ (document.getElementById("presenceBanner"));
+const agentStatus = /** @type {HTMLSpanElement} */ (document.getElementById("agentStatus"));
+const agentStatusText = /** @type {HTMLSpanElement} */ (document.getElementById("agentStatusText"));
+const chatSuggestions = /** @type {HTMLDivElement} */ (document.getElementById("chatSuggestions"));
 const handoffBanner = /** @type {HTMLDivElement} */ (document.getElementById("handoffBanner"));
 const handoffTakeoverButton = /** @type {HTMLButtonElement} */ (document.getElementById("handoffTakeover"));
 const outdatedBanner = /** @type {HTMLDivElement} */ (document.getElementById("outdatedBanner"));
@@ -1128,8 +1131,23 @@ function syncChat(chat, revision) {
   return true;
 }
 
+// The top bar's one-word answer to "will my send reach anyone right now?". The dock summary and the
+// presence banner say more; this stays visible whatever the panel is doing.
+const AGENT_STATUS_TEXT = {
+  listening: "Agent listening",
+  working: "Agent working",
+  external: "External listener",
+  waiting: "Agent not listening",
+};
+
+function renderAgentStatus() {
+  agentStatus.dataset.state = ended ? "ended" : agentPresence;
+  agentStatusText.textContent = ended ? "Session ended" : AGENT_STATUS_TEXT[agentPresence] || AGENT_STATUS_TEXT.waiting;
+}
+
 function setAgentPresence(state) {
   agentPresence = state === "listening" || state === "external" || state === "working" ? state : "waiting";
+  renderAgentStatus();
   updateSendState();
   renderSheetSummary();
   refreshUnseenReceipts();
@@ -1277,6 +1295,59 @@ async function refreshChromeLoadHandoff(requestSequence) {
 function scrollPanelToBottom() {
   panelScroll.scrollTop = panelScroll.scrollHeight;
 }
+
+// ---- Suggested replies ----
+// The artifact declares them (window.lavish.suggest in the SDK) because only it knows what a sensible
+// one-click answer is: a plan offers "Approve", a comparison offers each option. They are untrusted
+// artifact input, so they are bounded, deduplicated, and always rendered as text. A click fills the
+// composer and never sends; the row steps aside while the reviewer has a draft.
+const SUGGESTION_LIMITS = { count: 6, length: 80 };
+/** @type {string[]} */
+let suggestions = [];
+
+function setSuggestions(items) {
+  /** @type {string[]} */
+  const next = [];
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      if (typeof item !== "string") continue;
+      const text = item.trim().replace(/\s+/g, " ");
+      if (!text || text.length > SUGGESTION_LIMITS.length || next.includes(text)) continue;
+      next.push(text);
+      if (next.length >= SUGGESTION_LIMITS.count) break;
+    }
+  }
+  suggestions = next;
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  const show = suggestions.length > 0 && !ended && !chatInput.value.trim();
+  chatSuggestions.hidden = !show;
+  chatSuggestions.innerHTML = show
+    ? suggestions
+        .map(
+          (text, index) =>
+            '<button class="chat-suggestion" type="button" data-suggestion-index="' +
+            index +
+            '">' +
+            escapeHtml(text) +
+            "</button>",
+        )
+        .join("")
+    : "";
+}
+
+chatSuggestions.addEventListener("click", (event) => {
+  const target = /** @type {any} */ (event && event.target);
+  const button = target && typeof target.closest === "function" ? target.closest("[data-suggestion-index]") : null;
+  const text = button ? suggestions[Number(button.dataset.suggestionIndex)] : undefined;
+  if (typeof text !== "string" || ended) return;
+  chatInput.value = text;
+  chatInput.focus();
+  hideSendHint();
+  renderSuggestions();
+});
 
 // ---- Theme ----
 // Light or dark follows the OS until the reviewer picks one with the toggle. The choice is a
@@ -3377,6 +3448,8 @@ async function endSession(terminal = null) {
 function markSessionEnded() {
   if (ended) return;
   ended = true;
+  renderAgentStatus();
+  setSuggestions([]);
   pendingAcknowledgements.clear();
   clearSendAcknowledgementWarning();
   terminalSubmission = null;
@@ -3700,6 +3773,7 @@ async function replaceArtifactFrame({ recoveryRetry = false } = {}) {
     // Only clear it here, right before the frame is actually replaced - a preserved
     // load (superseded/out-of-order/exhausted retries below) must leave it intact.
     resetRevisionLegend();
+    setSuggestions([]);
     startLayoutGateCycle();
     const currentSrc = frame.src || "about:blank";
     frame.src = currentSrc + (currentSrc.includes("?") ? "&" : "?") + "lavish_reload=" + Date.now();
@@ -3819,6 +3893,7 @@ async function replaceArtifactFrame({ recoveryRetry = false } = {}) {
   // The next document reports its own registry once it loads; until then the
   // previous revision's legend would point at blocks that may no longer exist.
   resetRevisionLegend();
+  setSuggestions([]);
   frame.src = artifactFrameSrcForLoad({ revision, token });
   return true;
 }
@@ -4533,6 +4608,7 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:snapshot") {
     completeSnapshotRequest(msg.snapshot_request_id, msg.snapshot || "");
   }
+  if (msg.type === "lavish:suggestions") setSuggestions(msg.items);
   if (msg.type === "lavish:scroll") {
     lastScroll = { x: Number(msg.x) || 0, y: Number(msg.y) || 0 };
   }
@@ -4797,7 +4873,10 @@ chatInput.addEventListener("keydown", (event) => {
     sendQueued(false);
   }
 });
-chatInput.addEventListener("input", () => hideSendHint());
+chatInput.addEventListener("input", () => {
+  hideSendHint();
+  renderSuggestions();
+});
 copyPathButton.onclick = copyFilePath;
 reloadArtifactButton.onclick = reloadArtifact;
 copySnapshotButton.onclick = copyDomSnapshot;

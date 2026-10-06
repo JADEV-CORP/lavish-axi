@@ -9044,3 +9044,76 @@ test("Peek docks the conversation at the bottom with a live composer and an unre
   assert.doesNotMatch(String(chrome.element("body").classList), /peek-open/);
   assert.equal(chrome.element("panelScroll").inert, false);
 });
+
+test("the top bar status follows agent presence", async () => {
+  const chrome = await createChromeHarness();
+  const status = chrome.element("agentStatus");
+  const text = chrome.element("agentStatusText");
+  const presence = (state, mode) =>
+    chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify(mode ? { state, mode } : { state }) });
+
+  presence("listening");
+  assert.equal(status.dataset.state, "listening");
+  assert.equal(text.textContent, "Agent listening");
+  presence("working");
+  assert.equal(status.dataset.state, "working");
+  assert.equal(text.textContent, "Agent working");
+  presence("listening", "external-listener");
+  assert.equal(status.dataset.state, "external");
+  assert.equal(text.textContent, "External listener");
+  presence("waiting");
+  assert.equal(status.dataset.state, "waiting");
+  assert.equal(text.textContent, "Agent not listening");
+});
+
+test("suggested replies come from the artifact, are sanitized, and fill the composer", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  const row = chrome.element("chatSuggestions");
+  const input = chrome.element("chatInput");
+  assert.equal(row.hidden, true);
+
+  chrome.sendFrameMessage({
+    type: "lavish:suggestions",
+    artifact_load_token: chrome.artifactLoadToken(),
+    items: [
+      "Approve",
+      " ",
+      "Approve",
+      42,
+      "<b>Show option B</b>",
+      "x".repeat(200),
+      "Three",
+      "Four",
+      "Five",
+      "Six",
+      "Seven",
+    ],
+  });
+  assert.equal(row.hidden, false);
+  const html = row.innerHTML;
+  // Trimmed, deduplicated, strings only, nothing over 80 characters, at most six, and escaped.
+  assert.equal((html.match(/data-suggestion-index=/g) || []).length, 6);
+  assert.match(html, /&lt;b&gt;Show option B&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /x{81}/);
+  assert.doesNotMatch(html, /Seven/);
+
+  // A click fills the composer and hands it focus; it never sends on its own.
+  row.dispatch("click", { target: { closest: () => ({ dataset: { suggestionIndex: "0" } }) } });
+  assert.equal(input.value, "Approve");
+  assert.equal(input.focused, true);
+  assert.equal(chrome.postedToFrame.filter((message) => message.type === "lavish:requestSnapshot").length, 0);
+  // With a draft in the composer the row gets out of the way.
+  assert.equal(row.hidden, true);
+
+  input.value = "";
+  input.dispatch("input", {});
+  assert.equal(row.hidden, false);
+
+  // A non-array clears them.
+  chrome.sendFrameMessage({
+    type: "lavish:suggestions",
+    artifact_load_token: chrome.artifactLoadToken(),
+    items: "Approve",
+  });
+  assert.equal(row.hidden, true);
+});

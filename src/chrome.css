@@ -39,6 +39,7 @@
   --ring: light-dark(oklch(0.711 0.019 323.02), oklch(0.542 0.034 322.5));
   --sidebar: light-dark(oklch(0.985 0 0), oklch(0.21 0.006 285.885));
   --warning: light-dark(oklch(0.55 0.13 70), oklch(0.8 0.14 75));
+  --success: light-dark(oklch(0.55 0.13 150), oklch(0.72 0.15 150));
   --scrim: light-dark(oklch(0.145 0.008 326 / 35%), oklch(0.1 0.01 326 / 72%));
   --scrim-strong: light-dark(oklch(0.145 0.008 326 / 55%), oklch(0.1 0.01 326 / 88%));
   /* Status surfaces for the send hint and similar notices. */
@@ -828,12 +829,13 @@ body {
 .button {
   border: 0;
   border-radius: var(--radius-md);
-  padding: 9px 14px;
+  height: 28px;
+  padding: 0 12px;
   background: var(--accent);
   color: var(--accent-ink);
   font-family: inherit;
-  font-size: var(--text-sm);
-  font-weight: var(--w-bold);
+  font-size: 12px;
+  font-weight: var(--w-semi);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -855,7 +857,7 @@ body {
 .button-danger {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: transparent;
   color: var(--danger);
 }
@@ -1124,7 +1126,7 @@ body {
   padding: 0 16px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .chat:empty::before {
@@ -1148,12 +1150,17 @@ body {
 .bubble.user {
   align-self: flex-end;
   background: var(--bg-elevated);
-  border-color: var(--border-strong);
+  border-color: transparent;
 }
+/* Agent replies read as prose on the panel, the way a conversation with a person does; only the
+   reviewer's own messages sit in a bubble. */
 .bubble.agent {
   align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
   background: transparent;
-  border-color: var(--border-subtle);
+  line-height: 1.6;
 }
 .bubble.note {
   align-self: stretch;
@@ -1177,6 +1184,29 @@ body {
   gap: 8px;
   color: var(--fg-muted);
 }
+/* The AI Elements shimmer on "Working...": a highlight sweeps the text while the agent is busy. */
+.bubble.agent-working span:last-child {
+  background: linear-gradient(90deg, var(--fg-faint) 0%, var(--fg) 50%, var(--fg-faint) 100%) 0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bubble.agent-working span:last-child {
+    animation: none;
+    color: var(--fg-muted);
+    background: none;
+  }
+}
 .spinner {
   width: 14px;
   height: 14px;
@@ -1188,10 +1218,10 @@ body {
 }
 .bubble small {
   display: block;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   margin-bottom: 4px;
-  font-size: 10px;
-  font-weight: var(--w-bold);
+  font-size: 12px;
+  font-weight: var(--w-medium);
 }
 .bubble.user small {
   text-align: right;
@@ -1213,6 +1243,7 @@ body {
 }
 .bubble.queued {
   background: transparent;
+  border-color: var(--border-strong);
   border-style: dashed;
 }
 .bubble.queued small {
@@ -1467,7 +1498,7 @@ body {
 .composer {
   display: grid;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 10px 12px 12px;
   border-top: var(--hairline-subtle);
   background: var(--bg-panel);
   min-width: 0;
@@ -1584,12 +1615,124 @@ body {
 }
 .chat-attachment-chip button,
 .chat-attach {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 0;
   background: transparent;
-  color: var(--accent-text);
+  color: var(--fg-muted);
   cursor: pointer;
+}
+.chat-attach:hover:not(:disabled) {
+  background: var(--muted);
+  color: var(--fg);
+}
+
+/* ---- Prompt input (AI Elements PromptInput): chips, the textarea, then a toolbar row with attach on
+   the left and both send actions on the right. On a phone the box flattens (display: contents) back
+   into the composer's own grid, so the sheet's sticky send actions work exactly as before. ---- */
+.prompt-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "attachments attachments"
+    "input input"
+    "tools actions";
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.prompt-input:focus-within {
+  border-color: var(--ring);
+}
+.prompt-input .chat-attachments {
+  grid-area: attachments;
+  padding: 8px 8px 0;
+}
+.prompt-input .chat-attachments:empty {
+  display: none;
+}
+.prompt-input textarea {
+  grid-area: input;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 10px 4px;
+}
+/* The box shows focus; a second outline inside it would only add noise. */
+.prompt-input textarea:focus-visible {
+  outline: none;
+}
+.prompt-input .chat-attachment-toolbar {
+  grid-area: tools;
+  padding: 4px;
+}
+.prompt-input .actions {
+  grid-area: actions;
+  gap: 4px;
+  padding: 4px;
+}
+
+/* ---- Suggested replies the artifact declares (window.lavish.suggest). ---- */
+.chat-suggestions {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.chat-suggestions::-webkit-scrollbar {
+  display: none;
+}
+.chat-suggestions[hidden] {
+  display: none;
+}
+.chat-suggestion {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
   font: inherit;
-  padding: 2px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chat-suggestion:hover {
+  background: var(--muted);
+}
+
+/* ---- Agent status (top bar). ---- */
+.agent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.agent-status-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--fg-label);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.agent-status[data-state="listening"] .agent-status-dot {
+  background: var(--success);
+}
+.agent-status[data-state="working"] .agent-status-dot {
+  background: var(--warning);
+}
+.agent-status[data-state="external"] .agent-status-dot {
+  background: var(--accent);
 }
 .chat-attachment-toolbar {
   display: flex;
@@ -1972,6 +2115,31 @@ body.layout-gate-active iframe#artifact {
   /* The theme toggle costs the bar one control; the logo alone carries the brand on a phone. */
   .brand-mark {
     display: none;
+  }
+  /* The dock summary already says whether the agent is listening. */
+  .agent-status {
+    display: none;
+  }
+  .prompt-input {
+    display: contents;
+  }
+  /* Flattened into the composer's single-column grid, the box's named areas would mint implicit
+     columns; the children go back to plain auto placement. */
+  .prompt-input .chat-attachments,
+  .prompt-input textarea,
+  .prompt-input .chat-attachment-toolbar,
+  .prompt-input .actions {
+    grid-area: auto;
+  }
+  .prompt-input textarea {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    padding: 10px;
+  }
+  .prompt-input .chat-attachments,
+  .prompt-input .chat-attachment-toolbar,
+  .prompt-input .actions {
+    padding: 0;
   }
   :root {
     --bar-h: calc(56px + env(safe-area-inset-top, 0px));
