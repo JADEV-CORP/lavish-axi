@@ -13,6 +13,15 @@ export function isModeToggleHotkeyEvent(event) {
   return Boolean(event.metaKey || event.ctrlKey) && String(event.key || "").toLowerCase() === MODE_TOGGLE_HOTKEY_KEY;
 }
 
+export const COMMAND_PALETTE_HOTKEY_KEY = "k";
+
+export function isCommandPaletteHotkeyEvent(event) {
+  if (event.shiftKey || event.altKey) return false;
+  return (
+    Boolean(event.metaKey || event.ctrlKey) && String(event.key || "").toLowerCase() === COMMAND_PALETTE_HOTKEY_KEY
+  );
+}
+
 // Derive the browser-only replacement key used to collapse unsent updates for the same input.
 // The key is stripped by the chrome before prompts are sent to the server or returned by poll.
 export function deriveLavishQueueKey(element, options = {}) {
@@ -479,6 +488,13 @@ export function createArtifactSdk(
   // Selectors the chrome reports as carrying a queued note. A click on one opens that note in the
   // chrome's panel instead of a fresh card; the note's words never enter this document.
   let queuedAnchorSelectors = new Set();
+  // Marks Lavish draws over the artifact: a numbered pin per queued note (the chrome sends the
+  // numbers) and an outline per block of the revision round the reviewer chose. They live in the
+  // shadow root and follow their elements on scroll and resize; the artifact's DOM is never touched.
+  let notePins = [];
+  let hotPinSelector = "";
+  let outlinedRevision = "";
+  let overlayFrame = 0;
   let shadow = null;
   let counter = 0;
   const ids = new WeakMap();
@@ -2247,7 +2263,7 @@ export function createArtifactSdk(
 
     shadow = host.attachShadow({ mode: "open" });
     const style = document.createElement("style");
-    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--card:light-dark(oklch(1 0 0),oklch(0.212 0.019 322.12));--secondary:light-dark(oklch(0.967 0.001 286.375),oklch(0.274 0.006 286.033));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 10%));--destructive:light-dark(oklch(0.577 0.245 27.325),oklch(0.704 0.191 22.216));--bg:var(--background);--bg-panel:var(--card);--bg-elevated:var(--secondary);--fg:var(--foreground);--fg-faint:var(--muted-foreground);--border:var(--border-color);--accent:var(--primary);--accent-hover:var(--primary-hover);--accent-ink:var(--primary-foreground);--font-sans:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-md:0;--radius-xl:0;--shadow-floating:0 20px 70px rgba(0,0,0,.35);font-family:var(--font-sans)}:host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.lavish-text-highlight{position:fixed;pointer-events:none;background:oklch(0.586 0.253 17.585 / .16);border-radius:0;box-shadow:0 0 0 1px oklch(0.586 0.253 17.585 / .45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating);font:14px/1.4 var(--font-sans)}.lavish-heading{font-weight:700;margin-bottom:6px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:9px;font:inherit;font-family:var(--font-sans)}.lavish-annotation-card textarea::placeholder{color:var(--fg-faint)}.lavish-annotation-card .lavish-hint{margin-top:6px;font-size:11px;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--destructive);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 10px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--accent-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:var(--muted);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border)}.lavish-attachment-chip.is-error{border-color:var(--destructive)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:0;object-fit:cover;background:var(--muted);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--destructive)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:0;background:var(--muted);color:var(--fg);cursor:pointer;border:0}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--muted);color:var(--foreground)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 9px!important;background:var(--muted)!important;color:var(--fg)!important;font-size:12px!important}.lavish-attach:hover{background:var(--secondary)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:0;box-shadow:0 0 0 4px oklch(0.586 0.253 17.585 / .2);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}`;
+    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--card:light-dark(oklch(1 0 0),oklch(0.212 0.019 322.12));--secondary:light-dark(oklch(0.967 0.001 286.375),oklch(0.274 0.006 286.033));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 10%));--destructive:light-dark(oklch(0.577 0.245 27.325),oklch(0.704 0.191 22.216));--bg:var(--background);--bg-panel:var(--card);--bg-elevated:var(--secondary);--fg:var(--foreground);--fg-faint:var(--muted-foreground);--border:var(--border-color);--accent:var(--primary);--accent-hover:var(--primary-hover);--accent-ink:var(--primary-foreground);--font-sans:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-md:0;--radius-xl:0;--shadow-floating:0 20px 70px rgba(0,0,0,.35);font-family:var(--font-sans)}:host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.lavish-text-highlight{position:fixed;pointer-events:none;background:oklch(0.586 0.253 17.585 / .16);border-radius:0;box-shadow:0 0 0 1px oklch(0.586 0.253 17.585 / .45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating);font:14px/1.4 var(--font-sans)}.lavish-heading{font-weight:700;margin-bottom:6px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:9px;font:inherit;font-family:var(--font-sans)}.lavish-annotation-card textarea::placeholder{color:var(--fg-faint)}.lavish-annotation-card .lavish-hint{margin-top:6px;font-size:11px;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--destructive);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 10px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--accent-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:var(--muted);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border)}.lavish-attachment-chip.is-error{border-color:var(--destructive)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:0;object-fit:cover;background:var(--muted);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--destructive)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:0;background:var(--muted);color:var(--fg);cursor:pointer;border:0}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--muted);color:var(--foreground)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 9px!important;background:var(--muted)!important;color:var(--fg)!important;font-size:12px!important}.lavish-attach:hover{background:var(--secondary)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:0;box-shadow:0 0 0 4px oklch(0.586 0.253 17.585 / .2);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}.lavish-pin{position:fixed;pointer-events:none;display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/18px var(--font-sans);box-shadow:0 1px 2px rgba(0,0,0,.25)}.lavish-pin-hot{position:fixed;pointer-events:none;border:2px solid var(--accent)}.lavish-outline{position:fixed;pointer-events:none;border:1px dashed var(--accent)}.lavish-outline-tag{position:absolute;top:-15px;right:-1px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/14px var(--font-sans);white-space:nowrap}`;
     shadow.appendChild(style);
     return shadow;
   }
@@ -2519,6 +2535,18 @@ export function createArtifactSdk(
     }
     if (msg.type === "lavish:queuedAnchors") {
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);
+      notePins = (Array.isArray(msg.pins) ? msg.pins : [])
+        .filter((pin) => pin && typeof pin.selector === "string" && Number.isSafeInteger(pin.number) && pin.number > 0)
+        .map((pin) => ({ selector: pin.selector, number: pin.number }));
+      renderOverlayMarks();
+    }
+    if (msg.type === "lavish:hotPin") {
+      hotPinSelector = typeof msg.selector === "string" ? msg.selector : "";
+      renderOverlayMarks();
+    }
+    if (msg.type === "lavish:outlineRevision") {
+      outlinedRevision = typeof msg.revision_id === "string" ? msg.revision_id : "";
+      renderOverlayMarks();
     }
     if (msg.type === "lavish:annotateElement" && annotationMode) {
       const target = safeQuerySelector(msg.selector);
@@ -2545,6 +2573,82 @@ export function createArtifactSdk(
     window.setTimeout(() => marker.remove(), 2400);
   }
 
+  function placeOverMark(mark, rect) {
+    mark.style.left = rect.left + "px";
+    mark.style.top = rect.top + "px";
+    mark.style.width = rect.width + "px";
+    mark.style.height = rect.height + "px";
+  }
+
+  // Redraws every pin and outline from scratch against the elements' current boxes. An element
+  // that is gone, or has no box, simply gets no mark.
+  function renderOverlayMarks() {
+    if (!shadow && !notePins.length && !outlinedRevision) return;
+    const root = ensureShadow();
+    for (const el of [...root.querySelectorAll(".lavish-pin, .lavish-pin-hot, .lavish-outline")]) el.remove();
+    if (outlinedRevision) {
+      let marks = [];
+      try {
+        marks = readArtifactRevisions(document).marks.filter((mark) => mark.revision_id === outlinedRevision);
+      } catch {
+        // A malformed registry draws no outline, the same way it shows no legend.
+      }
+      for (const mark of marks) {
+        const target = safeQuerySelector(mark.selector);
+        const rect = target instanceof Element ? target.getBoundingClientRect() : null;
+        if (!rect || (rect.width <= 0 && rect.height <= 0)) continue;
+        const outline = document.createElement("div");
+        outline.className = "lavish-outline";
+        placeOverMark(outline, {
+          left: rect.left - 4,
+          top: rect.top - 4,
+          width: rect.width + 8,
+          height: rect.height + 8,
+        });
+        const tag = document.createElement("span");
+        tag.className = "lavish-outline-tag";
+        tag.textContent = outlinedRevision;
+        outline.appendChild(tag);
+        root.appendChild(outline);
+      }
+    }
+    // Two notes on one element sit side by side instead of stacking into one unreadable pin.
+    const pinsAt = new Map();
+    for (const pin of notePins) {
+      const target = safeQuerySelector(pin.selector);
+      const rect = target instanceof Element ? target.getBoundingClientRect() : null;
+      if (!rect || (rect.width <= 0 && rect.height <= 0)) continue;
+      const offset = pinsAt.get(pin.selector) || 0;
+      pinsAt.set(pin.selector, offset + 1);
+      const mark = document.createElement("div");
+      mark.className = "lavish-pin";
+      mark.textContent = String(pin.number);
+      // In the gutter beside the block when there is room, so the pin never covers its first
+      // words; otherwise on the block's top-left corner.
+      const gutter = rect.left >= 26;
+      mark.style.left = (gutter ? rect.left - 24 - offset * 22 : Math.max(2, rect.left - 9 + offset * 22)) + "px";
+      mark.style.top = (gutter ? rect.top + 2 : Math.max(2, rect.top - 9)) + "px";
+      root.appendChild(mark);
+      if (pin.selector === hotPinSelector && offset === 0) {
+        const hot = document.createElement("div");
+        hot.className = "lavish-pin-hot";
+        placeOverMark(hot, { left: rect.left - 3, top: rect.top - 3, width: rect.width + 6, height: rect.height + 6 });
+        root.appendChild(hot);
+      }
+    }
+  }
+
+  function scheduleOverlayMarks() {
+    if (overlayFrame || (!notePins.length && !outlinedRevision)) return;
+    overlayFrame = window.requestAnimationFrame(() => {
+      overlayFrame = 0;
+      renderOverlayMarks();
+    });
+  }
+  window.addEventListener("scroll", scheduleOverlayMarks, { passive: true, capture: true });
+  window.addEventListener("resize", scheduleOverlayMarks, { passive: true });
+  if (typeof ResizeObserver === "function") new ResizeObserver(scheduleOverlayMarks).observe(document.documentElement);
+
   // Capture phase so the mode hotkey fires no matter where focus is inside the artifact -
   // including a checkbox, button, link, or the annotation-card textarea - without disturbing
   // normal typing. This SDK doesn't own the mode state; it asks the chrome to toggle the same
@@ -2555,6 +2659,16 @@ export function createArtifactSdk(
       if (!isModeToggleHotkeyEvent(event)) return;
       event.preventDefault();
       postArtifactMessage("lavish:toggleAnnotationMode");
+    },
+    true,
+  );
+  // The command palette hotkey, on the same terms as the mode hotkey: the chrome owns the palette.
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (!isCommandPaletteHotkeyEvent(event)) return;
+      event.preventDefault();
+      postArtifactMessage("lavish:toggleCommandPalette");
     },
     true,
   );

@@ -6813,3 +6813,58 @@ test("composer offers suggested replies the artifact declares", () => {
   assert.match(sdk, /suggest: \(items\) =>/);
   assert.match(sdk, /postArtifactMessage\("lavish:suggestions", \{\s*items:/);
 });
+
+test("an agent reply is stamped with the newest revision the artifact declares", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const artifact = path.join(dir, "artifact.html");
+  const stateFile = path.join(dir, "state.json");
+  const registry = (ids) =>
+    `<script type="application/json" data-lavish-revisions>${JSON.stringify(ids.map((id) => ({ id, label: id })))}</script>`;
+  await writeFile(artifact, `<!doctype html><html><head>${registry(["r1", "r2"])}</head><body></body></html>`);
+  const server = await serve({ port: 0, stateFile, version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const open = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    });
+    const { key } = await open.json();
+    const reply = (text) =>
+      fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&owner=worker-1&takeover=1&timeoutMs=1`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent_reply: text }),
+      }).then((response) => response.json());
+
+    await reply("Renamed the payment step.");
+    await writeFile(artifact, "<!doctype html><html><body>No registry any more.</body></html>");
+    await reply("Dropped the legend.");
+
+    const state = JSON.parse(await readFile(stateFile, "utf8"));
+    const agent = state.sessions[key].chat.filter((entry) => entry.role === "agent");
+    assert.equal(agent[0].revision_id, "r2");
+    assert.equal("revision_id" in agent[1], false, "no registry, no stamp");
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the command palette hotkey works from the artifact and the chrome alike", async () => {
+  const sdk = createSdkJs("abc");
+  assert.match(sdk, /const COMMAND_PALETTE_HOTKEY_KEY="k"/);
+  assert.match(
+    sdk,
+    /document\.addEventListener\(\s*"keydown",\s*\(event\) => \{\s*if \(!isCommandPaletteHotkeyEvent\(event\)\) return;\s*event\.preventDefault\(\);\s*postArtifactMessage\("lavish:toggleCommandPalette"\);\s*\},\s*true,?\s*\);/,
+  );
+  const chrome = await chromeClientSource();
+  assert.match(chrome, /if \(msg\.type === "lavish:toggleCommandPalette"\) togglePalette\(\);/);
+  assert.match(
+    chrome,
+    /document\.addEventListener\(\s*"keydown",\s*\(event\) => \{\s*if \(!isCommandPaletteHotkeyEvent\(event\)\) return;\s*event\.preventDefault\(\);\s*togglePalette\(\);\s*\},\s*true,?\s*\);/,
+  );
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  assert.match(html, /"commandPaletteHotkeyKey":"k"/);
+  assert.match(html, /<div class="palette-overlay" id="paletteDialog" role="dialog" aria-modal="true"[^>]*hidden>/);
+});

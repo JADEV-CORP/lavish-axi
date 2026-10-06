@@ -707,7 +707,7 @@ export class SessionStore {
     });
   }
 
-  async addAgentReply(key, text, { requireOpen = false } = {}) {
+  async addAgentReply(key, text, { requireOpen = false, revisionId = "" } = {}) {
     return this.runExclusive(async () => {
       const state = await this.readState();
       const session = state.sessions[key];
@@ -719,7 +719,11 @@ export class SessionStore {
       // Done (docs/delivery-acks.md): the reply answers what the agent has seen. Stamped in the same
       // write as the reply, with the reply's own time, and never on an entry no poll has delivered.
       stampDone(session.chat, at, normalizeRevision(session.closed_delivery_seq));
-      session.chat = [...(session.chat || []), { role: "agent", text: String(text || ""), at }];
+      const reply = { role: "agent", text: String(text || ""), at };
+      // The newest revision the artifact declared when the agent replied, so the reply can offer
+      // a jump to the blocks that round changed.
+      if (revisionId) reply.revision_id = String(revisionId);
+      session.chat = [...(session.chat || []), reply];
       applyTranscriptBound(session);
       session.chat_revision = normalizeRevision(session.chat_revision) + 1;
       session.updated_at = at;

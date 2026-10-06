@@ -6,6 +6,7 @@ import {
   isAddressableRevisionId,
   exactRevisionText,
   isUniqueElementId,
+  newestRevisionIdInHtml,
   normalizeRevisionEntry,
   parseRevisionRegistry,
   readArtifactRevisions,
@@ -432,4 +433,17 @@ test("a block marked for a revision named __proto__ is still attributed to it", 
     [["__proto__", "revised copy"]],
   );
   assert.equal(revisions[0].mark_count, 1);
+});
+
+test("newestRevisionIdInHtml reads the last valid id from the source, by the legend's rules", () => {
+  const html = (body) => `<!doctype html><html><head>${body}</head><body></body></html>`;
+  const registry = (entries) =>
+    `<script type="application/json" data-lavish-revisions>${JSON.stringify(entries)}</script>`;
+
+  assert.equal(newestRevisionIdInHtml(html(registry([{ id: "r1" }, { id: "r2" }]))), "r2");
+  assert.equal(newestRevisionIdInHtml(html(registry([{ id: "r1" }, { id: "has space" }]))), "r1");
+  assert.equal(newestRevisionIdInHtml(html(registry([{ id: "r1" }, { id: "r1" }]))), "r1");
+  assert.equal(newestRevisionIdInHtml(html("<script data-lavish-revisions>not json</script>")), "");
+  assert.equal(newestRevisionIdInHtml(html('<script type="application/json">[{"id":"r9"}]</script>')), "");
+  assert.equal(newestRevisionIdInHtml(""), "");
 });

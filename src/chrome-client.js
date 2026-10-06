@@ -270,8 +270,8 @@ let lastScroll = { x: 0, y: 0 };
 let editingPromptId = "";
 let editingDraft = "";
 let editFocusPending = false;
-// The selector list last told to the artifact, so a render that changes nothing stays quiet.
-let postedQueuedAnchors = "[]";
+// The selectors and pins last told to the artifact, so a render that changes nothing stays quiet.
+let postedQueuedAnchors = "[[],[]]";
 // In-iframe review context (an open annotation card's unsent text, Lavish-owned question
 // answers). The sandbox means the chrome cannot read it back after a reload, so the SDK reports
 // it as it changes and the chrome replays it once the new document is up. It is persisted per
@@ -567,14 +567,16 @@ function promptAnchor(prompt) {
 
 // The anchor line: a mono chip naming the kind (`<h2>`, `text`, `cell`, ...) and a quoted
 // excerpt, with the full excerpt and selector on hover.
-function anchorHtml(anchor) {
+function anchorHtml(anchor, pin = 0) {
   if (!anchor || typeof anchor !== "object") return "";
   const excerpt = String(anchor.excerpt || "");
   const title = [excerpt, anchor.selector].filter(Boolean).join("\n");
   return (
     '<div class="anchor" title="' +
     escapeHtml(title) +
-    '"><span class="anchor-kind">' +
+    '">' +
+    (pin ? '<span class="anchor-pin" aria-label="Pin ' + pin + '">' + pin + "</span>" : "") +
+    '<span class="anchor-kind">' +
     escapeHtml(anchor.label || "") +
     "</span>" +
     (excerpt
@@ -622,7 +624,7 @@ function queuedBubbleHtml(prompt, index) {
     '">' +
     REMOVE_ICON_SVG +
     "</button></small>" +
-    anchorHtml(promptAnchor(prompt)) +
+    anchorHtml(promptAnchor(prompt), queuedPinNumber(prompt)) +
     userBubbleTextHtml(prompt, prompt.prompt) +
     bubbleAttachmentsHtml(prompt) +
     "</div>"
@@ -793,6 +795,37 @@ function replaceExpiredThumbnail(event) {
 }
 
 chatLog.addEventListener("error", replaceExpiredThumbnail, true);
+
+// Jump to revision: the server stamps an agent reply with the newest revision the artifact
+// declared when the agent replied. The button stays hidden until the legend of the artifact on
+// screen has that round with blocks to show, and steps through them like the legend's Reveal.
+function replyRevisionHtml(revisionId) {
+  const id = typeof revisionId === "string" ? revisionId : "";
+  if (!id || id.length > REVISION_LIMITS.id || /\s/.test(id)) return "";
+  return (
+    '<button class="reply-revision" type="button" data-revision="' +
+    escapeHtml(id) +
+    '" aria-label="Show the blocks changed in ' +
+    escapeHtml(id) +
+    '" hidden>View ' +
+    escapeHtml(id) +
+    "</button>"
+  );
+}
+
+function syncReplyRevisionButtons() {
+  for (const node of chatLog.querySelectorAll(".reply-revision")) {
+    const button = /** @type {HTMLButtonElement} */ (node);
+    const entry = revisionEntries.find((candidate) => candidate.id === button.dataset.revision);
+    button.hidden = !entry || entry.marks.length === 0;
+  }
+}
+
+chatLog.addEventListener("click", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  const button = target && typeof target.closest === "function" ? target.closest(".reply-revision") : null;
+  if (button) revealNextRevisionMark(String(/** @type {HTMLElement} */ (button).dataset.revision || ""));
+});
 
 const DEFAULT_SEND_HINT = "Write a message or annotate an element first.";
 
@@ -1043,7 +1076,8 @@ function chatBubbleHtml(entry) {
       "<small>Agent</small>" +
       (typeof entry.html === "string" && entry.html
         ? '<div class="chat-md">' + entry.html + "</div>"
-        : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>")
+        : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>") +
+      replyRevisionHtml(entry.revision_id)
     );
   }
   return (
@@ -1129,6 +1163,7 @@ function addChat(entry, shouldScroll = true) {
   el.className = "bubble " + role;
   el.innerHTML = chatBubbleHtml({ ...entry, role, text });
   chatLog.appendChild(el);
+  if (role === "agent" && entry.revision_id) syncReplyRevisionButtons();
   if (shouldScroll) scrollElementIntoView(el);
   return el;
 }
@@ -2107,17 +2142,42 @@ function queuedAnchorSelectorsOf(prompt) {
   return whole ? [String(prompt.selector), whole] : [String(prompt.selector)];
 }
 
-// Tells the artifact which element selectors carry a queued note. Only selectors cross into the
-// frame: the artifact is agent-authored, and the note text stays in the chrome.
+// Element-anchored queued notes are numbered 1, 2, 3 in queue order. The same number labels the
+// note's anchor in the panel and its pin on the artifact, which is how the reader matches them.
+function queuedPinNumber(prompt) {
+  if (!isElementAnchoredPrompt(prompt)) return 0;
+  return queued.filter((candidate) => isElementAnchoredPrompt(candidate)).indexOf(prompt) + 1;
+}
+
+// Tells the artifact which element selectors carry a queued note, and where each note's pin goes.
+// Only selectors and pin numbers cross into the frame: the artifact is agent-authored, and the
+// note text stays in the chrome.
 function postQueuedAnchors(force = false) {
-  const selectors = [
-    ...new Set(queued.filter((prompt) => isElementAnchoredPrompt(prompt)).flatMap(queuedAnchorSelectorsOf)),
-  ];
-  const signature = JSON.stringify(selectors);
+  const anchored = queued.filter((prompt) => isElementAnchoredPrompt(prompt));
+  const selectors = [...new Set(anchored.flatMap(queuedAnchorSelectorsOf))];
+  const pins = anchored.map((prompt, index) => ({ selector: String(prompt.selector), number: index + 1 }));
+  const signature = JSON.stringify([selectors, pins]);
   if (!force && signature === postedQueuedAnchors) return;
   postedQueuedAnchors = signature;
-  postToFrame({ type: "lavish:queuedAnchors", selectors });
+  postToFrame({ type: "lavish:queuedAnchors", selectors, pins });
 }
+
+// Pointing at a queued note lights its pin and block in the artifact. This only outlines; the
+// artifact scrolls when the note is opened for editing, not on a passing hover.
+let hotPinSelector = "";
+function setHotPin(selector) {
+  if (selector === hotPinSelector) return;
+  hotPinSelector = selector;
+  postToFrame({ type: "lavish:hotPin", selector });
+}
+
+queuedLog.addEventListener("mouseover", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  const bubble = target && typeof target.closest === "function" ? target.closest(".bubble.queued") : null;
+  const prompt = bubble ? queued[Number(/** @type {HTMLElement} */ (bubble).dataset.index)] : null;
+  setHotPin(prompt && isElementAnchoredPrompt(prompt) ? String(prompt.selector) : "");
+});
+queuedLog.addEventListener("mouseleave", () => setHotPin(""));
 
 queuedLog.addEventListener("click", (event) => {
   const target = /** @type {Element | null} */ (event.target);
@@ -3400,6 +3460,18 @@ function resetRevisionLegend() {
   revisionEntries = [];
   revisionMarks = [];
   revisionRevealCursor.clear();
+  // The new frame starts without outlines, so the chrome forgets the old choice rather than
+  // re-sending it into a document that never declared that round.
+  outlinedRevisionId = "";
+  renderRevisionLegend();
+}
+
+// Outline what changed: one round at a time, every block marked with it gets a dashed outline and
+// its id. The SDK draws them over the page from its own read of the marks.
+let outlinedRevisionId = "";
+function setOutlinedRevision(id) {
+  outlinedRevisionId = id;
+  postToFrame({ type: "lavish:outlineRevision", revision_id: id });
   renderRevisionLegend();
 }
 
@@ -3409,6 +3481,10 @@ function applyRevisionMessage(msg) {
   revisionMarks = normalized.marks;
   for (const id of [...revisionRevealCursor.keys()]) {
     if (!revisionEntries.some((entry) => entry.id === id)) revisionRevealCursor.delete(id);
+  }
+  if (outlinedRevisionId && !revisionEntries.some((entry) => entry.id === outlinedRevisionId)) {
+    setOutlinedRevision("");
+    return;
   }
   renderRevisionLegend();
 }
@@ -3474,6 +3550,14 @@ function buildRevisionRow(entry) {
     // trip through the DOM.
     reveal.onclick = () => revealNextRevisionMark(entry.id);
     foot.appendChild(reveal);
+    const outline = document.createElement("button");
+    outline.type = "button";
+    outline.className = "revision-outline";
+    outline.textContent = "Outline";
+    outline.setAttribute("aria-pressed", String(outlinedRevisionId === entry.id));
+    outline.setAttribute("aria-label", "Outline every block changed in " + entry.label);
+    outline.onclick = () => setOutlinedRevision(outlinedRevisionId === entry.id ? "" : entry.id);
+    foot.appendChild(outline);
   }
   body.appendChild(foot);
 
@@ -3483,6 +3567,7 @@ function buildRevisionRow(entry) {
 
 function renderRevisionLegend() {
   if (!revisionsWrap) return;
+  syncReplyRevisionButtons();
   const count = revisionEntries.length;
   revisionsWrap.hidden = count === 0 || ended;
   if (revisionsWrap.hidden && revisionsDrawerOpen) setRevisionsDrawerOpen(false);
@@ -4795,6 +4880,7 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:endSession") endSession();
   if (msg.type === "lavish:revisions") applyRevisionMessage(msg);
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
+  if (msg.type === "lavish:toggleCommandPalette") togglePalette();
   if (msg.type === "lavish:editQueuedAnchor") editQueuedAnchor(String(msg.selector || ""));
 });
 
@@ -5091,6 +5177,195 @@ revisionsWrap.addEventListener("focusout", (event) => {
   if (revisionsDrawerOpen && next && !revisionsWrap.contains(next)) closeRevisionsDrawer();
 });
 whiteboardCloseButton.onclick = closeWhiteboard;
+// ---- Command palette (Ctrl/Cmd+K). Each command runs the same control the reader could click, so
+// its guards, focus handling, and side effects stay in one place; a control that is disabled or
+// not on screen in this layout is left out of the list. ----
+
+const paletteDialog = /** @type {HTMLDivElement} */ (document.getElementById("paletteDialog"));
+const palette = /** @type {HTMLDivElement} */ (document.getElementById("palette"));
+const paletteInput = /** @type {HTMLInputElement} */ (document.getElementById("paletteInput"));
+const paletteList = /** @type {HTMLUListElement} */ (document.getElementById("paletteList"));
+const COMMAND_PALETTE_HOTKEY_KEY = String(sessionData.commandPaletteHotkeyKey || "").toLowerCase();
+
+function isCommandPaletteHotkeyEvent(event) {
+  if (event.shiftKey || event.altKey) return false;
+  return (
+    Boolean(event.metaKey || event.ctrlKey) && String(event.key || "").toLowerCase() === COMMAND_PALETTE_HOTKEY_KEY
+  );
+}
+
+/** @returns {{ label: string, run: () => void, danger?: boolean }[]} */
+function paletteCommands() {
+  const desktop = !isMobileSheet();
+  // The layout already in use is not a command.
+  const currentLayout = chatLayout.mode === "sidebar" ? chatLayout.side : chatLayout.mode;
+  const offerLayout = (name) => desktop && name !== currentLayout;
+  /** @type {{ label: string, control?: HTMLElement | null, run?: () => void, when?: boolean, danger?: boolean }[]} */
+  const commands = [
+    { label: annotation ? "Switch to explore mode" : "Switch to annotate mode", control: annotationSwitch },
+    { label: "Write a message", run: focusComposer },
+    { label: "Attach images", control: chatAttachButton },
+    { label: "Conversation on the left", control: layoutOptionButtons.left, when: offerLayout("left") },
+    { label: "Conversation on the right", control: layoutOptionButtons.right, when: offerLayout("right") },
+    { label: "Collapse the conversation to a rail", control: layoutOptionButtons.rail, when: offerLayout("rail") },
+    {
+      label: "Peek: float the conversation at the bottom",
+      control: layoutOptionButtons.peek,
+      when: offerLayout("peek"),
+    },
+    {
+      label: effectiveTheme() === "dark" ? "Switch to light theme" : "Switch to dark theme",
+      control: themeToggle,
+    },
+    { label: "Follow system theme", run: () => setThemeChoice(null), when: Boolean(storedThemeChoice()) },
+    { label: "Show revisions", control: revisionsButton, when: !revisionsWrap.hidden },
+    { label: "Show layout issues", control: warningsButton, when: !warningsWrap.hidden },
+    { label: "Reload artifact", control: reloadArtifactButton },
+    { label: "Copy DOM snapshot", control: copySnapshotButton },
+    { label: "Copy the artifact path", control: copyPathButton },
+    { label: "Export standalone HTML", control: exportArtifactButton },
+    { label: "Publish link", control: shareArtifactButton },
+    { label: "End session", control: endButton, danger: true },
+  ];
+  return commands
+    .filter((command) => command.when !== false && !(command.control && /** @type {any} */ (command.control).disabled))
+    .map((command) => ({
+      label: command.label,
+      danger: command.danger,
+      run: command.run || (() => command.control && command.control.click()),
+    }));
+}
+
+function focusComposer() {
+  if (isRailLayout()) setChatLayout({ mode: "sidebar" });
+  if (isDockLayout()) setSheetOpen(true);
+  chatInput.focus();
+}
+
+let paletteMatches = /** @type {ReturnType<typeof paletteCommands>} */ ([]);
+let paletteActive = 0;
+/** @type {Element | null} */
+let paletteReturnFocus = null;
+
+// Every word typed has to appear somewhere in the label, in any order.
+function filterPaletteCommands(query) {
+  const words = String(query || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  return paletteCommands().filter((command) => {
+    const label = command.label.toLowerCase();
+    return words.every((word) => label.includes(word));
+  });
+}
+
+function renderPalette() {
+  paletteMatches = filterPaletteCommands(paletteInput.value);
+  paletteActive = Math.min(paletteActive, Math.max(0, paletteMatches.length - 1));
+  paletteList.replaceChildren();
+  if (!paletteMatches.length) {
+    const empty = document.createElement("li");
+    empty.className = "palette-empty";
+    empty.setAttribute("role", "presentation");
+    empty.textContent = "No matching command";
+    paletteList.appendChild(empty);
+    paletteInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+  paletteMatches.forEach((command, index) => {
+    const option = document.createElement("li");
+    option.id = "palette-option-" + index;
+    option.className = command.danger ? "palette-option danger" : "palette-option";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(index === paletteActive));
+    option.dataset.index = String(index);
+    option.textContent = command.label;
+    paletteList.appendChild(option);
+  });
+  paletteInput.setAttribute("aria-activedescendant", "palette-option-" + paletteActive);
+  const active = paletteList.querySelector('[aria-selected="true"]');
+  if (active && typeof active.scrollIntoView === "function") active.scrollIntoView({ block: "nearest" });
+}
+
+function openPalette() {
+  if (!paletteDialog.hidden) return;
+  closeMenus();
+  paletteReturnFocus = document.activeElement;
+  paletteInput.value = "";
+  paletteActive = 0;
+  setLayerOpen(paletteDialog, true, { surface: palette });
+  renderPalette();
+  paletteInput.focus();
+}
+
+function closePalette({ restoreFocus = true } = {}) {
+  if (paletteDialog.hidden) return;
+  setLayerOpen(paletteDialog, false, { surface: palette, closeToken: "--modal-close-dur" });
+  const back = /** @type {HTMLElement | null} */ (paletteReturnFocus);
+  paletteReturnFocus = null;
+  if (restoreFocus && back && typeof back.focus === "function" && back !== document.body) back.focus();
+}
+
+function togglePalette() {
+  if (paletteDialog.hidden) openPalette();
+  else closePalette();
+}
+
+// Closing comes first so a command that opens a menu or moves focus is not undone by the palette
+// leaving; the run waits a tick so this click cannot reach the outside-click handlers that would
+// close whatever the command just opened.
+function runPaletteCommand(index) {
+  const command = paletteMatches[index];
+  if (!command) return;
+  closePalette({ restoreFocus: false });
+  setTimeout(command.run, 0);
+}
+
+paletteInput.addEventListener("input", () => {
+  paletteActive = 0;
+  renderPalette();
+});
+paletteInput.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!paletteMatches.length) return;
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    paletteActive = (paletteActive + step + paletteMatches.length) % paletteMatches.length;
+    renderPalette();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    runPaletteCommand(paletteActive);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closePalette();
+  } else if (event.key === "Tab") {
+    // The palette is modal: focus stays in its search box.
+    event.preventDefault();
+  }
+});
+// mousedown keeps focus in the search box, so a click never blurs it mid-choice.
+paletteList.addEventListener("mousedown", (event) => event.preventDefault());
+paletteList.addEventListener("click", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  const option = target && typeof target.closest === "function" ? target.closest(".palette-option") : null;
+  if (option) runPaletteCommand(Number(/** @type {HTMLElement} */ (option).dataset.index));
+});
+paletteDialog.addEventListener("click", (event) => {
+  if (event.target === paletteDialog) closePalette();
+});
+// Capture phase, like the mode hotkey: it works wherever focus is in the chrome. The artifact
+// frame catches its own copy and asks for the palette with lavish:toggleCommandPalette.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!isCommandPaletteHotkeyEvent(event)) return;
+    event.preventDefault();
+    togglePalette();
+  },
+  true,
+);
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (!whiteboardOverlay.hidden) {

@@ -151,6 +151,16 @@ export function parseRevisionRegistry(doc) {
   return revisions;
 }
 
+// The id of the last revision an artifact's source declares, read from its HTML because the
+// server has no DOM. The registry goes through `parseRevisionRegistry`, so the server and the
+// legend apply the same size, shape, and id rules and never disagree about which ids exist.
+export function newestRevisionIdInHtml(html) {
+  const match = /<script\b(?=[^>]*\bdata-lavish-revisions\b)[^>]*>([\s\S]*?)<\/script\s*>/i.exec(String(html || ""));
+  if (!match) return "";
+  const revisions = parseRevisionRegistry({ querySelector: () => ({ textContent: match[1] }) });
+  return revisions.length ? revisions[revisions.length - 1].id : "";
+}
+
 // Generated HTML repeats ids more often than anyone would like, and `#id`
 // resolves to the first one. An id shared with another element names that
 // element, not this one, so it is not a shortcut - it is a wrong answer.

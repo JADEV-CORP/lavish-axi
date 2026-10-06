@@ -17,12 +17,13 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
   file: "/tmp/artifact.html",
   modeToggleHotkeyKey: "i",
+  commandPaletteHotkeyKey: "k",
   attachmentAcceptedMime: ["image/png", "image/jpeg", "image/webp"],
 };
 
@@ -346,6 +347,7 @@ async function createChromeHarness({
   element("whiteboardOverlay").hidden = true;
   element("layoutGateBypass").hidden = true;
   element("shareDialog").hidden = true;
+  element("paletteDialog").hidden = true;
   element("moreMenu").hidden = true;
   element("warningsDrawer").hidden = true;
   element("revisionsDrawer").hidden = true;
@@ -7273,7 +7275,7 @@ test("the chrome's queued anchor agrees with the server's transcript anchor for 
     const html = chrome.element("queuedLog").innerHTML;
     const expected = chatEntryForPrompt({ uid: "", ...fixture }, "2026-09-15T00:00:00.000Z").anchor;
     const rendered = html.match(
-      /<div class="anchor" title="([^"]*)"><span class="anchor-kind">([^<]*)<\/span>(?:<span class="anchor-excerpt(?: text)?">([^<]*)<\/span>)?<\/div>/,
+      /<div class="anchor" title="([^"]*)">(?:<span class="anchor-pin"[^>]*>\d+<\/span>)?<span class="anchor-kind">([^<]*)<\/span>(?:<span class="anchor-excerpt(?: text)?">([^<]*)<\/span>)?<\/div>/,
     );
     if (!expected) {
       assert.equal(rendered, null, `${fixture.tag}: no anchor`);
@@ -8541,7 +8543,11 @@ test("the artifact learns which elements carry a queued note, never the note its
   });
 
   const anchors = chrome.postedToFrame.filter((message) => message.type === "lavish:queuedAnchors").at(-1);
-  assert.deepEqual(JSON.parse(JSON.stringify(anchors)), { type: "lavish:queuedAnchors", selectors: ["main > h2"] });
+  assert.deepEqual(JSON.parse(JSON.stringify(anchors)), {
+    type: "lavish:queuedAnchors",
+    selectors: ["main > h2"],
+    pins: [{ selector: "main > h2", number: 1 }],
+  });
 });
 
 test("clicking an annotated element in the artifact opens its queued note", async () => {
@@ -9121,4 +9127,127 @@ test("suggested replies come from the artifact, are sanitized, and fill the comp
     items: "Approve",
   });
   assert.equal(row.hidden, true);
+});
+
+test("queued element notes are numbered, and the artifact gets a pin per note", async () => {
+  const chrome = await createChromeHarness();
+  queueHeadingNote(chrome, "Bigger heading");
+  queueHeadingNote(chrome, "Tighten this copy", "main > p");
+
+  const anchors = chrome.postedToFrame.filter((message) => message.type === "lavish:queuedAnchors").at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(anchors.pins)), [
+    { selector: "main > h2", number: 1 },
+    { selector: "main > p", number: 2 },
+  ]);
+  const html = chrome.element("queuedLog").innerHTML;
+  assert.match(html, /<span class="anchor-pin" aria-label="Pin 1">1<\/span>/);
+  assert.match(html, /<span class="anchor-pin" aria-label="Pin 2">2<\/span>/);
+});
+
+test("pointing at a queued note lights its pin without scrolling the artifact", async () => {
+  const chrome = await createChromeHarness();
+  queueHeadingNote(chrome);
+  const queuedLog = chrome.element("queuedLog");
+
+  queuedLog.dispatch("mouseover", { target: queuedLogNode(["bubble", "queued"], 0) });
+  queuedLog.dispatch("mouseleave", {});
+
+  const hot = chrome.postedToFrame
+    .filter((message) => message.type === "lavish:hotPin")
+    .map((message) => message.selector);
+  assert.deepEqual(hot, ["main > h2", ""]);
+  assert.equal(chrome.postedToFrame.filter((message) => message.type === "lavish:revealElement").length, 0);
+});
+
+test("Outline marks one revision round at a time and lets go when the round disappears", async () => {
+  const chrome = await revisionHarness();
+  const payload = {
+    revisions: [
+      { id: "r1", label: "Round 1" },
+      { id: "r2", label: "Round 2" },
+    ],
+    marks: [
+      { revision_id: "r1", selector: "#pricing", tag: "section", excerpt: "Pricing" },
+      { revision_id: "r2", selector: "#faq", tag: "section", excerpt: "FAQ" },
+    ],
+  };
+  sendRevisions(chrome, payload);
+  const outlines = () => chrome.postedToFrame.filter((message) => message.type === "lavish:outlineRevision");
+  const outlineButton = (row) => revisionRows(chrome)[row].querySelectorAll(".revision-outline")[0];
+
+  outlineButton(1).click();
+  assert.equal(outlines().at(-1).revision_id, "r2");
+  assert.equal(outlineButton(1)["aria-pressed"], "true");
+  assert.equal(outlineButton(0)["aria-pressed"], "false");
+
+  outlineButton(1).click();
+  assert.equal(outlines().at(-1).revision_id, "");
+
+  outlineButton(0).click();
+  sendRevisions(chrome, { revisions: [payload.revisions[1]], marks: [payload.marks[1]] });
+  assert.equal(outlines().at(-1).revision_id, "", "an outlined round that left the registry is cleared");
+});
+
+test("Ctrl/Cmd+K opens the command palette, which filters and runs chrome actions", async () => {
+  const { chrome } = await createLayoutHarness();
+  const dialog = chrome.element("paletteDialog");
+  const input = chrome.element("paletteInput");
+  assert.equal(dialog.hidden, true);
+
+  assert.equal(chrome.dispatchDocumentKeydown({ key: "k" }).defaultPrevented, false);
+  assert.equal(dialog.hidden, true, "a bare k is typing, not the hotkey");
+
+  const opened = chrome.dispatchDocumentKeydown({ key: "k", ctrlKey: true });
+  assert.equal(opened.defaultPrevented, true);
+  assert.equal(dialog.hidden, false);
+  assert.equal(input.focused, true);
+
+  input.value = "conversation right";
+  input.dispatch("input", {});
+  const options = chrome.element("paletteList").children;
+  assert.deepEqual(
+    options.map((option) => option.textContent),
+    ["Conversation on the right"],
+  );
+
+  const enter = { key: "Enter", preventDefault() {}, stopPropagation() {} };
+  input.dispatch("keydown", enter);
+  assert.equal(dialog.hidden, true);
+  chrome.runTimers(0);
+  assert.equal(layoutState(chrome).side, "right");
+
+  chrome.sendFrameMessage({ type: "lavish:toggleCommandPalette" });
+  assert.equal(dialog.hidden, false, "the artifact's copy of the hotkey opens it too");
+  input.dispatch("keydown", { key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.equal(dialog.hidden, true);
+});
+
+test("a reply stamped with a revision offers a jump to that round's blocks", async () => {
+  const chrome = await revisionHarness();
+  sendRevisions(chrome, {
+    revisions: [{ id: "r2", label: "Round 2" }],
+    marks: [{ revision_id: "r2", selector: "#pricing", tag: "section", excerpt: "Pricing" }],
+  });
+  chrome.eventSource().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Renamed the payment step.", revision_id: "r2" }),
+  });
+  const bubble = chrome.element("chatLog").children.at(-1);
+  assert.match(
+    bubble.innerHTML,
+    /<button class="reply-revision" type="button" data-revision="r2"[^>]*>View r2<\/button>/,
+  );
+
+  chrome.element("chatLog").dispatch("click", {
+    target: { closest: (selector) => (selector === ".reply-revision" ? { dataset: { revision: "r2" } } : null) },
+  });
+  const reveal = chrome.postedToFrame.filter((message) => message.type === "lavish:revealElement").at(-1);
+  assert.equal(reveal.selector, "#pricing");
+});
+
+test("a reply with a malformed revision stamp gets no button", async () => {
+  const chrome = await revisionHarness();
+  chrome.eventSource().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Done.", revision_id: 'r2" onclick="x' }),
+  });
+  assert.doesNotMatch(chrome.element("chatLog").children.at(-1).innerHTML, /reply-revision/);
 });
