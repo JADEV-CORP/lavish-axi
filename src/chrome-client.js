@@ -192,6 +192,12 @@ const revisionsDrawer = /** @type {HTMLDivElement} */ (document.getElementById("
 const revisionsSummary = /** @type {HTMLParagraphElement} */ (document.getElementById("revisionsSummary"));
 const revisionsList = /** @type {HTMLDivElement} */ (document.getElementById("revisionsList"));
 const sendHint = /** @type {HTMLDivElement} */ (document.getElementById("sendHint"));
+const queuePanel = /** @type {HTMLDivElement} */ (document.getElementById("queuePanel"));
+const queueToggle = /** @type {HTMLButtonElement} */ (document.getElementById("queueToggle"));
+const queueCount = /** @type {HTMLSpanElement} */ (document.getElementById("queueCount"));
+const editBar = /** @type {HTMLDivElement} */ (document.getElementById("editBar"));
+const editBarText = /** @type {HTMLSpanElement} */ (document.getElementById("editBarText"));
+const COMPOSER_PLACEHOLDER = "Ask for a change, or annotate the artifact";
 const promptInput = /** @type {HTMLDivElement} */ (document.getElementById("promptInput"));
 const whiteboardOverlay = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardOverlay"));
 const whiteboardFrame = /** @type {HTMLIFrameElement} */ (document.getElementById("whiteboardFrame"));
@@ -506,8 +512,6 @@ function persistTerminalReservation(reserved) {
 
 const REMOVE_ICON_SVG =
   '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
-const EDIT_ICON_SVG =
-  '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M6.5 1.5L8.5 3.5L3.5 8.5H1.5V6.5L6.5 1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
 const ANCHOR_EXCERPT_MAX = 120;
 const ANCHOR_SELECTOR_MAX = 512;
 const ANCHOR_LABEL_MAX = 40;
@@ -610,51 +614,38 @@ function userBubbleTextHtml(entry, text) {
   return displayText ? '<div class="bubble-text">' + escapeHtml(displayText) + "</div>" : "";
 }
 
-// A queued note is the user bubble in its not-yet-sent state: dashed, labelled Queued (Sending
-// while its batch is in flight), and editable and removable until then. It settles in place as a
-// sent bubble once the server's transcript carries it, so nothing moves between regions.
+// A queued note is a row in the Queue list above the message box (the prototype's AI Elements
+// Queue): its pin, what it points at, its words, and a remove control. Clicking the row opens the
+// note in the message box for editing; while its batch is in flight it reads Sending and can no
+// longer be edited or removed. It becomes a sent bubble in the conversation once the server's
+// transcript carries it.
 function queuedBubbleHtml(prompt, index) {
   const sending = isPromptSending(prompt);
-  if (!sending && editingPromptId && promptIdentity(prompt) === editingPromptId) {
-    return queuedEditorHtml(prompt, index);
-  }
+  const editing = !sending && Boolean(editingPromptId) && promptIdentity(prompt) === editingPromptId;
+  const words = String(prompt.prompt || "").trim() || attachmentOnlyText(prompt);
   return (
-    '<div class="bubble user queued" data-index="' +
+    '<li class="queue-item' +
+    (editing ? " is-editing" : "") +
+    (sending ? " is-sending" : "") +
+    '" data-index="' +
     index +
-    '"><small>' +
-    (sending ? "Sending\u2026" : "Queued") +
-    ' <button class="queued-edit" type="button" aria-label="Edit queued prompt" data-index="' +
+    '"><div class="queue-main">' +
+    anchorHtml(promptAnchor(prompt), queuedPinNumber(prompt)) +
+    '<button class="queued-edit queue-text" type="button" aria-label="Edit queued prompt" data-index="' +
     index +
     '">' +
-    EDIT_ICON_SVG +
-    '</button><button class="queued-remove" type="button" aria-label="Remove queued prompt" data-index="' +
+    escapeHtml(words) +
+    "</button>" +
+    bubbleAttachmentsHtml(prompt) +
+    "</div>" +
+    '<span class="queue-state">' +
+    (sending ? "Sending…" : editing ? "Editing" : "Queued") +
+    "</span>" +
+    '<button class="queued-remove" type="button" aria-label="Remove queued prompt" data-index="' +
     index +
     '">' +
     REMOVE_ICON_SVG +
-    "</button></small>" +
-    anchorHtml(promptAnchor(prompt), queuedPinNumber(prompt)) +
-    userBubbleTextHtml(prompt, prompt.prompt) +
-    bubbleAttachmentsHtml(prompt) +
-    "</div>"
-  );
-}
-
-// The same bubble while its words are being revised. The anchor and images stay as they were:
-// an edit changes what the note says, not what it points at.
-function queuedEditorHtml(prompt, index) {
-  return (
-    '<div class="bubble user queued editing" data-index="' +
-    index +
-    '"><small>Editing</small>' +
-    anchorHtml(promptAnchor(prompt)) +
-    '<textarea class="queued-edit-input" aria-label="Edit queued prompt" data-index="' +
-    index +
-    '">' +
-    escapeHtml(editingDraft) +
-    '</textarea><div class="queued-edit-actions"><button class="queued-edit-cancel" type="button">Cancel</button>' +
-    '<button class="queued-edit-save" type="button">Save</button></div>' +
-    bubbleAttachmentsHtml(prompt) +
-    "</div>"
+    "</button></li>"
   );
 }
 
@@ -679,20 +670,6 @@ function render() {
   const editing = editingPromptId ? queued.find((prompt) => promptIdentity(prompt) === editingPromptId) : null;
   // A note that left the queue or started sending takes its editor with it.
   if (editingPromptId && (!editing || !isPromptEditable(editing))) endQueuedEdit();
-  const keepEditFocus = editFocusPending || queuedLog.contains(document.activeElement);
-  // A re-render while the reviewer is typing keeps their caret and scroll; only a freshly opened
-  // edit starts at the end of its words.
-  const previousInput = /** @type {HTMLTextAreaElement | null} */ (queuedLog.querySelector(".queued-edit-input"));
-  const caret =
-    !editFocusPending && previousInput && previousInput === document.activeElement
-      ? {
-          start: previousInput.selectionStart,
-          end: previousInput.selectionEnd,
-          direction: previousInput.selectionDirection,
-          scrollTop: previousInput.scrollTop,
-        }
-      : null;
-  editFocusPending = false;
   queuedLog.innerHTML = queued.map((prompt, index) => queuedBubbleHtml(prompt, index)).join("");
 
   for (const button of queuedLog.querySelectorAll(".queued-remove")) {
@@ -705,18 +682,18 @@ function render() {
     const editButton = /** @type {HTMLButtonElement} */ (button);
     editButton.disabled = !isPromptEditable(queued[Number(editButton.dataset.index)]);
   }
-  if (editingPromptId && keepEditFocus) {
-    const input = /** @type {HTMLTextAreaElement | null} */ (queuedLog.querySelector(".queued-edit-input"));
-    if (input) {
-      input.focus();
-      if (caret) {
-        input.setSelectionRange?.(caret.start, caret.end, caret.direction);
-        input.scrollTop = caret.scrollTop;
-      } else {
-        input.setSelectionRange?.(input.value.length, input.value.length);
-      }
-    }
+  queuePanel.hidden = queued.length === 0;
+  setCount(queueCount, queued.length);
+  const editIndex = editingPromptId ? queued.findIndex((prompt) => promptIdentity(prompt) === editingPromptId) : -1;
+  editBar.hidden = editIndex === -1;
+  if (editIndex !== -1) editBarText.textContent = "Editing queued note " + (editIndex + 1);
+  chatInput.placeholder = editIndex === -1 ? COMPOSER_PLACEHOLDER : "Edit the queued note";
+  if (editFocusPending) {
+    editFocusPending = false;
+    chatInput.focus();
+    chatInput.setSelectionRange?.(chatInput.value.length, chatInput.value.length);
   }
+  renderSendLabel();
   postQueuedAnchors();
   renderQueuedBadge();
   updateSendState();
@@ -2221,6 +2198,10 @@ function isPromptEditable(prompt) {
   return Boolean(prompt) && !terminalSubmission && !isPromptSending(prompt);
 }
 
+// Editing happens in the message box: whatever was being typed there steps aside until the edit
+// ends, and comes back then.
+let composerStash = null;
+
 function editQueuedPrompt(index, { reveal = true } = {}) {
   const prompt = queued[index];
   if (ended || !isPromptEditable(prompt)) return;
@@ -2228,8 +2209,10 @@ function editQueuedPrompt(index, { reveal = true } = {}) {
   if (!id || id === editingPromptId) return;
   // Moving to another note keeps what was typed into the first, the way leaving a field does.
   commitQueuedEdit();
+  composerStash = chatInput.value;
   editingPromptId = id;
   editingDraft = String(prompt.prompt || "");
+  chatInput.value = editingDraft;
   editFocusPending = true;
   if (isDockLayout()) setSheetOpen(true);
   render();
@@ -2237,8 +2220,11 @@ function editQueuedPrompt(index, { reveal = true } = {}) {
 }
 
 function endQueuedEdit() {
+  const wasEditing = Boolean(editingPromptId);
   editingPromptId = "";
   editingDraft = "";
+  if (wasEditing && composerStash !== null) chatInput.value = composerStash;
+  composerStash = null;
 }
 
 // Writes the open edit into its note without rendering. Returns whether the queue changed. A note
@@ -2334,7 +2320,7 @@ function setHotPin(selector) {
 
 queuedLog.addEventListener("mouseover", (event) => {
   const target = /** @type {Element | null} */ (event.target);
-  const bubble = target && typeof target.closest === "function" ? target.closest(".bubble.queued") : null;
+  const bubble = target && typeof target.closest === "function" ? target.closest(".queue-item") : null;
   const prompt = bubble ? queued[Number(/** @type {HTMLElement} */ (bubble).dataset.index)] : null;
   setHotPin(prompt && isElementAnchoredPrompt(prompt) ? String(prompt.selector) : "");
 });
@@ -2343,33 +2329,59 @@ queuedLog.addEventListener("mouseleave", () => setHotPin(""));
 queuedLog.addEventListener("click", (event) => {
   const target = /** @type {Element | null} */ (event.target);
   if (!target || typeof target.closest !== "function") return;
-  // The remove control owns its own click, and an editor's textarea is for typing.
-  if (target.closest(".queued-remove") || target.closest(".queued-edit-input")) return;
-  if (target.closest(".queued-edit-save")) return saveQueuedEdit();
-  if (target.closest(".queued-edit-cancel")) return cancelQueuedEdit();
-  const bubble = /** @type {HTMLElement | null} */ (target.closest(".queued-edit") || target.closest(".bubble.queued"));
-  if (bubble) editQueuedPrompt(Number(bubble.dataset.index));
+  // The remove control owns its own click.
+  if (target.closest(".queued-remove")) return;
+  const row = /** @type {HTMLElement | null} */ (target.closest(".queued-edit") || target.closest(".queue-item"));
+  if (row) editQueuedPrompt(Number(row.dataset.index));
 });
-queuedLog.addEventListener("input", (event) => {
-  const target = /** @type {HTMLTextAreaElement | null} */ (event.target);
-  if (target && typeof target.closest === "function" && target.closest(".queued-edit-input")) {
-    editingDraft = String(target.value || "");
-  }
-});
-queuedLog.addEventListener("keydown", (event) => {
-  const target = /** @type {Element | null} */ (event.target);
-  if (!target || typeof target.closest !== "function" || !target.closest(".queued-edit-input")) return;
-  // The annotation card's keys: Enter keeps the words, Shift+Enter breaks the line.
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    event.stopPropagation();
+
+/** @type {HTMLButtonElement} */ (document.getElementById("editCancel")).onclick = () => cancelQueuedEdit();
+queueToggle.onclick = () => {
+  const open = queueToggle.getAttribute("aria-expanded") !== "false";
+  queueToggle.setAttribute("aria-expanded", String(!open));
+  queuePanel.classList.toggle("is-collapsed", open);
+};
+
+// Queue for later (Ctrl+Q, or the Queue button): the message joins the queue without sending, so
+// several thoughts can go out as one batch.
+function queueComposerDraft() {
+  if (ended || terminalSubmission) return;
+  if (editingPromptId) {
     saveQueuedEdit();
-  } else if (event.key === "Escape" && !event.isComposing) {
-    event.preventDefault();
-    event.stopPropagation();
-    cancelQueuedEdit();
+    return;
   }
-});
+  const blocked = chatAttachmentController.hasPending() || chatAttachmentController.hasErrors();
+  if (blocked) {
+    chatAttachmentController.noteSendBlocked();
+    return;
+  }
+  const text = chatInput.value.trim();
+  const attachments = chatAttachmentController.collectReady();
+  if (!text && !attachments.length) {
+    rejectEmptySend();
+    return;
+  }
+  const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
+  if (attachments.length) prompt.attachments = attachments;
+  assignPromptIdentity(prompt, false);
+  queued.push(prompt);
+  persistQueuedPrompts();
+  render();
+  chatInput.value = "";
+  chatAttachmentController.reset();
+  hideSendHint();
+  renderSuggestions();
+  renderSendLabel();
+}
+/** @type {HTMLButtonElement} */ (document.getElementById("queueLater")).onclick = queueComposerDraft;
+
+// The send button counts what it will deliver once there is more than one thing: "Send 3 to Agent".
+const sendLabel = /** @type {HTMLSpanElement} */ (document.getElementById("sendLabel"));
+function renderSendLabel() {
+  const draft = !editingPromptId && Boolean(chatInput.value.trim());
+  const pending = queued.length + (draft ? 1 : 0);
+  swapText(sendLabel, pending > 1 ? "Send " + pending + " to Agent" : "Send to Agent");
+}
 
 function removeQueuedPrompt(index, event) {
   if (event) event.stopPropagation();
@@ -5312,14 +5324,38 @@ chatAttachments.addEventListener("click", (event) => {
   if (retry) chatAttachmentController.retry(String(retry.dataset.chatAttachmentRetry || ""));
 });
 chatInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (event.isComposing) return;
+  // Ctrl+Q only, never Cmd+Q, which quits the browser on a Mac before the page can object.
+  if (event.ctrlKey && !event.metaKey && !event.altKey && String(event.key || "").toLowerCase() === "q") {
+    event.preventDefault();
+    queueComposerDraft();
+    return;
+  }
+  if (editingPromptId) {
+    // Editing a queued note: Enter keeps the words, Escape drops the edit, Shift+Enter breaks the line.
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      saveQueuedEdit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation?.();
+      cancelQueuedEdit();
+    }
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     sendQueued(false);
   }
 });
 chatInput.addEventListener("input", () => {
+  if (editingPromptId) {
+    editingDraft = String(chatInput.value || "");
+    return;
+  }
   hideSendHint();
   renderSuggestions();
+  renderSendLabel();
 });
 copyPathButton.onclick = copyFilePath;
 /** @type {HTMLButtonElement} */ (document.getElementById("copyPathBar")).onclick = copyFilePath;

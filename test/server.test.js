@@ -1107,24 +1107,29 @@ test("composer offers two always-visible top-level send actions", async () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
   const css = await chromeCssSource();
 
-  assert.match(html, /class="button" id="send">Send to Agent</);
+  assert.match(html, /class="button" id="send"><span class="t-text-swap" id="sendLabel">Send to Agent<\/span>/);
+  assert.match(
+    html,
+    /<button class="button button-ghost" id="queueLater" type="button" title="Queue for later \(Ctrl\+Q\)">Queue<\/button>/,
+  );
   assert.match(html, /class="button button-danger" id="sendAndEnd"[^<]*>.*Send &amp; End</);
   // One prompt box: chips, the textarea, then a toolbar row with attach on the left and both send
   // actions on the right. The hint sits right above the box, next to the actions it explains.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="prompt-input t-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
+    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
   );
   assert.match(
     html,
     /<button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">/,
   );
-  // The actions stay the last element of the composer, so the phone layout can flatten the box
-  // with display: contents and keep them sticky exactly as before.
+  // The actions end the prompt box. Only the key hints follow them, and the phone layout hides
+  // those, so it can still flatten the box with display: contents and keep the actions sticky.
   assert.match(
     html,
-    /<div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">.*<button class="button" id="send">Send to Agent<\/button><\/div><\/div><\/div><\/aside>/,
+    /<div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">.*<button class="button" id="send"><span class="t-text-swap" id="sendLabel">Send to Agent<\/span><\/button><\/div><\/div><div class="composer-hints" aria-hidden="true">.*?<\/div><\/div><\/aside>/,
   );
+  assert.match(css, /\.composer-hints\{display:none;?\}/);
   assert.match(
     css,
     /\.prompt-input\{display:grid;grid-template-columns:minmax\(0,1fr\) auto;grid-template-areas:"attachments attachments" "input input" "tools actions"/,
@@ -1156,15 +1161,19 @@ test("chrome shows a waiting banner when no agent has attached", async () => {
   assert.match(css, /\.presence-banner\{/);
 });
 
-test("chrome keeps queued notes at the tail of the one conversation, above the sticky composer", async () => {
+test("queued notes live in the Queue list above the message box, not in the conversation", async () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
 
-  // The queued log is the last child of the same scroll region as the transcript, so a queued
-  // note is the end of the conversation rather than a second region with its own grammar.
+  // The prototype's AI Elements Queue (#3241): a collapsible list with a count, above the box.
   assert.match(
     html,
-    /<div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"><\/div><div class="chat chat-queued" id="queuedLog"><\/div><button class="scroll-latest t-dropdown"[^>]*id="scrollLatest"[^>]*hidden>.*?<\/button><\/div><div class="composer" id="chatComposer">/,
+    /<div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"><\/div><button class="scroll-latest t-dropdown"[^>]*id="scrollLatest"[^>]*hidden>.*?<\/button><\/div><div class="composer" id="chatComposer">/,
   );
+  assert.match(
+    html,
+    /<div class="queue" id="queuePanel" hidden><button class="queue-head" id="queueToggle" type="button" aria-expanded="true" aria-controls="queuedLog">.*?<span class="queue-count t-digit-group" id="queueCount">0<\/span>.*?<\/button><ul class="queue-list" id="queuedLog"><\/ul><\/div>/,
+  );
+  assert.doesNotMatch(html, /chat-queued/);
   assert.doesNotMatch(html, /annotation-pills/);
   assert.doesNotMatch(html, /<h2>Queued Annotations<\/h2>/);
 });
