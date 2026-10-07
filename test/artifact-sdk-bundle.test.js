@@ -189,6 +189,7 @@ function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionM
   return {
     posted,
     body,
+    documentElement,
     api: sandbox.window.lavish,
     // Returns the dispatched event so a test can tell whether the SDK swallowed the click.
     click(target, modifiers = {}) {
@@ -774,3 +775,35 @@ test("Ctrl-click on a link after a text selection does not eat the next plain cl
 
   assert.match(sdk.card().innerHTML, /Annotate &lt;p&gt;/);
 });
+
+test("an answer queued through window.lavish gets a check beside its control once the chrome has it", () => {
+  const sdk = bootSdk();
+  const button = appendTo(sdk.body, createElement("button"));
+
+  sdk.api.queuePrompt("Use the Pro plan", { element: button, queueKey: "plan" });
+  const message = sdk.posted.at(-1);
+  assert.equal(message.type, "lavish:queuePrompt");
+  assert.equal(message.prompt._lavishAck, "q1");
+
+  sdk.sendChromeMessage({ type: "lavish:promptQueued", ack: "q2" });
+  assert.equal(queuedChecks(sdk).length, 0, "an ack the SDK never issued draws nothing");
+  sdk.sendChromeMessage({ type: "lavish:promptQueued", ack: "q1" });
+  assert.equal(queuedChecks(sdk).length, 1);
+  assert.match(queuedChecks(sdk)[0].innerHTML, /<span>Queued<\/span>/);
+  sdk.sendChromeMessage({ type: "lavish:promptQueued", ack: "q1" });
+  assert.equal(queuedChecks(sdk).length, 1, "each ack draws once");
+});
+
+test("a note queued from the annotation card carries no ack", () => {
+  const sdk = bootSdk();
+  const heading = appendTo(sdk.body, cell("h2", "Pricing"));
+  sdk.click(heading);
+  const message = sdk.queue("Bigger");
+  assert.equal("_lavishAck" in message.prompt, false);
+});
+
+function queuedChecks(sdk) {
+  return sdk.documentElement.children
+    .flatMap((child) => child.shadowRoot?.children || [])
+    .filter((child) => child.className === "lavish-queued-check");
+}

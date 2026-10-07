@@ -49,7 +49,7 @@ test("the SDK bundle applies upload results and offers a retry", () => {
 test("the SDK bundle carries ready attachment refs on the queued prompt", () => {
   assert.match(sdk, /options\.attachments/);
   assert.match(sdk, /item\.attachments = attachments/);
-  assert.match(sdk, /queuePrompt\(prompt, \{ \.\.\.c, queueKey: "", attachments: readyAttachments \}\)/);
+  assert.match(sdk, /queueCardPrompt\(prompt, \{ \.\.\.c, queueKey: "", attachments: readyAttachments \}\)/);
 });
 
 test("acceptedImageTypes turns the server's list into the card's lookups", () => {

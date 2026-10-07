@@ -198,6 +198,7 @@ export const PLAYBOOKS = [
       "For a tracked batch, give every candidate item a short, stable, visible ID and let the reviewer select or disposition items with editable native controls.",
       "Keep reversible selection state local in the artifact until the user explicitly submits that question.",
       "Pair each question with a Submit or Queue answer control that sends exactly one prompt for the final answer.",
+      "Lavish draws a Queued check beside that control once the answer is in the queue, so do not build a separate queued confirmation.",
       "Show selected state separately from queued state so the user trusts what will be sent back.",
     ],
     design_rules: [

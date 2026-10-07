@@ -9781,3 +9781,29 @@ test("a mark chip lights its block on hover and can be removed", async () => {
   assert.equal(chrome.element("chatInput").placeholder, "Say what to change. Call the marks [1]");
   assert.equal(chrome.postedToFrame.filter((message) => message.type === "lavish:hotPin").at(-1).selector, "");
 });
+
+test("an answer the artifact queues is acknowledged by ack id, and the id never reaches the queue", async () => {
+  const chrome = await createChromeHarness();
+  const acks = () =>
+    chrome.postedToFrame.filter((message) => message.type === "lavish:promptQueued").map((message) => message.ack);
+  const answer = (ack, prompt = "Use the Pro plan") =>
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      prompt: { prompt, selector: "form", tag: "choice", text: "Plan: Pro", _lavishQueueKey: "plan", _lavishAck: ack },
+    });
+
+  answer("q1");
+  answer("q2", "Use the Starter plan");
+  assert.deepEqual(acks(), ["q1", "q2"], "a replaced answer is still a queued answer");
+  assert.equal(chrome.queued().length, 1);
+  assert.equal("_lavishAck" in chrome.queued()[0], false);
+
+  answer("<img src=x>");
+  answer({ toString: () => "q9" });
+  assert.deepEqual(acks(), ["q1", "q2"], "only the SDK's own ack shape is echoed");
+
+  // The annotation card's notes carry no ack: the card closes, and the dock answers instead.
+  queueHeadingNote(chrome);
+  assert.deepEqual(acks(), ["q1", "q2"]);
+  assert.equal(chrome.queued().length, 2);
+});

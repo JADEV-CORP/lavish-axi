@@ -5156,7 +5156,12 @@ window.addEventListener("message", (event) => {
   }
   // The artifact spoke, so it rendered and ran its SDK - there is nothing fatal to probe for.
   if (msg.type === "lavish:queuePrompt") {
-    enqueuePrompt(msg.prompt);
+    // The artifact's ack id only travels back to the artifact, so it can show its check. It never
+    // reaches the queue, the tab's storage, or the server.
+    const raw = msg.prompt && typeof msg.prompt === "object" ? { ...msg.prompt } : msg.prompt;
+    const ack = raw && typeof raw._lavishAck === "string" && /^q\d{1,9}$/.test(raw._lavishAck) ? raw._lavishAck : "";
+    if (raw && typeof raw === "object") delete raw._lavishAck;
+    if (enqueuePrompt(raw) && ack) postToFrame({ type: "lavish:promptQueued", ack });
     // Queued from inside the artifact, where the closed dock is the only sign it landed.
     pulseSheetDock();
   }
