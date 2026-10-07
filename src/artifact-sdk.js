@@ -1,4 +1,4 @@
-/* global CSS, Element, MutationObserver, ResizeObserver, document, getComputedStyle, parent, window */
+/* global CSS, Element, MutationObserver, ResizeObserver, XMLSerializer, document, getComputedStyle, parent, window */
 
 import { readArtifactRevisions } from "./artifact-revisions.js";
 import * as mermaidHelpers from "./mermaid-node.js";
@@ -2263,7 +2263,7 @@ export function createArtifactSdk(
 
     shadow = host.attachShadow({ mode: "open" });
     const style = document.createElement("style");
-    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--card:light-dark(oklch(1 0 0),oklch(0.212 0.019 322.12));--secondary:light-dark(oklch(0.967 0.001 286.375),oklch(0.274 0.006 286.033));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 10%));--destructive:light-dark(oklch(0.577 0.245 27.325),oklch(0.704 0.191 22.216));--bg:var(--background);--bg-panel:var(--card);--bg-elevated:var(--secondary);--fg:var(--foreground);--fg-faint:var(--muted-foreground);--border:var(--border-color);--accent:var(--primary);--accent-hover:var(--primary-hover);--accent-ink:var(--primary-foreground);--font-sans:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-md:0;--radius-xl:0;--shadow-floating:0 20px 70px rgba(0,0,0,.35);font-family:var(--font-sans)}:host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.lavish-text-highlight{position:fixed;pointer-events:none;background:oklch(0.586 0.253 17.585 / .16);border-radius:0;box-shadow:0 0 0 1px oklch(0.586 0.253 17.585 / .45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating);font:14px/1.4 var(--font-sans)}.lavish-heading{font-weight:700;margin-bottom:6px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:9px;font:inherit;font-family:var(--font-sans)}.lavish-annotation-card textarea::placeholder{color:var(--fg-faint)}.lavish-annotation-card .lavish-hint{margin-top:6px;font-size:11px;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--destructive);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 10px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--accent-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:var(--muted);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border)}.lavish-attachment-chip.is-error{border-color:var(--destructive)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:0;object-fit:cover;background:var(--muted);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--destructive)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:0;background:var(--muted);color:var(--fg);cursor:pointer;border:0}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--muted);color:var(--foreground)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 9px!important;background:var(--muted)!important;color:var(--fg)!important;font-size:12px!important}.lavish-attach:hover{background:var(--secondary)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:0;box-shadow:0 0 0 4px oklch(0.586 0.253 17.585 / .2);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}.lavish-pin{position:fixed;pointer-events:none;display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/18px var(--font-sans);box-shadow:0 1px 2px rgba(0,0,0,.25)}.lavish-pin-hot{position:fixed;pointer-events:none;border:2px solid var(--accent)}.lavish-outline{position:fixed;pointer-events:none;border:1px dashed var(--accent)}.lavish-outline-tag{position:absolute;top:-15px;right:-1px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/14px var(--font-sans);white-space:nowrap}`;
+    style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--card:light-dark(oklch(1 0 0),oklch(0.212 0.019 322.12));--secondary:light-dark(oklch(0.967 0.001 286.375),oklch(0.274 0.006 286.033));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 10%));--destructive:light-dark(oklch(0.577 0.245 27.325),oklch(0.704 0.191 22.216));--bg:var(--background);--bg-panel:var(--card);--bg-elevated:var(--secondary);--fg:var(--foreground);--fg-faint:var(--muted-foreground);--border:var(--border-color);--accent:var(--primary);--accent-hover:var(--primary-hover);--accent-ink:var(--primary-foreground);--font-sans:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-md:0;--radius-xl:0;--shadow-floating:0 20px 70px rgba(0,0,0,.35);font-family:var(--font-sans)}:host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.lavish-text-highlight{position:fixed;pointer-events:none;background:oklch(0.586 0.253 17.585 / .16);border-radius:0;box-shadow:0 0 0 1px oklch(0.586 0.253 17.585 / .45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating);font:14px/1.4 var(--font-sans)}.lavish-heading{font-weight:700;margin-bottom:6px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:9px;font:inherit;font-family:var(--font-sans)}.lavish-annotation-card textarea::placeholder{color:var(--fg-faint)}.lavish-annotation-card .lavish-hint{margin-top:6px;font-size:11px;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--destructive);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 10px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--accent-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel{background:var(--muted);color:var(--fg)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border)}.lavish-attachment-chip.is-error{border-color:var(--destructive)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:0;object-fit:cover;background:var(--muted);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--destructive)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:0;background:var(--muted);color:var(--fg);cursor:pointer;border:0}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--muted);color:var(--foreground)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 9px!important;background:var(--muted)!important;color:var(--fg)!important;font-size:12px!important}.lavish-attach:hover{background:var(--secondary)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:0;box-shadow:0 0 0 4px oklch(0.586 0.253 17.585 / .2);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}.lavish-pin{position:fixed;pointer-events:none;display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/18px var(--font-sans);box-shadow:0 1px 2px rgba(0,0,0,.25)}.lavish-pin-hot{position:fixed;pointer-events:none;border:2px solid var(--accent)}.lavish-outline{position:fixed;pointer-events:none;border:1px dashed var(--accent)}.lavish-outline-tag{position:absolute;top:-15px;right:-1px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/14px var(--font-sans);white-space:nowrap}.lavish-zoom-btn{position:fixed;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;background:color-mix(in oklch,var(--fg) 70%,transparent);color:var(--bg);cursor:zoom-in;opacity:0;transition:opacity .15s ease-out}.lavish-zoom-btn.is-shown,.lavish-zoom-btn:focus-visible{opacity:1}.lavish-zoom-btn:hover{background:var(--fg)}@media (prefers-reduced-motion:reduce){.lavish-zoom-btn{transition:none}}`;
     shadow.appendChild(style);
     return shadow;
   }
@@ -2649,6 +2649,124 @@ export function createArtifactSdk(
   window.addEventListener("resize", scheduleOverlayMarks, { passive: true });
   if (typeof ResizeObserver === "function") new ResizeObserver(scheduleOverlayMarks).observe(document.documentElement);
 
+  // ---- Image zoom (#3230): the chrome opens a picture in its full-window preview. Explore mode
+  // zooms on a plain click, as Kibo UI's Image Zoom does; in either mode a zoom button appears on
+  // the picture's top-right corner on hover, so annotate mode keeps its click for annotating.
+  // Diagrams keep their own pan and zoom, and a picture inside a link or control keeps its click.
+  function zoomableImageFrom(el) {
+    if (!(el instanceof Element) || isLavishUi(el) || isLavishAction(el)) return null;
+    let image = el.closest("img, svg");
+    if (!image) return null;
+    if (image.tagName.toLowerCase() !== "img") {
+      let outer = image.parentElement ? image.parentElement.closest("svg") : null;
+      while (outer) {
+        image = outer;
+        outer = image.parentElement ? image.parentElement.closest("svg") : null;
+      }
+      if (image.closest(".mermaid") || isMermaidSvg(image)) return null;
+    } else {
+      const picture = /** @type {HTMLImageElement} */ (image);
+      if (!picture.complete || !picture.naturalWidth) return null;
+    }
+    const rect = image.getBoundingClientRect();
+    return rect.width >= 24 && rect.height >= 24 ? image : null;
+  }
+
+  function zoomImageSource(image) {
+    if (image.tagName.toLowerCase() === "img") {
+      const src = image.currentSrc || image.src || "";
+      if (!src.startsWith("blob:")) return src;
+      // The chrome cannot read this frame's blob: URLs, so hand over the pixels instead.
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        return canvas.toDataURL("image/png");
+      } catch {
+        return "";
+      }
+    }
+    const clone = /** @type {SVGSVGElement} */ (image.cloneNode(true));
+    const rect = image.getBoundingClientRect();
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    if (!clone.getAttribute("width")) clone.setAttribute("width", String(Math.round(rect.width)));
+    if (!clone.getAttribute("height")) clone.setAttribute("height", String(Math.round(rect.height)));
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+  }
+
+  function zoomImageAlt(image) {
+    const title = image.querySelector ? image.querySelector(":scope > title") : null;
+    return String(
+      image.getAttribute("alt") ||
+        image.getAttribute("aria-label") ||
+        image.getAttribute("title") ||
+        title?.textContent ||
+        "",
+    ).trim();
+  }
+
+  function requestImageZoom(image) {
+    const src = zoomImageSource(image);
+    if (!src) return;
+    const rect = image.getBoundingClientRect();
+    postArtifactMessage("lavish:zoomImage", {
+      src,
+      alt: zoomImageAlt(image),
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    });
+  }
+
+  let zoomButton = null;
+  let zoomButtonImage = null;
+  let zoomButtonHideTimer = 0;
+  function showZoomButton(image) {
+    const root = ensureShadow();
+    if (!zoomButton) {
+      zoomButton = document.createElement("button");
+      zoomButton.type = "button";
+      zoomButton.className = "lavish-zoom-btn";
+      zoomButton.setAttribute("aria-label", "Zoom image");
+      zoomButton.title = "Zoom image";
+      zoomButton.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></svg>';
+      zoomButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (zoomButtonImage) requestImageZoom(zoomButtonImage);
+      });
+      zoomButton.addEventListener("mouseenter", () => window.clearTimeout(zoomButtonHideTimer));
+      zoomButton.addEventListener("mouseleave", () => scheduleZoomButtonHide());
+    }
+    if (!zoomButton.isConnected) root.appendChild(zoomButton);
+    window.clearTimeout(zoomButtonHideTimer);
+    zoomButtonImage = image;
+    const rect = image.getBoundingClientRect();
+    zoomButton.style.left = Math.max(4, rect.right - 40) + "px";
+    zoomButton.style.top = Math.max(4, rect.top + 8) + "px";
+    zoomButton.classList.add("is-shown");
+  }
+  function scheduleZoomButtonHide() {
+    window.clearTimeout(zoomButtonHideTimer);
+    zoomButtonHideTimer = window.setTimeout(() => {
+      if (zoomButton) zoomButton.classList.remove("is-shown");
+      zoomButtonImage = null;
+    }, 200);
+  }
+  document.addEventListener(
+    "mouseover",
+    (event) => {
+      const image = zoomableImageFrom(/** @type {Element} */ (event.target));
+      if (image) showZoomButton(image);
+      else if (zoomButtonImage && !isLavishUi(event.target)) scheduleZoomButtonHide();
+    },
+    true,
+  );
+  window.addEventListener("scroll", () => zoomButtonImage && scheduleZoomButtonHide(), {
+    passive: true,
+    capture: true,
+  });
+
   // Capture phase so the mode hotkey fires no matter where focus is inside the artifact -
   // including a checkbox, button, link, or the annotation-card textarea - without disturbing
   // normal typing. This SDK doesn't own the mode state; it asks the chrome to toggle the same
@@ -2773,6 +2891,23 @@ export function createArtifactSdk(
         return;
       }
       showAnnotationCard(event.target);
+    },
+    true,
+  );
+
+  // Explore-mode click-to-zoom, registered after the annotation click handler, which owns clicks
+  // in annotate mode.
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (annotationMode || event.defaultPrevented) return;
+      const target = /** @type {Element} */ (event.target);
+      if (!(target instanceof Element) || target.closest("a[href], button, label, summary, [role='button'], [onclick]"))
+        return;
+      const image = zoomableImageFrom(target);
+      if (!image) return;
+      event.preventDefault();
+      requestImageZoom(image);
     },
     true,
   );

@@ -348,6 +348,7 @@ async function createChromeHarness({
   element("layoutGateBypass").hidden = true;
   element("shareDialog").hidden = true;
   element("paletteDialog").hidden = true;
+  element("imageZoom").hidden = true;
   element("moreMenu").hidden = true;
   element("warningsDrawer").hidden = true;
   element("revisionsDrawer").hidden = true;
@@ -9290,4 +9291,67 @@ test("a reply that is only sections shows no raw text above them", async () => {
   const html = chrome.element("chatLog").children.at(-1).innerHTML;
   assert.doesNotMatch(html, /bubble-text/);
   assert.match(html, /reply-part-reasoning/);
+});
+
+test("an artifact can open a picture in the zoom preview, but only a picture", async () => {
+  const chrome = await createChromeHarness();
+  const dialog = chrome.element("imageZoom");
+  const img = chrome.element("imageZoomImg");
+  const ask = (src) =>
+    chrome.sendFrameMessage({
+      type: "lavish:zoomImage",
+      src,
+      alt: "Checkout",
+      rect: { left: 10, top: 20, width: 80, height: 60 },
+    });
+
+  for (const src of ["javascript:alert(1)", "data:text/html,<script>1</script>", "blob:http://lavish.test/x", "", 42]) {
+    ask(src);
+    await flushPromises();
+    assert.equal(dialog.hidden, true, String(src));
+    assert.equal(img.src || "", "", String(src));
+  }
+
+  img.naturalWidth = 800;
+  img.naturalHeight = 600;
+  ask("http://lavish.test/artifact/abc/assets/shot.png");
+  await flushPromises();
+  assert.equal(img.src, "http://lavish.test/artifact/abc/assets/shot.png");
+  assert.equal(dialog.hidden, false);
+  assert.equal(chrome.element("imageZoomCaption").textContent, "Checkout · 800 × 600");
+  assert.equal(chrome.element("imageZoomLevel").textContent, "100%");
+  assert.equal(chrome.element("imageZoomClose").focused, true);
+
+  const key = (name) => dialog.dispatch("keydown", { key: name, preventDefault() {}, stopPropagation() {} });
+  key("=");
+  assert.equal(chrome.element("imageZoomLevel").textContent, "125%");
+  key("0");
+  assert.equal(chrome.element("imageZoomLevel").textContent, "100%");
+  key("Escape");
+  assert.equal(dialog.hidden, true);
+});
+
+test("a chat thumbnail opens the zoom preview instead of the note it sits in", async () => {
+  const chrome = await createChromeHarness();
+  const img = chrome.element("imageZoomImg");
+  img.naturalWidth = 400;
+  img.naturalHeight = 300;
+  const thumb = {
+    src: "http://lavish.test/api/abc/attachments/a1",
+    alt: "review.png",
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 40, height: 30 }),
+  };
+  let stopped = false;
+  const event = chrome.dispatchDocumentEvent("click", {
+    target: { closest: (selector) => (selector.includes("bubble-attachment") ? thumb : null) },
+    stopPropagation() {
+      stopped = true;
+    },
+  });
+  await flushPromises();
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(stopped, true, "the queued note's own click handler never sees it");
+  assert.equal(img.src, "http://lavish.test/api/abc/attachments/a1");
+  assert.equal(chrome.element("imageZoom").hidden, false);
+  assert.equal(chrome.element("imageZoomCaption").textContent, "review.png · 400 × 300");
 });

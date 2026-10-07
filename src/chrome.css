@@ -2639,6 +2639,172 @@ body.layout-gate-active iframe#artifact {
   }
 }
 
+/* ---- Image zoom (#3230): Kibo UI Image Zoom's anatomy (blurred backdrop, the picture gliding
+   from its thumbnail, a close button top-right) with an inspection toolbar. Square, per Lyra. ---- */
+.image-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  overflow: hidden;
+}
+.image-zoom[hidden] {
+  display: none;
+}
+.image-zoom.is-closing[hidden] {
+  display: block;
+}
+.image-zoom-overlay,
+.image-zoom-caption,
+.image-zoom-close,
+.image-zoom-bar {
+  opacity: 0;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.image-zoom.is-open .image-zoom-overlay,
+.image-zoom.is-open .image-zoom-caption,
+.image-zoom.is-open .image-zoom-close,
+.image-zoom.is-open .image-zoom-bar {
+  opacity: 1;
+}
+.image-zoom.is-closing .image-zoom-overlay,
+.image-zoom.is-closing .image-zoom-caption,
+.image-zoom.is-closing .image-zoom-close,
+.image-zoom.is-closing .image-zoom-bar {
+  transition-duration: var(--modal-close-dur);
+}
+.image-zoom-overlay {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--background) 80%, transparent);
+  backdrop-filter: blur(12px);
+}
+.image-zoom-stage {
+  position: absolute;
+  inset: 0;
+  cursor: zoom-out;
+  touch-action: none;
+  user-select: none;
+}
+.image-zoom-stage.can-pan {
+  cursor: grab;
+}
+.image-zoom-stage.is-panning {
+  cursor: grabbing;
+}
+.image-zoom-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  max-height: none;
+  box-shadow: var(--shadow-floating);
+  -webkit-user-drag: none;
+}
+.image-zoom-img.is-pixelated {
+  image-rendering: pixelated;
+}
+.image-zoom.is-animating .image-zoom-img {
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    width var(--modal-open-dur) var(--modal-ease),
+    height var(--modal-open-dur) var(--modal-ease);
+}
+.image-zoom-caption {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  max-width: calc(100% - 120px);
+  margin: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--popover) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  font-size: 12px;
+  line-height: 38px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.image-zoom-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: color-mix(in oklch, var(--foreground) 70%, transparent);
+  color: var(--background);
+  cursor: pointer;
+}
+.image-zoom-close:hover {
+  background: var(--foreground);
+}
+.image-zoom-bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--popover) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--shadow-floating);
+  translate: -50% 0;
+}
+.image-zoom-tool {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: 500 12px/1 var(--font-sans);
+  cursor: pointer;
+}
+.image-zoom-tool:hover:not(:disabled) {
+  background: var(--muted);
+}
+.image-zoom-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.image-zoom-level {
+  min-width: 52px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--fg-muted);
+}
+.image-zoom-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
+}
+/* Thumbnails that open in the preview say so. */
+img.bubble-attachment,
+img.chat-attachment-thumb {
+  cursor: zoom-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-zoom-overlay,
+  .image-zoom-caption,
+  .image-zoom-close,
+  .image-zoom-bar,
+  .image-zoom.is-animating .image-zoom-img {
+    transition: none !important;
+  }
+}
+
 /* ---- Command palette (Ctrl/Cmd+K). A modal search over the chrome's own controls; the scrim and
    card use the modal recipe like the publish dialog. ---- */
 .palette-overlay {

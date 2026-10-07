@@ -7043,3 +7043,15 @@ test("/artifact refuses hidden files and folders below the artifact directory", 
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test("pictures can be zoomed from the artifact and the conversation", async () => {
+  const sdk = createSdkJs("abc");
+  assert.match(sdk, /postArtifactMessage\("lavish:zoomImage", \{/);
+  assert.match(sdk, /lavish-zoom-btn/);
+  const chrome = await chromeClientSource();
+  assert.match(chrome, /if \(msg\.type === "lavish:zoomImage"\) openImageZoomFromFrame\(msg\);/);
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  assert.match(html, /<div class="image-zoom" id="imageZoom" role="dialog" aria-modal="true"[^>]*hidden>/);
+  assert.match(html, /id="imageZoomIn"[^>]*aria-label="Zoom in"/);
+  assert.match(html, /id="imageZoomFit"/);
+});

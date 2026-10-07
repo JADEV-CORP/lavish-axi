@@ -2386,7 +2386,11 @@ function createChatAttachmentsController() {
       .map((item) => {
         const status = item.status === "uploading" ? "Uploading…" : item.status === "error" ? item.error : "";
         const preview = item.preview
-          ? '<img class="chat-attachment-thumb" src="' + escapeHtml(item.preview) + '" alt="">'
+          ? '<img class="chat-attachment-thumb" src="' +
+            escapeHtml(item.preview) +
+            '" alt="' +
+            escapeHtml(item.name || "") +
+            '">'
           : "";
         const retry =
           item.status === "error" && item.file
@@ -4914,6 +4918,7 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:revisions") applyRevisionMessage(msg);
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
   if (msg.type === "lavish:toggleCommandPalette") togglePalette();
+  if (msg.type === "lavish:zoomImage") openImageZoomFromFrame(msg);
   if (msg.type === "lavish:editQueuedAnchor") editQueuedAnchor(String(msg.selector || ""));
 });
 
@@ -5210,6 +5215,415 @@ revisionsWrap.addEventListener("focusout", (event) => {
   if (revisionsDrawerOpen && next && !revisionsWrap.contains(next)) closeRevisionsDrawer();
 });
 whiteboardCloseButton.onclick = closeWhiteboard;
+// ---- Image zoom (#3230). The interaction is Kibo UI's Image Zoom, the shadcn/ui registry
+// component: a click grows the picture from where it sat to fill the window over a blurred
+// backdrop, and Esc or a click on the backdrop sends it back. Review needs a closer look than
+// "fit", so the zoomed view adds inspection: wheel or pinch zooms around the pointer, drag pans,
+// double-click toggles fit and 1:1, and the toolbar and keys (+, -, 0, 1, arrows) do the same.
+// Sources: chat and composer thumbnails here, and artifact images via lavish:zoomImage. ----
+
+const imageZoom = /** @type {HTMLDivElement} */ (document.getElementById("imageZoom"));
+const imageZoomStage = /** @type {HTMLDivElement} */ (document.getElementById("imageZoomStage"));
+const imageZoomImg = /** @type {HTMLImageElement} */ (document.getElementById("imageZoomImg"));
+const imageZoomCaption = /** @type {HTMLParagraphElement} */ (document.getElementById("imageZoomCaption"));
+const imageZoomLevel = /** @type {HTMLOutputElement} */ (document.getElementById("imageZoomLevel"));
+const imageZoomClose = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomClose"));
+const imageZoomInButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomIn"));
+const imageZoomOutButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomOut"));
+const imageZoomFitButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomFit"));
+const imageZoomActualButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomActual"));
+
+// Room kept around a fitted picture, and below it for the toolbar.
+const IMAGE_ZOOM_MARGIN = 48;
+const IMAGE_ZOOM_BAR_SPACE = 76;
+const IMAGE_ZOOM_MAX_SCALE = 16;
+const IMAGE_ZOOM_STEP = 1.25;
+// A data: URL an artifact hands over is bounded, like every other frame payload.
+const IMAGE_ZOOM_MAX_SRC_LENGTH = 8_000_000;
+
+/**
+ * @typedef {{ left: number, top: number, width: number, height: number }} ZoomRect
+ * @type {{ width: number, height: number, scale: number, x: number, y: number, origin: ZoomRect | null, returnFocus: Element | null, vector: boolean } | null}
+ */
+let zoomView = null;
+let zoomOpening = 0;
+/** @type {Map<number, { x: number, y: number }>} */
+const zoomPointers = new Map();
+/** @type {{ kind: "pan", x: number, y: number, viewX: number, viewY: number, moved: boolean, onImage: boolean } | { kind: "pinch", distance: number, scale: number } | null} */
+let zoomGesture = null;
+
+// Only pictures can open: http(s) URLs and raster or SVG data: URLs from the artifact, plus the
+// composer's own blob: previews. An <img> never runs script, SVG included.
+function zoomableSrc(value, { allowBlob = false } = {}) {
+  if (typeof value !== "string" || !value || value.length > IMAGE_ZOOM_MAX_SRC_LENGTH) return "";
+  if (/^data:/i.test(value)) return /^data:image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml)[;,]/i.test(value) ? value : "";
+  // An <img>'s src property is already absolute, so the scheme decides.
+  if (/^https?:\/\//i.test(value)) return value;
+  if (allowBlob && /^blob:/i.test(value)) return value;
+  return "";
+}
+
+function zoomRect(value) {
+  if (!value || typeof value !== "object") return null;
+  const rect = {
+    left: Number(value.left),
+    top: Number(value.top),
+    width: Number(value.width),
+    height: Number(value.height),
+  };
+  return Object.values(rect).every(Number.isFinite) && rect.width > 0 && rect.height > 0 ? rect : null;
+}
+
+function zoomViewport() {
+  return { width: Number(window.innerWidth) || 1024, height: Number(window.innerHeight) || 768 };
+}
+
+function zoomFitScale() {
+  if (!zoomView) return 1;
+  const viewport = zoomViewport();
+  const width = Math.max(1, viewport.width - IMAGE_ZOOM_MARGIN * 2);
+  const height = Math.max(1, viewport.height - IMAGE_ZOOM_MARGIN - IMAGE_ZOOM_BAR_SPACE);
+  // Never blow a small picture up past its own pixels on open; zooming in is one step away.
+  return Math.min(width / zoomView.width, height / zoomView.height, 1);
+}
+
+function zoomMinScale() {
+  return Math.min(zoomFitScale(), 1) / 2;
+}
+
+// Keeps the picture reachable: centred on an axis where it is smaller than the window, and never
+// dragged so far that its edge leaves the margin on an axis where it is larger.
+function clampZoomView() {
+  if (!zoomView) return;
+  const viewport = zoomViewport();
+  const width = zoomView.width * zoomView.scale;
+  const height = zoomView.height * zoomView.scale;
+  const top = IMAGE_ZOOM_MARGIN;
+  const bottom = viewport.height - IMAGE_ZOOM_BAR_SPACE;
+  if (width <= viewport.width - IMAGE_ZOOM_MARGIN * 2) zoomView.x = (viewport.width - width) / 2;
+  else zoomView.x = Math.min(IMAGE_ZOOM_MARGIN, Math.max(viewport.width - IMAGE_ZOOM_MARGIN - width, zoomView.x));
+  if (height <= bottom - top) zoomView.y = top + (bottom - top - height) / 2;
+  else zoomView.y = Math.min(top, Math.max(bottom - height, zoomView.y));
+}
+
+function renderZoomView() {
+  if (!zoomView) return;
+  // Sized, not scaled: the browser then draws the picture at its zoomed size, so an SVG stays
+  // sharp at any level instead of being stretched from one raster.
+  imageZoomImg.style.width = zoomView.width * zoomView.scale + "px";
+  imageZoomImg.style.height = zoomView.height * zoomView.scale + "px";
+  imageZoomImg.style.transform = "translate(" + zoomView.x + "px, " + zoomView.y + "px)";
+  imageZoomLevel.textContent = Math.round(zoomView.scale * 100) + "%";
+  // Past 3x, show the real pixels instead of smoothing them away: that is what inspecting is for.
+  imageZoomImg.classList.toggle("is-pixelated", zoomView.scale >= 3 && !zoomView.vector);
+  imageZoomStage.classList.toggle("can-pan", zoomView.scale > zoomFitScale() + 0.001);
+  imageZoomOutButton.disabled = zoomView.scale <= zoomMinScale() + 0.001;
+  imageZoomInButton.disabled = zoomView.scale >= IMAGE_ZOOM_MAX_SCALE - 0.001;
+}
+
+// One owner for the open/close glide: only these two steps tween the transform.
+function animateZoomView(apply) {
+  if (prefersReducedMotion()) {
+    apply();
+    renderZoomView();
+    return;
+  }
+  imageZoom.classList.add("is-animating");
+  apply();
+  renderZoomView();
+  const duration = motionMs("--modal-open-dur", 250);
+  setTimeout(() => imageZoom.classList.remove("is-animating"), duration);
+}
+
+function zoomTo(scale, pointX, pointY, { animate = false } = {}) {
+  if (!zoomView) return;
+  const next = Math.min(IMAGE_ZOOM_MAX_SCALE, Math.max(zoomMinScale(), scale));
+  const apply = () => {
+    if (!zoomView) return;
+    const ratio = next / zoomView.scale;
+    zoomView.x = pointX - (pointX - zoomView.x) * ratio;
+    zoomView.y = pointY - (pointY - zoomView.y) * ratio;
+    zoomView.scale = next;
+    clampZoomView();
+  };
+  if (animate) animateZoomView(apply);
+  else {
+    apply();
+    renderZoomView();
+  }
+}
+
+function zoomCenter() {
+  const viewport = zoomViewport();
+  return { x: viewport.width / 2, y: (viewport.height - IMAGE_ZOOM_BAR_SPACE + IMAGE_ZOOM_MARGIN) / 2 };
+}
+
+function zoomToFit({ animate = true } = {}) {
+  if (!zoomView) return;
+  const apply = () => {
+    if (!zoomView) return;
+    zoomView.scale = zoomFitScale();
+    clampZoomView();
+  };
+  if (animate) animateZoomView(apply);
+  else {
+    apply();
+    renderZoomView();
+  }
+}
+
+function zoomStep(direction) {
+  if (!zoomView) return;
+  const center = zoomCenter();
+  zoomTo(zoomView.scale * (direction > 0 ? IMAGE_ZOOM_STEP : 1 / IMAGE_ZOOM_STEP), center.x, center.y, {
+    animate: true,
+  });
+}
+
+/**
+ * @param {string} src
+ * @param {{ alt?: string, origin?: ZoomRect | null }} [options]
+ */
+async function openImageZoom(src, { alt = "", origin = null } = {}) {
+  if (!src || zoomView) return;
+  const opening = ++zoomOpening;
+  const returnFocus = document.activeElement;
+  imageZoomImg.alt = alt;
+  imageZoomImg.src = src;
+  try {
+    if (typeof imageZoomImg.decode === "function") await imageZoomImg.decode();
+  } catch {
+    // An image that will not decode cannot be inspected; leave the page as it was.
+    if (opening === zoomOpening) imageZoomImg.removeAttribute("src");
+    return;
+  }
+  if (opening !== zoomOpening || zoomView) return;
+  const width = Number(imageZoomImg.naturalWidth) || 0;
+  const height = Number(imageZoomImg.naturalHeight) || 0;
+  if (!width || !height) return;
+  const vector = /^data:image\/svg\+xml/i.test(src) || /\.svgz?(?:[?#]|$)/i.test(src);
+  zoomView = { width, height, scale: 1, x: 0, y: 0, origin, returnFocus, vector };
+  imageZoomCaption.textContent = (alt ? alt + " · " : "") + width + " × " + height;
+  closeMenus();
+  setLayerOpen(imageZoom, true);
+  if (origin) {
+    // Start exactly over the thumbnail, then glide to the fitted view.
+    zoomView.scale = origin.width / width;
+    zoomView.x = origin.left;
+    zoomView.y = origin.top;
+    renderZoomView();
+    void imageZoomImg.offsetWidth;
+    zoomToFit({ animate: true });
+  } else {
+    zoomToFit({ animate: false });
+  }
+  imageZoomClose.focus();
+}
+
+function closeImageZoom() {
+  if (!zoomView) return;
+  const view = zoomView;
+  zoomPointers.clear();
+  zoomGesture = null;
+  if (view.origin) {
+    animateZoomView(() => {
+      view.scale = view.origin ? view.origin.width / view.width : view.scale;
+      view.x = view.origin ? view.origin.left : view.x;
+      view.y = view.origin ? view.origin.top : view.y;
+    });
+  }
+  zoomView = null;
+  setLayerOpen(imageZoom, false, { closeToken: "--modal-open-dur" });
+  const back = /** @type {HTMLElement | null} */ (view.returnFocus);
+  if (back && typeof back.focus === "function" && back !== document.body) back.focus();
+}
+
+imageZoomStage.addEventListener(
+  "wheel",
+  (event) => {
+    if (!zoomView) return;
+    event.preventDefault();
+    // A trackpad pinch arrives as a ctrl-wheel with small deltas; scale it up to feel the same.
+    const factor = Math.exp(-Number(event.deltaY) * (event.ctrlKey ? 0.01 : 0.0015));
+    zoomTo(zoomView.scale * factor, Number(event.clientX), Number(event.clientY));
+  },
+  { passive: false },
+);
+
+imageZoomStage.addEventListener("pointerdown", (event) => {
+  if (!zoomView || (event.pointerType === "mouse" && event.button !== 0)) return;
+  zoomPointers.set(event.pointerId, { x: Number(event.clientX), y: Number(event.clientY) });
+  if (typeof imageZoomStage.setPointerCapture === "function") imageZoomStage.setPointerCapture(event.pointerId);
+  if (zoomPointers.size === 2) {
+    const [a, b] = [...zoomPointers.values()];
+    zoomGesture = { kind: "pinch", distance: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: zoomView.scale };
+  } else if (zoomPointers.size === 1) {
+    zoomGesture = {
+      kind: "pan",
+      x: Number(event.clientX),
+      y: Number(event.clientY),
+      viewX: zoomView.x,
+      viewY: zoomView.y,
+      moved: false,
+      onImage: event.target === imageZoomImg,
+    };
+  }
+});
+
+imageZoomStage.addEventListener("pointermove", (event) => {
+  if (!zoomView || !zoomPointers.has(event.pointerId) || !zoomGesture) return;
+  zoomPointers.set(event.pointerId, { x: Number(event.clientX), y: Number(event.clientY) });
+  if (zoomGesture.kind === "pinch" && zoomPointers.size >= 2) {
+    const [a, b] = [...zoomPointers.values()];
+    const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    zoomTo((zoomGesture.scale * distance) / zoomGesture.distance, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    return;
+  }
+  if (zoomGesture.kind !== "pan") return;
+  const dx = Number(event.clientX) - zoomGesture.x;
+  const dy = Number(event.clientY) - zoomGesture.y;
+  if (!zoomGesture.moved && Math.hypot(dx, dy) < 4) return;
+  zoomGesture.moved = true;
+  imageZoomStage.classList.add("is-panning");
+  zoomView.x = zoomGesture.viewX + dx;
+  zoomView.y = zoomGesture.viewY + dy;
+  clampZoomView();
+  renderZoomView();
+});
+
+function endZoomPointer(event) {
+  if (!zoomPointers.has(event.pointerId)) return;
+  zoomPointers.delete(event.pointerId);
+  const gesture = zoomGesture;
+  imageZoomStage.classList.remove("is-panning");
+  if (zoomPointers.size === 0) zoomGesture = null;
+  else if (zoomPointers.size === 1 && zoomView) {
+    // Lifting one finger of a pinch hands over to panning from where the other one is.
+    const [rest] = [...zoomPointers.values()];
+    zoomGesture = {
+      kind: "pan",
+      x: rest.x,
+      y: rest.y,
+      viewX: zoomView.x,
+      viewY: zoomView.y,
+      moved: true,
+      onImage: true,
+    };
+  }
+  // A plain click on the backdrop closes, as in the Kibo component; a click on the picture or
+  // the end of a drag does not.
+  if (event.type === "pointerup" && gesture?.kind === "pan" && !gesture.moved && !gesture.onImage) closeImageZoom();
+}
+imageZoomStage.addEventListener("pointerup", endZoomPointer);
+imageZoomStage.addEventListener("pointercancel", endZoomPointer);
+
+imageZoomStage.addEventListener("dblclick", (event) => {
+  if (!zoomView) return;
+  const fit = zoomFitScale();
+  const close = Math.max(1, fit * 2);
+  if (zoomView.scale < close - 0.01) zoomTo(close, Number(event.clientX), Number(event.clientY), { animate: true });
+  else zoomToFit();
+});
+
+imageZoomClose.addEventListener("click", () => closeImageZoom());
+imageZoomInButton.addEventListener("click", () => zoomStep(1));
+imageZoomOutButton.addEventListener("click", () => zoomStep(-1));
+imageZoomFitButton.addEventListener("click", () => zoomToFit());
+imageZoomActualButton.addEventListener("click", () => {
+  const center = zoomCenter();
+  zoomTo(1, center.x, center.y, { animate: true });
+});
+
+imageZoom.addEventListener("keydown", (event) => {
+  if (!zoomView) return;
+  const key = String(event.key || "");
+  const pan = 48;
+  if (key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeImageZoom();
+  } else if (key === "+" || key === "=") {
+    event.preventDefault();
+    zoomStep(1);
+  } else if (key === "-" || key === "_") {
+    event.preventDefault();
+    zoomStep(-1);
+  } else if (key === "0") {
+    event.preventDefault();
+    zoomToFit();
+  } else if (key === "1") {
+    event.preventDefault();
+    imageZoomActualButton.click();
+  } else if (key.startsWith("Arrow")) {
+    event.preventDefault();
+    zoomView.x += key === "ArrowLeft" ? pan : key === "ArrowRight" ? -pan : 0;
+    zoomView.y += key === "ArrowUp" ? pan : key === "ArrowDown" ? -pan : 0;
+    clampZoomView();
+    renderZoomView();
+  } else if (key === "Tab") {
+    // The preview is modal: Tab cycles through its own controls.
+    const controls = [
+      imageZoomClose,
+      imageZoomOutButton,
+      imageZoomInButton,
+      imageZoomFitButton,
+      imageZoomActualButton,
+    ].filter((control) => !control.disabled);
+    const index = controls.indexOf(/** @type {HTMLButtonElement} */ (document.activeElement));
+    event.preventDefault();
+    const next = (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+    controls[next].focus();
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (!zoomView) return;
+  zoomView.scale = Math.min(Math.max(zoomView.scale, zoomMinScale()), IMAGE_ZOOM_MAX_SCALE);
+  clampZoomView();
+  renderZoomView();
+});
+
+// Chat bubble thumbnails and the composer's attachment previews. Capture phase, so opening a
+// queued note's picture does not also open that note for editing.
+document.addEventListener(
+  "click",
+  (event) => {
+    const target = /** @type {Element | null} */ (event.target);
+    const thumb =
+      target && typeof target.closest === "function"
+        ? target.closest("img.bubble-attachment, img.chat-attachment-thumb")
+        : null;
+    if (!thumb) return;
+    const image = /** @type {HTMLImageElement} */ (thumb);
+    const src = zoomableSrc(image.currentSrc || image.src, { allowBlob: true });
+    if (!src) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const box = typeof image.getBoundingClientRect === "function" ? image.getBoundingClientRect() : null;
+    void openImageZoom(src, { alt: String(image.alt || ""), origin: zoomRect(box) });
+  },
+  true,
+);
+
+// An artifact picture. The SDK reports its box in the frame's coordinates; the frame's own box
+// puts it on the page so the glide starts where the reader clicked.
+function openImageZoomFromFrame(msg) {
+  const src = zoomableSrc(msg.src);
+  if (!src) return;
+  const inner = zoomRect(msg.rect);
+  const frameBox = typeof frame.getBoundingClientRect === "function" ? frame.getBoundingClientRect() : null;
+  const origin =
+    inner && frameBox
+      ? {
+          left: inner.left + Number(frameBox.left),
+          top: inner.top + Number(frameBox.top),
+          width: inner.width,
+          height: inner.height,
+        }
+      : null;
+  void openImageZoom(src, { alt: typeof msg.alt === "string" ? msg.alt.slice(0, 300) : "", origin: zoomRect(origin) });
+}
+
 // ---- Command palette (Ctrl/Cmd+K). Each command runs the same control the reader could click, so
 // its guards, focus handling, and side effects stay in one place; a control that is disabled or
 // not on screen in this layout is left out of the list. ----
