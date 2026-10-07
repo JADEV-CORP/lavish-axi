@@ -10031,3 +10031,38 @@ test("a theme preset picked from the gallery persists, paints the page, and tint
   grid.dispatch("click", { target: pick("lavish") });
   assert.equal(localStore.has("lavish-axi:theme-preset"), false, "the default leaves nothing stored");
 });
+
+test("the top bar and Peek can each be hidden completely, stay hidden, and come back from their edge", async () => {
+  const localStore = new Map();
+  const chrome = await createChromeHarness({ theme: { localStore } });
+  const root = chrome.element("html");
+
+  chrome.element("hideBar").onclick();
+  assert.equal(root.dataset.bar, "hidden");
+  assert.equal(localStore.get("lavish-axi:bar"), "hidden");
+  chrome.element("barReveal").onclick();
+  assert.equal(root.dataset.bar, undefined);
+  assert.equal(localStore.has("lavish-axi:bar"), false);
+
+  chrome.element("layoutPeek").dispatch("click", {});
+  chrome.element("peekHide").onclick();
+  assert.equal(root.dataset.peek, "hidden");
+  assert.equal(localStore.get("lavish-axi:peek"), "hidden");
+  chrome.element("peekReveal").onclick();
+  assert.equal(root.dataset.peek, undefined);
+
+  chrome.element("peekHide").onclick();
+  chrome.element("layoutPeek").dispatch("click", {});
+  assert.equal(root.dataset.peek, undefined, "choosing Peek again brings it back");
+
+  const again = await createChromeHarness({
+    theme: {
+      localStore: new Map([
+        ["lavish-axi:bar", "hidden"],
+        ["lavish-axi:peek", "hidden"],
+      ]),
+    },
+  });
+  assert.equal(again.element("html").dataset.bar, "hidden", "a reload keeps the bar away");
+  assert.equal(again.element("html").dataset.peek, "hidden");
+});

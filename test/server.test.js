@@ -7113,3 +7113,29 @@ test("the editor names only the agents it knows, in the sidebar header and the p
   assert.match(unnamed, /<span class="panel-agent" id="panelAgent" hidden><\/span>/);
   assert.match(unnamed, /"initialAgent":null/);
 });
+
+test("hiding the top bar and Peek: the controls, the edges that bring them back, and the state before first paint", async () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  const css = await chromeCssSource();
+  assert.match(
+    html,
+    /<button class="menu-item" id="hideBar" type="button"><svg[^>]*>[\s\S]*?<\/svg><span>Hide the top bar<\/span><\/button>/,
+  );
+  assert.match(
+    html,
+    /<button class="panel-tool panel-tool-hide" id="peekHide" type="button" aria-label="Hide Peek" title="Hide Peek">/,
+  );
+  assert.match(
+    html,
+    /<button class="edge-reveal edge-reveal-top" id="barReveal" type="button" aria-label="Show the top bar">/,
+  );
+  assert.match(
+    html,
+    /<button class="edge-reveal edge-reveal-bottom" id="peekReveal" type="button" aria-label="Show Peek">/,
+  );
+  assert.match(html, /if\(localStorage\.getItem\("lavish-axi:bar"\)==="hidden"\)d\.dataset\.bar="hidden";/);
+  assert.match(html, /if\(localStorage\.getItem\("lavish-axi:peek"\)==="hidden"\)d\.dataset\.peek="hidden";/);
+  assert.match(css, /:root\[data-bar="hidden"\]\{--bar-h:0(px)?;?\}/);
+  assert.match(css, /:root\[data-bar="hidden"\] \.bar\{display:none;?\}/);
+  assert.match(css, /:root\[data-chat-layout="peek"\]\[data-peek="hidden"\] \.panel\{display:none;?\}/);
+});

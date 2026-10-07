@@ -2352,6 +2352,7 @@ body.layout-gate-active iframe#artifact {
     display: inline-flex;
     gap: 2px;
   }
+  :root[data-chat-layout="sidebar"] .panel-tool-hide,
   :root[data-chat-layout="sidebar"] .panel-tool-back {
     display: none;
   }
@@ -2381,6 +2382,13 @@ body.layout-gate-active iframe#artifact {
     font-size: 12px;
     color: var(--fg-faint);
     white-space: nowrap;
+  }
+  /* A hidden Peek (#3269) leaves nothing but the strip along the bottom edge that brings it back. */
+  :root[data-chat-layout="peek"][data-peek="hidden"] .panel {
+    display: none;
+  }
+  :root[data-chat-layout="peek"][data-peek="hidden"] .edge-reveal-bottom {
+    display: block;
   }
 }
 /* ---- end desktop layout ---- */
@@ -4053,6 +4061,77 @@ img.chat-attachment-thumb {
 }
 @media (prefers-reduced-motion: reduce) {
   .theme-orb {
+    transition: none;
+  }
+}
+
+/* ---- Hidden top bar and Peek (#3269) ---- */
+:root[data-bar="hidden"] {
+  --bar-h: 0px;
+}
+:root[data-bar="hidden"] .bar {
+  display: none;
+}
+/* The way back: an invisible strip along the edge that shows a pill on hover and restores on click. */
+.edge-reveal {
+  display: none;
+  position: fixed;
+  z-index: 90;
+  left: 0;
+  right: 0;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.edge-reveal-top {
+  top: 0;
+}
+.edge-reveal-bottom {
+  bottom: 0;
+}
+:root[data-bar="hidden"] .edge-reveal-top {
+  display: block;
+}
+.edge-reveal-pill {
+  position: absolute;
+  left: 50%;
+  padding: 4px 12px;
+  background: var(--foreground);
+  color: var(--background);
+  font: 500 12px/1.35 var(--font-sans);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, 0) scale(0.95);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+  pointer-events: none;
+}
+.edge-reveal-top .edge-reveal-pill {
+  top: 6px;
+}
+.edge-reveal-bottom .edge-reveal-pill {
+  bottom: 6px;
+}
+.edge-reveal:hover .edge-reveal-pill,
+.edge-reveal:focus-visible .edge-reveal-pill {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+@media (hover: none) {
+  /* Touch has no hover: keep the strip findable with a faint pill. */
+  .edge-reveal {
+    height: 28px;
+  }
+  .edge-reveal-pill {
+    opacity: 0.85;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .edge-reveal-pill {
     transition: none;
   }
 }

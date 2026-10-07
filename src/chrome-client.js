@@ -2163,6 +2163,68 @@ function finishSheetDrag(event) {
   else if (!sheetOpen && offset < -SHEET_DRAG_THRESHOLD_PX) setSheetOpen(true);
 }
 
+// ---- Hiding the top bar and Peek (#3269) ----
+// Either can be put away completely: the artifact gets the room, and nothing of it stays on screen.
+// An invisible strip along that edge shows a "Show ..." pill on hover and brings it back on click
+// (a tap on a phone); the command palette (Ctrl+K, which also works from inside the artifact) has
+// both too. Personal preferences in localStorage, applied before first paint by the head bootstrap.
+const BAR_STORAGE_KEY = "lavish-axi:bar";
+const PEEK_STORAGE_KEY = "lavish-axi:peek";
+
+function readHidden(key) {
+  try {
+    return localStorage.getItem(key) === "hidden";
+  } catch {
+    return false;
+  }
+}
+let barHidden = readHidden(BAR_STORAGE_KEY);
+let peekHidden = readHidden(PEEK_STORAGE_KEY);
+
+function storeHidden(key, hidden) {
+  try {
+    if (hidden) localStorage.setItem(key, "hidden");
+    else localStorage.removeItem(key);
+  } catch {
+    // Storage refused: the choice holds for this tab only.
+  }
+}
+
+function renderHiddenChrome() {
+  const root = document.documentElement;
+  if (!root) return;
+  if (barHidden) root.dataset.bar = "hidden";
+  else delete root.dataset.bar;
+  if (peekHidden) root.dataset.peek = "hidden";
+  else delete root.dataset.peek;
+}
+
+function setBarHidden(hidden) {
+  barHidden = Boolean(hidden);
+  storeHidden(BAR_STORAGE_KEY, barHidden);
+  closeMenus();
+  renderHiddenChrome();
+}
+
+function setPeekHidden(hidden) {
+  if (peekHidden === Boolean(hidden)) return;
+  peekHidden = Boolean(hidden);
+  storeHidden(PEEK_STORAGE_KEY, peekHidden);
+  renderHiddenChrome();
+}
+
+/** @type {HTMLButtonElement} */ (document.getElementById("hideBar")).onclick = () => setBarHidden(true);
+/** @type {HTMLButtonElement} */ (document.getElementById("barReveal")).onclick = () => setBarHidden(false);
+/** @type {HTMLButtonElement} */ (document.getElementById("peekHide")).onclick = () => setPeekHidden(true);
+/** @type {HTMLButtonElement} */ (document.getElementById("peekReveal")).onclick = () => setPeekHidden(false);
+window.addEventListener("storage", (event) => {
+  if (!event || (event.key !== BAR_STORAGE_KEY && event.key !== PEEK_STORAGE_KEY)) return;
+  barHidden = readHidden(BAR_STORAGE_KEY);
+  peekHidden = readHidden(PEEK_STORAGE_KEY);
+  renderHiddenChrome();
+});
+renderHiddenChrome();
+
 // The header's own tools (side switch, rail, back to the sidebar) keep their clicks to themselves.
 function isPanelHeadTool(target) {
   return Boolean(target && typeof target.closest === "function" && target.closest(".panel-head-tools"));
@@ -2368,6 +2430,8 @@ function applyChatLayout() {
   setChatLayout({ mode: "sidebar" });
 
 function setChatLayout(change) {
+  // Choosing Peek again is how a hidden Peek comes back.
+  if (change.mode === "peek") setPeekHidden(false);
   const enteringPeek = chatLayout.mode !== "peek" && change.mode === "peek";
   // A side flip swaps the grid's column order; tweening the tracks across that would stretch the
   // panel over the artifact, so the flip lands without the card-resize transition.
@@ -6413,6 +6477,12 @@ function paletteCommands() {
   const commands = [
     { label: annotation ? "Switch to explore mode" : "Switch to annotate mode", control: annotationSwitch },
     { label: "Write a message", run: focusComposer },
+    { label: barHidden ? "Show the top bar" : "Hide the top bar", run: () => setBarHidden(!barHidden) },
+    {
+      label: peekHidden ? "Show Peek" : "Hide Peek",
+      run: () => setPeekHidden(!peekHidden),
+      when: chatLayout.mode === "peek",
+    },
     { label: "Attach images", control: chatAttachButton },
     { label: "Conversation on the left", control: layoutOptionButtons.left, when: offerLayout("left") },
     { label: "Conversation on the right", control: layoutOptionButtons.right, when: offerLayout("right") },
@@ -6467,6 +6537,7 @@ function revisionPaletteCommands() {
 }
 
 function focusComposer() {
+  if (isPeekLayout()) setPeekHidden(false);
   if (isRailLayout()) setChatLayout({ mode: "sidebar" });
   if (isDockLayout()) setSheetOpen(true);
   chatInput.focus();
