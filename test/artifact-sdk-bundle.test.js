@@ -830,3 +830,15 @@ test("the overlay takes the editor's preset accent, and only as plain oklch colo
   });
   assert.equal(props.has("--primary"), false, "anything else falls back to Lavish's own rose");
 });
+
+test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {
+  const sdk = bootSdk();
+  const style = sdk.documentElement.children
+    .flatMap((child) => [child, ...(child.children || [])])
+    .find((node) => String(node.textContent || "").includes("::-webkit-scrollbar"));
+  assert.ok(style, "the SDK adds the scrollbar style");
+  assert.match(style.textContent, /:where\(\*\)::-webkit-scrollbar\{width:10px;height:10px\}/);
+  assert.match(style.textContent, /::-webkit-scrollbar-thumb:active\{background-color:var\(--lavish-accent,/);
+  assert.match(style.textContent, /@supports \(-moz-appearance:none\)\{:where\(\*\)\{scrollbar-width:thin;/);
+  assert.doesNotMatch(style.textContent, /(^|\})(html|body|\*)[{:]/, "no rule with real specificity");
+});

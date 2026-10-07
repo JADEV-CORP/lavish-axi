@@ -1061,6 +1061,33 @@ export function createArtifactSdk(
     return `/whiteboard-frame?${params}`;
   }
 
+  // The editor's themed scrollbar inside the artifact too (#3305): square like Lyra, a 10px track,
+  // a thumb inset 3px that darkens on hover and takes the theme's accent while dragged; Firefox gets
+  // the thin variant. It goes in first and at zero specificity, so a scrollbar the artifact styles
+  // itself still wins. The thumb is a mid grey because the page's own background is unknown.
+  function installArtifactScrollbar() {
+    if (document.querySelector('style[data-lavish-ui="scrollbar"]')) return;
+    const style = document.createElement("style");
+    style.setAttribute("data-lavish-ui", "scrollbar");
+    style.textContent =
+      ":where(*)::-webkit-scrollbar{width:10px;height:10px}" +
+      ":where(*)::-webkit-scrollbar-track,:where(*)::-webkit-scrollbar-corner{background:transparent}" +
+      ":where(*)::-webkit-scrollbar-thumb{background-color:oklch(0.6 0.02 325 / 45%);border:3px solid transparent;background-clip:padding-box}" +
+      ":where(*)::-webkit-scrollbar-thumb:hover{background-color:oklch(0.6 0.02 325 / 75%);border-width:2px}" +
+      ":where(*)::-webkit-scrollbar-thumb:active{background-color:var(--lavish-accent,oklch(0.586 0.253 17.585));border-width:2px}" +
+      "@supports (-moz-appearance:none){:where(*){scrollbar-width:thin;scrollbar-color:oklch(0.6 0.02 325 / 55%) transparent}}";
+    const head = document.head || document.documentElement;
+    if (!head) return;
+    if (typeof head.insertBefore === "function") head.insertBefore(style, head.firstChild || null);
+    else head.appendChild(style);
+  }
+  // Cosmetic only: a page that refuses the style must never stop the SDK from starting.
+  try {
+    installArtifactScrollbar();
+  } catch {
+    // The browser's own scrollbar stays.
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== parent) return;
     const msg = event.data || {};
