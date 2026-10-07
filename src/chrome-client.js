@@ -1799,8 +1799,170 @@ function applyTheme({ notifyFrame = true } = {}) {
   themeToggle.setAttribute("aria-label", label);
   themeToggle.setAttribute("title", label);
   followSystemThemeItem.setAttribute("aria-checked", String(!choice));
-  if (notifyFrame) postToFrame({ type: "lavish:theme", theme: effectiveTheme() });
+  if (notifyFrame) postThemeToFrame();
+  renderThemeGrid();
 }
+
+// ---- Theme presets (#3268) ----
+// A preset tints the whole palette around one hue; light or dark still comes from the toggle or the
+// OS. Like the light or dark choice it is a personal preference kept in localStorage, applied
+// before first paint by the head bootstrap, and shared by every Lavish tab.
+const THEME_PRESET_STORAGE_KEY = "lavish-axi:theme-preset";
+/** @type {Array<{ id: string, name: string, css: string, orb: { light: { surface: string, primary: string }, dark: { surface: string, primary: string } } }>} */
+const themePresets = Array.isArray(sessionData.themePresets) ? sessionData.themePresets : [];
+let sessionPresetChoice = "lavish";
+
+function storedPresetChoice() {
+  try {
+    const value = localStorage.getItem(THEME_PRESET_STORAGE_KEY) || "lavish";
+    return themePresets.some((preset) => preset.id === value) ? value : "lavish";
+  } catch {
+    return sessionPresetChoice;
+  }
+}
+
+function currentPreset() {
+  const id = storedPresetChoice();
+  return themePresets.find((preset) => preset.id === id) || themePresets[0] || null;
+}
+
+function applyPreset() {
+  const id = storedPresetChoice();
+  const root = document.documentElement;
+  if (root) {
+    if (id === "lavish") delete root.dataset.preset;
+    else root.dataset.preset = id;
+  }
+  renderThemeGrid();
+}
+
+function setPresetChoice(id) {
+  if (!themePresets.some((preset) => preset.id === id)) return;
+  sessionPresetChoice = id;
+  try {
+    if (id === "lavish") localStorage.removeItem(THEME_PRESET_STORAGE_KEY);
+    else localStorage.setItem(THEME_PRESET_STORAGE_KEY, id);
+  } catch {
+    // Storage refused: the choice holds for this tab only.
+  }
+  applyPreset();
+  postThemeToFrame();
+}
+
+// The artifact overlay (annotation card, pins) takes the preset's accent, nothing else.
+function postThemeToFrame() {
+  const preset = currentPreset();
+  postToFrame({
+    type: "lavish:theme",
+    theme: effectiveTheme(),
+    accent: preset ? { light: preset.orb.light.primary, dark: preset.orb.dark.primary } : null,
+  });
+}
+
+const themeDialog = /** @type {HTMLDivElement} */ (document.getElementById("themeDialog"));
+const themeSurface = /** @type {HTMLDivElement} */ (document.getElementById("themeSurface"));
+const themeGrid = /** @type {HTMLDivElement} */ (document.getElementById("themeGrid"));
+const themeIconHtml = (id) => /** @type {HTMLElement | null} */ (document.getElementById(id))?.innerHTML || "";
+
+// The orbs are the gallery's spheres: a highlight, the side's surface, then its accent.
+function orbStyle(side) {
+  return "--orb-surface:" + side.surface + ";--orb-primary:" + side.primary;
+}
+
+function themePresetCardHtml(preset, selected) {
+  const mode = effectiveTheme();
+  const orb = (side) =>
+    '<button class="theme-orb is-' +
+    side +
+    (selected ? " is-selected" : "") +
+    '" type="button" data-preset="' +
+    escapeHtml(preset.id) +
+    '" data-mode="' +
+    side +
+    '" style="' +
+    escapeHtml(orbStyle(preset.orb[side])) +
+    '" aria-pressed="' +
+    String(selected && mode === side) +
+    '" aria-label="' +
+    escapeHtml(preset.name + ", " + side) +
+    '" title="' +
+    escapeHtml(preset.name + ", " + side) +
+    '">' +
+    (selected
+      ? '<span class="theme-orb-badge">' +
+        themeIconHtml(side === "light" ? "themeIconSun" : "themeIconMoon") +
+        "</span>"
+      : "") +
+    "</button>";
+  return (
+    '<div class="theme-preset' +
+    (selected ? " is-selected" : "") +
+    '" role="listitem" data-preset="' +
+    escapeHtml(preset.id) +
+    '"><div class="theme-orbs">' +
+    orb("light") +
+    orb("dark") +
+    '</div><div class="theme-preset-foot"><button class="theme-preset-name" type="button" data-preset="' +
+    escapeHtml(preset.id) +
+    '" aria-pressed="' +
+    String(selected) +
+    '">' +
+    escapeHtml(preset.name) +
+    '</button><button class="theme-copy" type="button" data-copy-preset="' +
+    escapeHtml(preset.id) +
+    '" aria-label="Copy the ' +
+    escapeHtml(preset.name) +
+    ' theme CSS" title="Copy theme CSS">' +
+    themeIconHtml("themeIconCopy") +
+    "</button></div></div>"
+  );
+}
+
+function renderThemeGrid() {
+  if (!themeGrid) return;
+  const selected = storedPresetChoice();
+  themeGrid.innerHTML = themePresets.map((preset) => themePresetCardHtml(preset, preset.id === selected)).join("");
+}
+
+function openThemeDialog() {
+  closeMenus();
+  renderThemeGrid();
+  setLayerOpen(themeDialog, true, { surface: themeSurface });
+  /** @type {HTMLElement | null} */ (
+    themeGrid.querySelector(".theme-preset.is-selected .theme-preset-name")
+  )?.focus?.();
+}
+
+function closeThemeDialog() {
+  setLayerOpen(themeDialog, false, { surface: themeSurface, closeToken: "--modal-close-dur" });
+}
+
+themeGrid.addEventListener("click", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  if (!target || typeof target.closest !== "function") return;
+  const copy = /** @type {HTMLElement | null} */ (target.closest("[data-copy-preset]"));
+  if (copy) {
+    const preset = themePresets.find((item) => item.id === copy.dataset.copyPreset);
+    if (preset) copyText(preset.css);
+    return;
+  }
+  const pick = /** @type {HTMLElement | null} */ (target.closest("[data-preset]"));
+  if (!pick || !pick.dataset.preset) return;
+  setPresetChoice(pick.dataset.preset);
+  const mode = pick.dataset.mode;
+  if (mode === "light" || mode === "dark") setThemeChoice(mode);
+});
+themeDialog.addEventListener("click", (event) => {
+  if (event.target === themeDialog) closeThemeDialog();
+});
+/** @type {HTMLButtonElement} */ (document.getElementById("themeClose")).onclick = closeThemeDialog;
+/** @type {HTMLButtonElement} */ (document.getElementById("openThemes")).onclick = openThemeDialog;
+window.addEventListener("storage", (event) => {
+  if (event && event.key === THEME_PRESET_STORAGE_KEY) {
+    applyPreset();
+    postThemeToFrame();
+  }
+});
 
 /** @param {"light" | "dark" | null} choice */
 function setThemeChoice(choice) {
@@ -1829,6 +1991,7 @@ window.addEventListener("storage", (event) => {
   if (event && event.key === THEME_STORAGE_KEY) applyTheme();
 });
 applyTheme({ notifyFrame: false });
+applyPreset();
 
 // ---- Phone-width conversation sheet ----
 // Below this width chrome.css turns the conversation panel into a dock the user raises as a
@@ -6264,6 +6427,12 @@ function paletteCommands() {
       control: themeToggle,
     },
     { label: "Follow system theme", run: () => setThemeChoice(null), when: Boolean(storedThemeChoice()) },
+    { label: "Choose a theme preset", run: openThemeDialog },
+    ...themePresets.map((preset) => ({
+      label: "Theme preset: " + preset.name,
+      run: () => setPresetChoice(preset.id),
+      when: storedPresetChoice() !== preset.id,
+    })),
     { label: "Show revisions", control: revisionsButton, when: !revisionsWrap.hidden },
     { label: "Show layout issues", control: warningsButton, when: !warningsWrap.hidden },
     { label: "Reload artifact", control: reloadArtifactButton },
@@ -6439,6 +6608,8 @@ document.addEventListener("keydown", (event) => {
       closeWhiteboard();
     } else if (!shareDialog.hidden) {
       closeShareDialog();
+    } else if (!themeDialog.hidden) {
+      closeThemeDialog();
     } else if (revisionsDrawerOpen) {
       closeRevisionsDrawer({ restoreFocus: true });
     } else if (warningsDrawerOpen) {
@@ -6559,7 +6730,7 @@ document.addEventListener(
 frame.addEventListener("load", () => {
   if (artifactSpokeToken !== artifactLoadToken) armArtifactAvailabilityProbe(artifactLoadToken);
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
-  postToFrame({ type: "lavish:theme", theme: effectiveTheme() });
+  postThemeToFrame();
   // Replay the pre-reload scroll position so hot reloads don't jump the artifact to the top.
   postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
   if (lastReviewState) postToFrame({ type: "lavish:restoreReviewState", state: lastReviewState });

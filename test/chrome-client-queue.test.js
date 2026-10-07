@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { chatEntryForPrompt } from "../src/chat-messages.js";
+import { themePresetSummaries } from "../src/theme-presets.js";
 import { createChromeHtml } from "../src/server.js";
 
 const sourceUrl = new URL("../src/chrome-client.js", import.meta.url);
@@ -17,7 +18,7 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -354,6 +355,7 @@ async function createChromeHarness({
   element("videoViewer").hidden = true;
   element("moreMenu").hidden = true;
   element("sendMenu").hidden = true;
+  element("themeDialog").hidden = true;
   element("warningsDrawer").hidden = true;
   element("revisionsDrawer").hidden = true;
   const whiteboardFrame = element("whiteboardFrame");
@@ -10000,4 +10002,32 @@ test("a titled control shows the shadcn tooltip instead of the browser's, and ke
 
   chrome.dispatchDocumentEvent("pointerover", { target: tooltipTarget({ title: "Touch" }), pointerType: "touch" });
   assert.equal(tip.textContent, "Queue for later (Ctrl+Q)", "touch never opens a tooltip");
+});
+
+test("a theme preset picked from the gallery persists, paints the page, and tints the artifact overlay", async () => {
+  const localStore = new Map();
+  const chrome = await createChromeHarness({
+    sessionData: { ...defaultSessionData, themePresets: themePresetSummaries() },
+    theme: { localStore },
+  });
+  const grid = chrome.element("themeGrid");
+  assert.match(grid.innerHTML, /<div class="theme-preset is-selected" role="listitem" data-preset="lavish">/);
+
+  const pick = (preset, mode) => ({
+    closest: (selector) => (selector === "[data-preset]" ? { dataset: mode ? { preset, mode } : { preset } } : null),
+  });
+  grid.dispatch("click", { target: pick("grove", "dark") });
+  assert.equal(localStore.get("lavish-axi:theme-preset"), "grove");
+  assert.equal(localStore.get("lavish-axi:theme"), "dark");
+  assert.match(grid.innerHTML, /<div class="theme-preset is-selected" role="listitem" data-preset="grove">/);
+  assert.equal(chrome.element("html").dataset.preset, "grove");
+  const theme = chrome.postedToFrame.filter((message) => message.type === "lavish:theme").at(-1);
+  assert.equal(theme.theme, "dark");
+  assert.match(theme.accent.light, /^oklch\(/);
+
+  grid.dispatch("click", { target: pick("nonsense") });
+  assert.equal(localStore.get("lavish-axi:theme-preset"), "grove", "an unknown preset changes nothing");
+
+  grid.dispatch("click", { target: pick("lavish") });
+  assert.equal(localStore.has("lavish-axi:theme-preset"), false, "the default leaves nothing stored");
 });

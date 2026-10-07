@@ -1184,7 +1184,7 @@ export function createArtifactSdk(
 
   function highlightElement(el) {
     if (!el) return;
-    el.style.outline = "var(--lavish-annotate-outline,2px solid oklch(0.586 0.253 17.585))";
+    el.style.outline = "var(--lavish-annotate-outline,2px solid var(--lavish-accent,oklch(0.586 0.253 17.585)))";
     el.style.outlineOffset = "var(--lavish-annotate-offset,2px)";
   }
 
@@ -2289,11 +2289,38 @@ export function createArtifactSdk(
   // The chrome's light or dark choice, so the annotation card matches the editor around it rather
   // than the artifact page or the OS. Null until the chrome says, which leaves light-dark() on the OS.
   let chromeTheme = null;
+  // The editor's theme preset accent as a light-dark() pair, or "" for Lavish's own rose.
+  let chromeAccent = "";
   let shadowHost = null;
   let shadowHostThemed = false;
+  let shadowHostAccented = false;
+
+  let pageAccentStyle = null;
+  function applyPageAccent(color) {
+    if (!color) {
+      if (pageAccentStyle) pageAccentStyle.textContent = "";
+      return;
+    }
+    if (!pageAccentStyle) {
+      pageAccentStyle = document.createElement("style");
+      pageAccentStyle.setAttribute("data-lavish-ui", "accent");
+      (document.head || document.documentElement).appendChild(pageAccentStyle);
+    }
+    // :root:root outranks the annotation-mode style, whichever was inserted last.
+    pageAccentStyle.textContent = ":root:root{--lavish-accent:" + color + "}";
+  }
 
   function applyChromeTheme() {
     if (!shadowHost) return;
+    if (chromeAccent) {
+      shadowHost.style.setProperty("--primary", chromeAccent);
+      shadowHost.style.setProperty("--primary-hover", chromeAccent);
+      shadowHostAccented = true;
+    } else if (shadowHostAccented) {
+      shadowHost.style.removeProperty("--primary");
+      shadowHost.style.removeProperty("--primary-hover");
+      shadowHostAccented = false;
+    }
     if (chromeTheme) {
       shadowHost.setAttribute("data-theme", chromeTheme);
       shadowHostThemed = true;
@@ -2648,7 +2675,15 @@ export function createArtifactSdk(
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
     if (msg.type === "lavish:theme") {
       chromeTheme = msg.theme === "light" || msg.theme === "dark" ? msg.theme : null;
+      // Only plain oklch() colors are taken, so the message can never inject other CSS.
+      const color = (value) => (typeof value === "string" && /^oklch\([0-9. %/]+\)$/.test(value) ? value : "");
+      const light = color(msg.accent?.light);
+      const dark = color(msg.accent?.dark);
+      chromeAccent = light && dark ? "light-dark(" + light + ", " + dark + ")" : "";
       applyChromeTheme();
+      // The outline on the artifact's own elements lives in the artifact's document, whose color
+      // scheme is its own, so it takes the one color for the editor's current side.
+      applyPageAccent(light && dark ? (chromeTheme === "dark" ? dark : light) : "");
     }
     if (msg.type === "lavish:queuedAnchors") {
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);

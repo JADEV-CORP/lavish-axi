@@ -830,7 +830,7 @@ test("artifact SDK uses design-token aliases for annotation highlight and shadow
   assert.match(js, /--lavish-annotate-outline:2px solid var\(--lavish-accent\)/);
   assert.match(
     js,
-    /el\.style\.outline\s*=\s*["']var\(--lavish-annotate-outline,2px solid oklch\(0\.586 0\.253 17\.585\)\)["']/,
+    /el\.style\.outline\s*=\s*["']var\(--lavish-annotate-outline,2px solid var\(--lavish-accent,oklch\(0\.586 0\.253 17\.585\)\)\)["']/,
   );
   assert.match(js, /el\.style\.outlineOffset\s*=\s*["']var\(--lavish-annotate-offset,2px\)["']/);
   // The annotation card follows the chrome's theme: light-dark() tokens on the shadow host, with

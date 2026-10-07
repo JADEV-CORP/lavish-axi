@@ -807,3 +807,26 @@ function queuedChecks(sdk) {
     .flatMap((child) => child.shadowRoot?.children || [])
     .filter((child) => child.className === "lavish-queued-check");
 }
+
+test("the overlay takes the editor's preset accent, and only as plain oklch colors", () => {
+  const sdk = bootSdk();
+  const heading = appendTo(sdk.body, cell("h2", "Pricing"));
+  sdk.click(heading);
+  const host = sdk.documentElement.children.find((child) => child.shadowRoot);
+  const props = new Map();
+  host.style = { setProperty: (name, value) => props.set(name, value), removeProperty: (name) => props.delete(name) };
+
+  sdk.sendChromeMessage({
+    type: "lavish:theme",
+    theme: "dark",
+    accent: { light: "oklch(0.52 0.12 152)", dark: "oklch(0.54 0.12 152)" },
+  });
+  assert.equal(props.get("--primary"), "light-dark(oklch(0.52 0.12 152), oklch(0.54 0.12 152))");
+
+  sdk.sendChromeMessage({
+    type: "lavish:theme",
+    theme: "dark",
+    accent: { light: "red;background:url(x)", dark: "oklch(0.5 0.1 1)" },
+  });
+  assert.equal(props.has("--primary"), false, "anything else falls back to Lavish's own rose");
+});

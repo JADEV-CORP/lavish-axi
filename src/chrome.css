@@ -3948,3 +3948,111 @@ img.chat-attachment-thumb {
     animation: none;
   }
 }
+
+/* ---- Theme presets (#3268): the gallery of orbs, after the T3 one the owner shared. ---- */
+.theme-dialog {
+  width: min(720px, 100%);
+}
+.theme-sub {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: var(--space-8);
+}
+.theme-preset {
+  display: grid;
+  gap: 14px;
+  padding: 18px 12px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.theme-preset.is-selected {
+  border-color: var(--accent);
+}
+.theme-orbs {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+}
+.theme-orb {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  outline-offset: 5px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.theme-orb.is-light {
+  background:
+    radial-gradient(circle at 32% 28%, oklch(1 0 0) 0 14%, transparent 46%),
+    radial-gradient(circle at 70% 78%, color-mix(in oklch, var(--orb-primary) 70%, transparent), transparent 70%),
+    var(--orb-surface);
+}
+.theme-orb.is-dark {
+  background:
+    radial-gradient(circle at 32% 28%, color-mix(in oklch, var(--orb-primary) 55%, white) 0 6%, transparent 40%),
+    radial-gradient(circle at 66% 72%, var(--orb-primary), transparent 72%), var(--orb-surface);
+}
+.theme-orb:hover {
+  transform: scale(1.05);
+}
+.theme-orb.is-selected {
+  outline: 2px solid var(--accent);
+}
+.theme-orb-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-bar);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.theme-preset-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.theme-preset-name {
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: 600 13px/1.3 var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.theme-copy {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+.theme-copy:hover {
+  background: var(--muted);
+  color: var(--fg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-orb {
+    transition: none;
+  }
+}
