@@ -123,9 +123,13 @@ const panelToggleIcon = /** @type {HTMLSpanElement} */ (document.getElementById(
 const panelScrim = /** @type {HTMLDivElement} */ (document.getElementById("panelScrim"));
 const sendButton = /** @type {HTMLButtonElement} */ (document.getElementById("send"));
 const sendAndEndButton = /** @type {HTMLButtonElement} */ (document.getElementById("sendAndEnd"));
+const sendMoreButton = /** @type {HTMLButtonElement} */ (document.getElementById("sendMore"));
+const sendMenu = /** @type {HTMLDivElement} */ (document.getElementById("sendMenu"));
+const sendSplit = /** @type {HTMLDivElement} */ (document.getElementById("sendSplit"));
 const annotationSwitch = /** @type {HTMLButtonElement} */ (document.getElementById("annotation"));
 const modeInteractButton = /** @type {HTMLButtonElement} */ (document.getElementById("modeInteract"));
 const railAnnotateButton = /** @type {HTMLButtonElement} */ (document.getElementById("railAnnotate"));
+const composerAnnotateButton = /** @type {HTMLButtonElement} */ (document.getElementById("composerAnnotate"));
 const moreWrap = /** @type {HTMLDivElement} */ (document.getElementById("moreWrap"));
 const moreButton = /** @type {HTMLButtonElement} */ (document.getElementById("moreButton"));
 const moreMenu = /** @type {HTMLDivElement} */ (document.getElementById("moreMenu"));
@@ -199,6 +203,8 @@ const queueCount = /** @type {HTMLSpanElement} */ (document.getElementById("queu
 const editBar = /** @type {HTMLDivElement} */ (document.getElementById("editBar"));
 const editBarText = /** @type {HTMLSpanElement} */ (document.getElementById("editBarText"));
 const COMPOSER_PLACEHOLDER = "Ask for a change, or annotate the artifact";
+// The message box starts at one line and grows with what is typed, up to 160px, then scrolls.
+const COMPOSER_MAX_HEIGHT = 160;
 const promptInput = /** @type {HTMLDivElement} */ (document.getElementById("promptInput"));
 const whiteboardOverlay = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardOverlay"));
 const whiteboardFrame = /** @type {HTMLIFrameElement} */ (document.getElementById("whiteboardFrame"));
@@ -329,9 +335,9 @@ const SNAPSHOT_REQUEST_TIMEOUT_MS = 5000;
 const SEND_STALLED_COPY =
   "Still trying to send. Your feedback is saved in this tab. Keep this tab open while Lavish catches up, and check that the server is running.";
 const SEND_FAILED_COPY =
-  "Could not send. Your feedback is still queued in this tab. Check that Lavish is running, then click Send to Agent to retry.";
+  "Could not send. Your feedback is still queued in this tab. Check that Lavish is running, then click Send to retry.";
 const TERMINAL_SEND_FAILED_COPY =
-  "Could not send. Your terminal feedback is still queued in this tab. Check that Lavish is running, then click Send & End to retry the same batch.";
+  "Could not send. Your terminal feedback is still queued in this tab. Check that Lavish is running, then choose Send and end session to retry the same batch.";
 const HEALTH_NO_ANSWER_TITLE = "Lavish did not answer.";
 const HEALTH_NO_ANSWER_COPY =
   "Lavish did not answer the check, so this page cannot tell whether it is running. Try again in a moment.";
@@ -734,6 +740,7 @@ function updateSendState() {
   frame.inert = ended || terminalReserved;
   sendButton.disabled = ended || terminalReserved;
   sendAndEndButton.disabled = ended || Boolean(terminalSubmission?.inFlight);
+  sendMoreButton.disabled = sendAndEndButton.disabled;
   annotationSwitch.disabled = ended || terminalReserved;
   modeInteractButton.disabled = annotationSwitch.disabled;
   railAnnotateButton.disabled = annotationSwitch.disabled;
@@ -1076,6 +1083,7 @@ function setMenuOpen(button, menu, open) {
 
 function closeMenus() {
   setMenuOpen(moreButton, moreMenu, false);
+  setMenuOpen(sendMoreButton, sendMenu, false);
 }
 
 function toggleMenu(button, menu) {
@@ -1461,11 +1469,26 @@ function setAgentPresence(state) {
 
   if (!workingBubble) {
     workingBubble = document.createElement("div");
-    workingBubble.className = "bubble agent agent-working";
-    workingBubble.innerHTML = SPINNER_SVG + "<span>Working...</span>";
+    workingBubble.className = "msg-agent agent-working";
+    workingBubble.innerHTML =
+      agentHeaderHtml() +
+      '<div class="working-line">Working on it</div><div class="working-row">' +
+      SPINNER_SVG +
+      "<span>" +
+      escapeHtml(workingTopic()) +
+      '</span><span class="working-status">Running</span></div>';
     chatLog.appendChild(workingBubble);
   }
   scrollElementIntoView(workingBubble);
+}
+
+// What the agent is reading, from the last batch this tab sent: "Reading 2 annotations".
+let lastSentBatch = { annotations: 0, messages: 0 };
+function workingTopic() {
+  const { annotations, messages } = lastSentBatch;
+  if (annotations) return "Reading " + annotations + (annotations === 1 ? " annotation" : " annotations");
+  if (messages > 1) return "Reading " + messages + " messages";
+  return "Reading your message";
 }
 
 function setHandoffSuperseded(visible) {
@@ -1634,7 +1657,7 @@ function setSuggestions(items) {
 }
 
 function renderSuggestions() {
-  const show = suggestions.length > 0 && !ended && !chatInput.value.trim();
+  const show = suggestions.length > 0 && !ended && !chatInput.value.trim() && marks.length === 0;
   chatSuggestions.hidden = !show;
   chatSuggestions.innerHTML = show
     ? suggestions
@@ -1656,6 +1679,7 @@ chatSuggestions.addEventListener("click", (event) => {
   const text = button ? suggestions[Number(button.dataset.suggestionIndex)] : undefined;
   if (typeof text !== "string" || ended) return;
   chatInput.value = text;
+  autosizeChatInput();
   chatInput.focus();
   hideSendHint();
   renderSuggestions();
@@ -1860,7 +1884,8 @@ function pulseSheetDock() {
 
 function noteAgentReply(text) {
   if (isRailLayout()) {
-    railHasUnread = true;
+    railUnreadCount += 1;
+    railUnreadCountText.textContent = String(railUnreadCount);
     railUnread.dataset.open = "true";
   }
   if (!isDockLayout() || sheetOpen) return;
@@ -2019,6 +2044,7 @@ const panelResizer = /** @type {HTMLDivElement} */ (document.getElementById("pan
 const railOpenButton = /** @type {HTMLButtonElement} */ (document.getElementById("railOpen"));
 const railPeekButton = /** @type {HTMLButtonElement} */ (document.getElementById("railPeek"));
 const railUnread = /** @type {HTMLSpanElement} */ (document.getElementById("railUnread"));
+const railUnreadCountText = /** @type {HTMLSpanElement} */ (document.getElementById("railUnreadCount"));
 const panelSeeThrough = /** @type {HTMLButtonElement} */ (document.getElementById("panelSeeThrough"));
 const layoutOptionButtons = /** @type {Record<string, HTMLElement>} */ ({
   left: document.getElementById("layoutLeft"),
@@ -2028,7 +2054,8 @@ const layoutOptionButtons = /** @type {Record<string, HTMLElement>} */ ({
 });
 /** @type {{ side: "left" | "right", mode: "sidebar" | "rail" | "peek", width: number, peekHeight: number }} */
 let chatLayout = readChatLayout();
-let railHasUnread = false;
+// Replies that landed while the conversation was a rail, shown as a number on its chat button.
+let railUnreadCount = 0;
 /** @type {{ pointerId: any } | null} */
 let panelResize = null;
 /** @type {{ pointerId: any, startY: number, startHeight: number, moved: boolean } | null} */
@@ -2095,8 +2122,8 @@ function applyChatLayout() {
     button.setAttribute("aria-pressed", String(pressed));
   }
   panelResizer.setAttribute("aria-valuenow", String(chatLayout.width));
-  if (chatLayout.mode !== "rail") railHasUnread = false;
-  railUnread.dataset.open = String(railHasUnread);
+  if (chatLayout.mode !== "rail") railUnreadCount = 0;
+  railUnread.dataset.open = String(railUnreadCount > 0);
   applySheetState();
 }
 
@@ -2229,6 +2256,7 @@ function editQueuedPrompt(index, { reveal = true } = {}) {
   editingPromptId = id;
   editingDraft = String(prompt.prompt || "");
   chatInput.value = editingDraft;
+  autosizeChatInput();
   editFocusPending = true;
   if (isDockLayout()) setSheetOpen(true);
   render();
@@ -2239,7 +2267,10 @@ function endQueuedEdit() {
   const wasEditing = Boolean(editingPromptId);
   editingPromptId = "";
   editingDraft = "";
-  if (wasEditing && composerStash !== null) chatInput.value = composerStash;
+  if (wasEditing && composerStash !== null) {
+    chatInput.value = composerStash;
+    autosizeChatInput();
+  }
   composerStash = null;
 }
 
@@ -2420,6 +2451,7 @@ function renderMarks() {
   const html = marks.map(markChipHtml).join("");
   messageMarks.hidden = marks.length === 0;
   if (html === renderedMarks) return;
+  renderSuggestions();
   renderedMarks = html;
   messageMarks.innerHTML = html;
 }
@@ -2480,6 +2512,7 @@ function queueComposerDraft() {
   persistQueuedPrompts();
   render();
   chatInput.value = "";
+  autosizeChatInput();
   chatAttachmentController.reset();
   hideSendHint();
   renderSuggestions();
@@ -2487,12 +2520,19 @@ function queueComposerDraft() {
 }
 /** @type {HTMLButtonElement} */ (document.getElementById("queueLater")).onclick = queueComposerDraft;
 
-// The send button counts what it will deliver once there is more than one thing: "Send 3 to Agent".
+// The send button counts what it will deliver once there is more than one thing: "Send 3".
 const sendLabel = /** @type {HTMLSpanElement} */ (document.getElementById("sendLabel"));
+function autosizeChatInput() {
+  if (typeof chatInput.scrollHeight !== "number") return;
+  chatInput.style.height = "auto";
+  chatInput.style.height = Math.min(chatInput.scrollHeight, COMPOSER_MAX_HEIGHT) + "px";
+}
+chatInput.addEventListener("input", autosizeChatInput);
+
 function renderSendLabel() {
   const draft = !editingPromptId && Boolean(chatInput.value.trim());
   const pending = queued.length + marks.length + (draft ? 1 : 0);
-  swapText(sendLabel, pending > 1 ? "Send " + pending + " to Agent" : "Send to Agent");
+  swapText(sendLabel, pending > 1 ? "Send " + pending : "Send");
 }
 
 function removeQueuedPrompt(index, event) {
@@ -2838,7 +2878,7 @@ function sendQueued(endAfter) {
   // A pending or failed chip holds back only the COMPOSER message (and an
   // explicit end, which would strand the chips) - queued annotation prompts
   // still deliver, mirroring how the annotation card holds only its own card
-  // open. Gating the whole pipeline here made Send and Send & End silently
+  // open. Gating the whole pipeline here made Send and Send and end session silently
   // deliver nothing while the only signal sat in the composer toolbar.
   const chipsBlocked = chatAttachmentController.hasPending() || chatAttachmentController.hasErrors();
   if (chipsBlocked) chatAttachmentController.noteSendBlocked();
@@ -2860,6 +2900,7 @@ function sendQueued(endAfter) {
       // becomes a sent bubble only when the server's transcript carries it (see submitQueuedOnce).
       render();
       chatInput.value = "";
+      autosizeChatInput();
       chatAttachmentController.reset();
     }
   }
@@ -2881,6 +2922,10 @@ function sendQueued(endAfter) {
     finishTerminalPreparation(terminal, preparations);
     return;
   }
+  lastSentBatch = {
+    annotations: queued.filter((prompt) => Boolean(prompt.selector)).length,
+    messages: queued.length,
+  };
   requestSnapshot("submit", queued.slice(), false, null);
   render();
 }
@@ -3054,7 +3099,7 @@ async function submitQueuedOnce(submission, preserveFailureState = false) {
       }
       if (Array.isArray(data?.warnings)) setLayoutWarnings(data.warnings);
       showQueuedSendFailure(
-        "Could not send because the layout issue selection changed. Your feedback is still queued. Review the current issues, then click Send to Agent to retry.",
+        "Could not send because the layout issue selection changed. Your feedback is still queued. Review the current issues, then click Send to retry.",
         { kind: "submission", operation: submission },
       );
       if (submission.terminal) releaseTerminalSubmission(submission.terminal);
@@ -5339,6 +5384,7 @@ function renderPointerMode() {
   annotationSwitch.setAttribute("aria-pressed", String(annotation));
   modeInteractButton.setAttribute("aria-pressed", String(!annotation));
   railAnnotateButton.setAttribute("aria-pressed", String(annotation));
+  composerAnnotateButton.setAttribute("aria-pressed", String(annotation));
 }
 
 annotationSwitch.onclick = toggleAnnotationMode;
@@ -5346,10 +5392,16 @@ modeInteractButton.onclick = () => {
   if (annotation) toggleAnnotationMode();
 };
 railAnnotateButton.onclick = toggleAnnotationMode;
+composerAnnotateButton.onclick = toggleAnnotationMode;
 renderPointerMode();
 
 sendButton.onclick = () => sendQueued(false);
-sendAndEndButton.onclick = () => sendQueued(true);
+sendAndEndButton.onclick = () => {
+  setMenuOpen(sendMoreButton, sendMenu, false);
+  sendQueued(true);
+};
+// Send and end session lives under the Send button's chevron, one click further from a slip.
+sendMoreButton.onclick = () => toggleMenu(sendMoreButton, sendMenu);
 moreButton.onclick = () => {
   closeWarningsDrawer();
   closeRevisionsDrawer();
@@ -5520,6 +5572,7 @@ if (outdatedDismissButton) {
 document.addEventListener("mousedown", (event) => {
   const target = /** @type {Node} */ (event.target);
   if (!moreMenu.hidden && !moreWrap.contains(target)) setMenuOpen(moreButton, moreMenu, false);
+  if (!sendMenu.hidden && !sendSplit.contains(target)) setMenuOpen(sendMoreButton, sendMenu, false);
   if (warningsDrawerOpen && !warningsWrap.contains(target)) closeWarningsDrawer();
   if (revisionsDrawerOpen && !revisionsWrap.contains(target)) closeRevisionsDrawer();
 });
@@ -6266,7 +6319,7 @@ document.addEventListener("keydown", (event) => {
       closeRevisionsDrawer({ restoreFocus: true });
     } else if (warningsDrawerOpen) {
       closeWarningsDrawer({ restoreFocus: true });
-    } else if (!moreMenu.hidden) {
+    } else if (!moreMenu.hidden || !sendMenu.hidden) {
       closeMenus();
     } else if (sheetOpen && isDockLayout()) {
       setSheetOpen(false);
@@ -6274,6 +6327,17 @@ document.addEventListener("keydown", (event) => {
       closeMenus();
     }
   }
+});
+// A toggles annotate while focus is not in a field, as in the prototype. Only the chrome listens:
+// keys typed into the artifact belong to the artifact.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "a" && event.key !== "A") return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.defaultPrevented) return;
+  const active = /** @type {HTMLElement | null} */ (document.activeElement);
+  if (active && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || "") || active.isContentEditable)) return;
+  if (ended) return;
+  event.preventDefault();
+  toggleAnnotationMode();
 });
 // Capture phase so the mode hotkey fires no matter where focus is in the chrome - including
 // mid-keystroke in chatInput or an annotation-card textarea - without disturbing normal typing.

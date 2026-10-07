@@ -1187,14 +1187,9 @@ body {
   margin-top: 6px;
   color: var(--danger);
 }
-.bubble.agent-working {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg-muted);
-}
-/* The AI Elements shimmer on "Working...": a highlight sweeps the text while the agent is busy. */
-.bubble.agent-working span:last-child {
+/* The prototype's working message: the agent's header, a shimmering line, and a Running row. */
+.agent-working .working-line {
+  font-size: 13px;
   background: linear-gradient(90deg, var(--fg-faint) 0%, var(--fg) 50%, var(--fg-faint) 100%) 0 0 / 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -1209,8 +1204,26 @@ body {
     background-position: -200% 0;
   }
 }
+.agent-working .working-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.agent-working .working-row .spinner {
+  width: 14px;
+  height: 14px;
+}
+.agent-working .working-status {
+  margin-left: auto;
+  color: var(--fg-faint);
+}
 @media (prefers-reduced-motion: reduce) {
-  .bubble.agent-working span:last-child {
+  .agent-working .working-line {
     animation: none;
     color: var(--fg-muted);
     background: none;
@@ -1725,6 +1738,23 @@ body {
   color: var(--danger);
 }
 .chat-attachment-chip button,
+.chat-annotate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font: 500 12px/1 var(--font-sans);
+  cursor: pointer;
+}
+.chat-annotate:hover,
+.chat-annotate[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--fg);
+}
 .chat-attach {
   display: inline-grid;
   place-items: center;
@@ -1777,7 +1807,10 @@ body {
 }
 .prompt-input textarea {
   grid-area: input;
-  min-height: 44px;
+  min-height: 0;
+  max-height: 160px;
+  resize: none;
+  overflow-y: auto;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -1864,6 +1897,36 @@ body {
   color: var(--fg-faint);
   font-size: 11px;
   line-height: 1.35;
+}
+/* The prototype's split Send: the main button, then a chevron that opens Send and end session. */
+.send-split {
+  position: relative;
+  display: inline-flex;
+}
+.send-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.send-main > svg {
+  flex-shrink: 0;
+}
+.send-more {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  padding: 0;
+  border-left: 1px solid color-mix(in oklch, var(--accent-ink) 25%, transparent);
+}
+.send-more svg {
+  width: 14px;
+  height: 14px;
+}
+.send-menu {
+  right: 0;
+  bottom: calc(100% + 6px);
+  width: max-content;
+  min-width: 200px;
 }
 .actions {
   display: flex;
@@ -2008,13 +2071,17 @@ body.layout-gate-active iframe#artifact {
 /* The unread mark is the notification badge recipe (see Motion): it stays mounted and data-open
    pops it in and out. */
 .rail-unread.t-badge {
-  top: 6px;
-  right: 6px;
+  top: 1px;
+  right: 1px;
 }
 .rail-unread .t-badge-dot {
-  width: 7px;
-  height: 7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   background: var(--accent);
+  color: var(--accent-ink);
+  font: 600 10px/16px var(--font-sans);
+  text-align: center;
 }
 /* After the shared button styles above, so the hidden default wins outside the desktop block. */
 .layout-switch,
@@ -2105,6 +2172,28 @@ body.layout-gate-active iframe#artifact {
   }
   .panel-resizer:focus-visible {
     outline: none;
+  }
+  /* The grip shows on hover and while dragging, centered on the edge. */
+  .panel-grip {
+    position: absolute;
+    top: 50%;
+    left: -1px;
+    display: grid;
+    place-items: center;
+    width: 12px;
+    height: 28px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg-faint);
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease);
+    pointer-events: none;
+  }
+  .panel-resizer:hover .panel-grip,
+  .panel-resizer:focus-visible .panel-grip,
+  body.is-resizing-panel .panel-grip {
+    opacity: 1;
   }
   body.is-resizing-panel,
   body.is-resizing-panel * {

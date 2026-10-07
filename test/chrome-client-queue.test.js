@@ -351,6 +351,7 @@ async function createChromeHarness({
   element("imageZoom").hidden = true;
   element("videoViewer").hidden = true;
   element("moreMenu").hidden = true;
+  element("sendMenu").hidden = true;
   element("warningsDrawer").hidden = true;
   element("revisionsDrawer").hidden = true;
   const whiteboardFrame = element("whiteboardFrame");
@@ -1152,7 +1153,7 @@ test("a failed terminal-only end shows retry guidance", async () => {
   assert.equal(chrome.element("sendAndEnd").disabled, false);
   assert.equal(chrome.element("sendHint").hidden, false);
   assert.equal(chrome.element("sendHint").classList.contains("persistent"), true);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
 });
 
 test("a failed in-flight POST preserves and runs a completed later Send & End", async () => {
@@ -1616,8 +1617,8 @@ test("a transient terminal failure names Send & End as the retry action", async 
 
   assert.equal(chrome.element("send").disabled, true);
   assert.equal(chrome.element("sendAndEnd").disabled, false);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
-  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to Agent/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
+  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to retry/i);
 });
 
 test("an older successful send preserves newer terminal retry guidance", async () => {
@@ -1648,14 +1649,14 @@ test("an older successful send preserves newer terminal retry guidance", async (
   await flushPromises();
 
   assert.equal(promptPostCount, 2);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
   releaseFirstPost();
   await flushPromises();
   await flushPromises();
 
   assert.equal(chrome.element("sendHint").hidden, false);
   assert.equal(chrome.element("sendHint").classList.contains("persistent"), true);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
 });
 
 test("an older late Send failure preserves newer terminal retry guidance", async () => {
@@ -1684,7 +1685,7 @@ test("an older late Send failure preserves newer terminal retry guidance", async
 
   assert.equal(posts.length, 1);
   assert.equal(posts[0].endSession, true);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
 
   chrome.sendFrameMessage({
     type: "lavish:snapshot",
@@ -1698,8 +1699,8 @@ test("an older late Send failure preserves newer terminal retry guidance", async
   assert.equal(posts[1].endSession, undefined);
   assert.equal(chrome.element("send").disabled, true);
   assert.equal(chrome.element("sendAndEnd").disabled, false);
-  assert.match(chrome.element("sendHint").textContent, /click Send & End to retry the same batch/i);
-  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to Agent to retry/i);
+  assert.match(chrome.element("sendHint").textContent, /choose Send and end session to retry the same batch/i);
+  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to retry/i);
 });
 
 test("a failed timeout fallback keeps the queue and a timely retry sends it once", async () => {
@@ -1719,7 +1720,7 @@ test("a failed timeout fallback keeps the queue and a timely retry sends it once
 
   assert.equal(chrome.element("sendHint").hidden, false);
   assert.match(chrome.element("sendHint").textContent, /feedback is still queued/i);
-  assert.match(chrome.element("sendHint").textContent, /click Send to Agent to retry/i);
+  assert.match(chrome.element("sendHint").textContent, /click Send to retry/i);
   assert.deepEqual(
     chrome.queued().map((prompt) => prompt.prompt),
     ["Retry me"],
@@ -3287,7 +3288,7 @@ test("an older failed send cannot overwrite a newer layout preparation failure",
   assert.equal(chrome.element("sendHint").hidden, false);
   assert.equal(chrome.element("sendHint").classList.contains("persistent"), true);
   assert.match(chrome.element("sendHint").textContent, /could not prepare the selected layout fixes/i);
-  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to Agent to retry/i);
+  assert.doesNotMatch(chrome.element("sendHint").textContent, /click Send to retry/i);
 });
 
 test("a successful retry of the failed preparation clears its stale error", async () => {
@@ -9084,6 +9085,9 @@ test("rail mode collapses the panel and counts replies until it is opened", asyn
 
   chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Renamed the payment step." }) });
   assert.equal(chrome.element("railUnread").dataset.open, "true");
+  assert.equal(chrome.element("railUnreadCount").textContent, "1");
+  chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Tightened the cards." }) });
+  assert.equal(chrome.element("railUnreadCount").textContent, "2");
 
   chrome.element("railOpen").dispatch("click", {});
   assert.equal(layoutState(chrome).mode, "sidebar");
@@ -9684,20 +9688,20 @@ test("the send label counts what it will deliver once there is more than one", a
   input.value = "One";
   input.dispatch("input", {});
   settle();
-  assert.equal(label.textContent, "Send to Agent");
+  assert.equal(label.textContent, "Send");
 
   chrome.element("queueLater").onclick();
   input.value = "Two";
   input.dispatch("input", {});
   settle();
-  assert.equal(label.textContent, "Send 2 to Agent");
+  assert.equal(label.textContent, "Send 2");
 
   chrome.element("queueLater").onclick();
   settle();
-  assert.equal(label.textContent, "Send 2 to Agent");
+  assert.equal(label.textContent, "Send 2");
   queueHeadingNote(chrome);
   settle();
-  assert.equal(label.textContent, "Send 3 to Agent");
+  assert.equal(label.textContent, "Send 3");
 });
 
 test("the queue list collapses to its header and opens again", async () => {
@@ -9742,7 +9746,7 @@ test("marked blocks wait in the message box as numbered chips and leave with the
   chrome.element("chatInput").value = "Make [2] as wide as [3]";
   chrome.element("chatInput").dispatch("input", {});
   chrome.runTimers(200);
-  assert.equal(chrome.element("sendLabel").textContent, "Send 4 to Agent");
+  assert.equal(chrome.element("sendLabel").textContent, "Send 4");
 
   chrome.element("queueLater").onclick();
   assert.deepEqual(
@@ -9806,4 +9810,66 @@ test("an answer the artifact queues is acknowledged by ack id, and the id never 
   queueHeadingNote(chrome);
   assert.deepEqual(acks(), ["q1", "q2"]);
   assert.equal(chrome.queued().length, 2);
+});
+
+test("A toggles annotate outside a field, and the composer has its own Annotate button", async () => {
+  const chrome = await createChromeHarness();
+  const pressed = () =>
+    chrome.element("composerAnnotate").getAttribute?.("aria-pressed") ??
+    chrome.element("composerAnnotate")["aria-pressed"];
+  assert.equal(pressed(), "true");
+
+  const event = chrome.dispatchDocumentKeydown({ key: "a" });
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(pressed(), "false");
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false");
+
+  chrome.element("chatInput").tagName = "TEXTAREA";
+  chrome.element("chatInput").focus();
+  assert.equal(chrome.dispatchDocumentKeydown({ key: "a" }).defaultPrevented, false, "typing an a stays typing");
+  assert.equal(pressed(), "false");
+  chrome.element("chatInput").blur?.();
+
+  assert.equal(chrome.dispatchDocumentKeydown({ key: "a", ctrlKey: true }).defaultPrevented, false);
+  chrome.element("composerAnnotate").onclick();
+  assert.equal(pressed(), "true");
+});
+
+test("suggested replies step aside while marks wait in the message box", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  chrome.sendFrameMessage({
+    type: "lavish:suggestions",
+    artifact_load_token: chrome.artifactLoadToken(),
+    items: ["Approve"],
+  });
+  assert.equal(chrome.element("chatSuggestions").hidden, false);
+  chrome.sendFrameMessage({
+    type: "lavish:addMark",
+    artifact_load_token: chrome.artifactLoadToken(),
+    prompt: { prompt: "", selector: "main > p", tag: "p", text: "Intro copy" },
+  });
+  assert.equal(chrome.element("chatSuggestions").hidden, true);
+  chrome.element("messageMarks").dispatch("click", {
+    target: { closest: (selector) => (selector === ".mark-chip-remove" ? { dataset: { index: "0" } } : null) },
+  });
+  assert.equal(chrome.element("chatSuggestions").hidden, false);
+});
+
+test("Send and end session sits under the Send button's chevron and closes its menu when chosen", async () => {
+  const chrome = await createChromeHarness();
+  const more = chrome.element("sendMore");
+  const menu = chrome.element("sendMenu");
+  menu.hidden = true;
+
+  more.onclick();
+  assert.equal(menu.hidden, false);
+  assert.equal(more["aria-expanded"] ?? more.getAttribute?.("aria-expanded"), "true");
+  chrome.dispatchDocumentKeydown({ key: "Escape" });
+  assert.equal(menu.hidden, true);
+
+  more.onclick();
+  chrome.element("chatInput").value = "Ship it";
+  chrome.element("sendAndEnd").onclick();
+  assert.equal(menu.hidden, true);
+  assert.equal(chrome.queued().at(-1)?.prompt, "Ship it");
 });

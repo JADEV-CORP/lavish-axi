@@ -1099,35 +1099,52 @@ test("chrome shows agent working state when a previous poll has released", async
   const js = await chromeClientSource();
 
   assert.match(js, /agent-presence/);
-  assert.match(js, /Working\.\.\./);
+  assert.match(js, /<div class="working-line">Working on it<\/div><div class="working-row">/);
+  assert.match(js, /<span class="working-status">Running<\/span>/);
   assert.match(js, /<svg class="spinner"[^>]*><path d="M21 12a9 9 0 1 1-6\.219-8\.56"\/><\/svg>/);
 });
 
-test("composer offers two always-visible top-level send actions", async () => {
+test("composer sends through the prototype's split Send button, with Send and end session under its chevron", async () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
   const css = await chromeCssSource();
 
-  assert.match(html, /class="button" id="send"><span class="t-text-swap" id="sendLabel">Send to Agent<\/span>/);
+  // Owner decision 2026-10-07 (AB#3259): the prototype's split button. Upstream #153 promoted Send &
+  // End to a visible button; the owner chose the split knowing that.
+  assert.match(
+    html,
+    /<button class="button send-main" id="send"><svg[^>]*>[\s\S]*?<\/svg><span class="t-text-swap" id="sendLabel">Send<\/span><\/button>/,
+  );
   assert.match(
     html,
     /<button class="button button-ghost" id="queueLater" type="button" title="Queue for later \(Ctrl\+Q\)">Queue<\/button>/,
   );
-  assert.match(html, /class="button button-danger" id="sendAndEnd"[^<]*>.*Send &amp; End</);
-  // One prompt box: chips, the textarea, then a toolbar row with attach on the left and both send
-  // actions on the right. The hint sits right above the box, next to the actions it explains.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden><\/div><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
+    /<button class="button send-more" id="sendMore" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sendMenu" aria-label="More send options" title="More send options">/,
+  );
+  assert.match(
+    html,
+    /<div class="menu send-menu t-dropdown" data-origin="bottom-right" id="sendMenu" role="menu" hidden><button class="menu-item danger" id="sendAndEnd" type="button" role="menuitem"><svg[^>]*>[\s\S]*?<\/svg><span>Send and end session<\/span><\/button><\/div>/,
+  );
+  // One prompt box: marks, chips, the textarea, then a toolbar row with attach and Annotate on the
+  // left and the send actions on the right. The hint sits right above the box.
+  assert.match(
+    html,
+    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden><\/div><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"><\/textarea>/,
   );
   assert.match(
     html,
     /<button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">/,
   );
+  assert.match(
+    html,
+    /<button class="chat-annotate" id="composerAnnotate" type="button" aria-pressed="true" title="Annotate \(A\)">/,
+  );
   // The actions end the prompt box. Only the key hints follow them, and the phone layout hides
   // those, so it can still flatten the box with display: contents and keep the actions sticky.
   assert.match(
     html,
-    /<div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">.*<button class="button" id="send"><span class="t-text-swap" id="sendLabel">Send to Agent<\/span><\/button><\/div><\/div><div class="composer-hints" aria-hidden="true">.*?<\/div><\/div><\/aside>/,
+    /<div class="actions" id="sendActions"><button class="button button-ghost" id="queueLater"[\s\S]*?<\/div><\/div><\/div><\/div><div class="composer-hints" aria-hidden="true">.*?<\/div><\/div><\/aside>/,
   );
   assert.match(css, /\.composer-hints\{display:none;?\}/);
   assert.match(
@@ -1135,10 +1152,7 @@ test("composer offers two always-visible top-level send actions", async () => {
     /\.prompt-input\{display:grid;grid-template-columns:minmax\(0,1fr\) auto;grid-template-areas:"marks marks" "attachments attachments" "input input" "tools actions"/,
   );
   assert.match(css, /@media \(max-width:860px\)\{[\s\S]*\.prompt-input\{display:contents;?\}/);
-  assert.doesNotMatch(html, /id="sendCaret"/);
-  assert.doesNotMatch(html, /id="sendMenu"/);
-  assert.doesNotMatch(html, /id="sendFromMenu"/);
-  assert.match(css, /\.button-danger\{[^}]*color:var\(--danger\)/);
+  assert.match(css, /\.send-menu\{[^}]*bottom:calc\(100% \+ 6px\)/);
   assert.match(css, /\.actions\{[^}]*min-width:0/);
 });
 
@@ -6894,7 +6908,7 @@ test("chrome offers the conversation layouts and a keyboard-operable resize hand
   }
   assert.match(
     html,
-    /<div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><\/div>/,
+    /<div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><span class="panel-grip" aria-hidden="true"><svg[^>]*>[\s\S]*?<\/svg><\/span><\/div>/,
   );
   assert.match(html, /<div class="panel-rail" id="panelRail">/);
   assert.match(
@@ -6903,7 +6917,7 @@ test("chrome offers the conversation layouts and a keyboard-operable resize hand
   );
   assert.match(
     html,
-    /<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot"><\/span><\/span>/,
+    /<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="railUnreadCount">1<\/span><\/span>/,
   );
   assert.match(
     html,
