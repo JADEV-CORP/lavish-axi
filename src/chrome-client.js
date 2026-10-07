@@ -6452,6 +6452,88 @@ document.addEventListener("keydown", (event) => {
     }
   }
 });
+// shadcn/ui Tooltip, without the arrow, in place of the browser's native title tooltip (#3267).
+// Any element with a title gets it: the title moves to data-tooltip the first time the element is
+// pointed at or focused, so the native one never shows, and a title the code sets later moves the
+// same way. Screen readers keep the words: as the aria-label when the element has no other name,
+// otherwise as its aria-description.
+const uiTooltip = /** @type {HTMLDivElement} */ (document.getElementById("uiTooltip"));
+const TOOLTIP_OFFSET = 4;
+const TOOLTIP_MARGIN = 6;
+let tooltipAnchor = null;
+
+function tooltipText(el) {
+  if (!el || typeof el.getAttribute !== "function") return "";
+  const title = el.getAttribute("title");
+  if (title) {
+    el.removeAttribute("title");
+    el.setAttribute("data-tooltip", title);
+    const named =
+      el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || String(el.textContent || "").trim();
+    if (!named) el.setAttribute("aria-label", title);
+    else if (named !== title && !el.getAttribute("aria-description")) el.setAttribute("aria-description", title);
+  }
+  return el.getAttribute("data-tooltip") || "";
+}
+
+function tooltipTargetOf(node) {
+  if (!node || typeof node.closest !== "function") return null;
+  const el = node.closest("[title],[data-tooltip]");
+  return el && el !== uiTooltip ? el : null;
+}
+
+function showTooltip(el) {
+  const text = tooltipText(el);
+  if (!text) return hideTooltip();
+  tooltipAnchor = el;
+  uiTooltip.textContent = text;
+  uiTooltip.hidden = false;
+  uiTooltip.classList.remove("is-closing");
+  const rect = el.getBoundingClientRect();
+  const width = uiTooltip.offsetWidth;
+  const height = uiTooltip.offsetHeight;
+  // Above the element, as shadcn opens by default; below when there is no room above.
+  const side = rect.top - height - TOOLTIP_OFFSET >= TOOLTIP_MARGIN ? "top" : "bottom";
+  const top = side === "top" ? rect.top - height - TOOLTIP_OFFSET : rect.bottom + TOOLTIP_OFFSET;
+  const centered = rect.left + rect.width / 2 - width / 2;
+  const left = Math.min(Math.max(TOOLTIP_MARGIN, centered), window.innerWidth - width - TOOLTIP_MARGIN);
+  uiTooltip.style.left = Math.round(left) + "px";
+  uiTooltip.style.top = Math.round(top) + "px";
+  uiTooltip.dataset.side = side;
+  uiTooltip.classList.remove("is-open");
+  void uiTooltip.offsetWidth;
+  uiTooltip.classList.add("is-open");
+}
+
+function hideTooltip() {
+  tooltipAnchor = null;
+  if (uiTooltip.hidden) return;
+  uiTooltip.hidden = true;
+  uiTooltip.classList.remove("is-open");
+}
+
+document.addEventListener("pointerover", (event) => {
+  if (/** @type {PointerEvent} */ (event).pointerType === "touch") return;
+  const el = tooltipTargetOf(/** @type {Element | null} */ (event.target));
+  if (el === tooltipAnchor) return;
+  if (el) showTooltip(el);
+  else hideTooltip();
+});
+document.addEventListener("pointerout", (event) => {
+  const next = tooltipTargetOf(/** @type {Element | null} */ (event.relatedTarget));
+  if (tooltipAnchor && next !== tooltipAnchor) hideTooltip();
+});
+document.addEventListener("focusin", (event) => {
+  const el = tooltipTargetOf(/** @type {Element | null} */ (event.target));
+  if (el && el.matches?.(":focus-visible")) showTooltip(el);
+});
+document.addEventListener("focusout", () => hideTooltip());
+document.addEventListener("pointerdown", () => hideTooltip(), true);
+document.addEventListener("scroll", () => hideTooltip(), true);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") hideTooltip();
+});
+
 // A toggles annotate while focus is not in a field, as in the prototype. Only the chrome listens:
 // keys typed into the artifact belong to the artifact.
 document.addEventListener("keydown", (event) => {

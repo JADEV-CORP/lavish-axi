@@ -9958,3 +9958,46 @@ test("the editor names the agent a poll reported, on replies and in the sidebar 
   });
   assert.equal(chrome.element("panelAgent").textContent, "Claude Code");
 });
+
+function tooltipTarget(attributes, text = "") {
+  const attrs = new Map(Object.entries(attributes));
+  const el = {
+    textContent: text,
+    getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null),
+    setAttribute: (name, value) => attrs.set(name, String(value)),
+    removeAttribute: (name) => attrs.delete(name),
+    closest: (selector) =>
+      selector === "[title],[data-tooltip]" && (attrs.has("title") || attrs.has("data-tooltip")) ? el : null,
+    getBoundingClientRect: () => ({ left: 100, top: 200, right: 132, bottom: 228, width: 32, height: 28 }),
+    attrs,
+  };
+  return el;
+}
+
+test("a titled control shows the shadcn tooltip instead of the browser's, and keeps its name for screen readers", async () => {
+  const chrome = await createChromeHarness();
+  const tip = chrome.element("uiTooltip");
+  tip.hidden = true;
+  tip.offsetWidth = 140;
+  tip.offsetHeight = 28;
+  const icon = tooltipTarget({ title: "Move to the other side" });
+
+  chrome.dispatchDocumentEvent("pointerover", { target: icon, pointerType: "mouse" });
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.textContent, "Move to the other side");
+  assert.equal(icon.attrs.has("title"), false, "the native tooltip never shows");
+  assert.equal(icon.getAttribute("data-tooltip"), "Move to the other side");
+  assert.equal(icon.getAttribute("aria-label"), "Move to the other side", "an icon-only control keeps a name");
+  assert.equal(tip.dataset.side, "top");
+
+  chrome.dispatchDocumentEvent("pointerout", { target: icon, relatedTarget: null });
+  assert.equal(tip.hidden, true);
+
+  const labelled = tooltipTarget({ title: "Queue for later (Ctrl+Q)" }, "Queue");
+  chrome.dispatchDocumentEvent("pointerover", { target: labelled, pointerType: "mouse" });
+  assert.equal(labelled.getAttribute("aria-label"), null);
+  assert.equal(labelled.getAttribute("aria-description"), "Queue for later (Ctrl+Q)");
+
+  chrome.dispatchDocumentEvent("pointerover", { target: tooltipTarget({ title: "Touch" }), pointerType: "touch" });
+  assert.equal(tip.textContent, "Queue for later (Ctrl+Q)", "touch never opens a tooltip");
+});

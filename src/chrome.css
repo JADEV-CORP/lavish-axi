@@ -3908,3 +3908,43 @@ img.chat-attachment-thumb {
 .panel-agent {
   display: none;
 }
+
+/* shadcn/ui TooltipContent (new-york v4) without the arrow: bg-foreground text-background text-xs
+   px-3 py-1.5, fade-in-0 zoom-in-95 and a 2-unit slide from the side it opens on. Lyra is square. */
+.ui-tooltip {
+  position: fixed;
+  z-index: 200;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 12px));
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--foreground);
+  color: var(--background);
+  font: 400 12px/1.35 var(--font-sans);
+  text-wrap: balance;
+  white-space: pre-line;
+  pointer-events: none;
+}
+.ui-tooltip[hidden] {
+  display: none;
+}
+.ui-tooltip.is-open {
+  animation: ui-tooltip-in 150ms var(--ease) both;
+}
+.ui-tooltip[data-side="top"] {
+  --ui-tooltip-from: 8px;
+}
+.ui-tooltip[data-side="bottom"] {
+  --ui-tooltip-from: -8px;
+}
+@keyframes ui-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--ui-tooltip-from, 0)) scale(0.95);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-tooltip.is-open {
+    animation: none;
+  }
+}
