@@ -53,6 +53,14 @@ Resolve conflicts in favour of upstream behaviour unless the fork deliberately c
 palette hotkey), `src/design-reference.js`, and their tests. Bump the version to `<tag>-jadev.1`, open a PR into
 `main`, and reinstall from the new tarball once it merges.
 
+## Hidden files are not served
+
+Upstream #406 serves every file inside the artifact's folder. The fork also refuses, with a 404, any `/artifact`
+path that has a segment starting with a dot below that folder, so a `.env`, `.git/`, or other hidden file beside an
+artifact is never readable over the network. The artifact's own folder can be hidden (`.lavish/`); only the part
+below it is checked. This lives in `hasHiddenSegment` (`src/artifact-path.js`) and the `/artifact` route; keep it
+when merging upstream changes to either.
+
 ## Telemetry
 
 Upstream's release builds inject an analytics site id at build time. Fork builds do not set

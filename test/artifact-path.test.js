@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { ARTIFACT_HTML_ERROR, artifactTreeRoot, isHtmlPath, resolveAllowedArtifactFile } from "../src/artifact-path.js";
+import {
+  ARTIFACT_HTML_ERROR,
+  artifactTreeRoot,
+  hasHiddenSegment,
+  isHtmlPath,
+  resolveAllowedArtifactFile,
+} from "../src/artifact-path.js";
 
 test("isHtmlPath matches the CLI .html / .htm rule", () => {
   assert.equal(isHtmlPath("report.html"), true);
@@ -87,4 +93,13 @@ test("resolveAllowedArtifactFile refuses a directory whose name looks like HTML"
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("hasHiddenSegment flags any dot-named segment, on either separator", () => {
+  assert.equal(hasHiddenSegment(".env"), true);
+  assert.equal(hasHiddenSegment("assets/.cache/x.css"), true);
+  assert.equal(hasHiddenSegment("assets\\.cache\\x.css"), true);
+  assert.equal(hasHiddenSegment("assets/style.css"), false);
+  assert.equal(hasHiddenSegment("assets/v1.2/x.css"), false);
+  assert.equal(hasHiddenSegment(""), false);
 });

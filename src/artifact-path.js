@@ -23,6 +23,20 @@ export function artifactTreeRoot(file) {
   return path.dirname(file);
 }
 
+/**
+ * Jadev fork: whether a path below the artifact tree names a hidden file or folder (any segment
+ * starting with a dot, on either separator). `/artifact` refuses those, so a `.env` or `.git/`
+ * beside an artifact is never served. Callers pass only the part below the tree root; the root
+ * itself is often a dot-folder such as `.lavish/`.
+ * @param {string} relativePath
+ * @returns {boolean}
+ */
+export function hasHiddenSegment(relativePath) {
+  return String(relativePath || "")
+    .split(/[\\/]/)
+    .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
+}
+
 export class ArtifactPathError extends Error {
   /** @type {"VALIDATION_ERROR"} */
   code = "VALIDATION_ERROR";

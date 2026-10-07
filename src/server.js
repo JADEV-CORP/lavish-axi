@@ -72,7 +72,13 @@ import {
   stateId,
 } from "./paths.js";
 import { detectTailscale } from "./tailscale.js";
-import { artifactTreeRoot, isArtifactPathError, isHtmlPath, resolveAllowedArtifactFile } from "./artifact-path.js";
+import {
+  artifactTreeRoot,
+  hasHiddenSegment,
+  isArtifactPathError,
+  isHtmlPath,
+  resolveAllowedArtifactFile,
+} from "./artifact-path.js";
 import { canonicalFile, SessionStore, sessionKey } from "./session-store.js";
 import { AsyncMutex } from "./async-mutex.js";
 import { generateSharePassword } from "./share-password.js";
@@ -1601,6 +1607,14 @@ export async function serve({
       const file = await resolveArtifactAsset(root, assetPath);
       if (!file) {
         res.status(403).send("Forbidden");
+        return;
+      }
+      // Jadev fork: nothing hidden below the artifact's folder is served, checked on the resolved
+      // path so `assets/../.env` and a symlink named innocently both count. 404, not 403, so the
+      // response does not confirm the file exists.
+      const realRoot = await realpath(root).catch(() => path.resolve(root));
+      if (hasHiddenSegment(path.relative(realRoot, file)) || hasHiddenSegment(path.relative(root, file))) {
+        res.status(404).send("Not found");
         return;
       }
       res.sendFile(file, { dotfiles: "allow" });

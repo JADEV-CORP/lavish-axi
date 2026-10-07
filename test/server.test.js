@@ -7002,3 +7002,41 @@ test("the command palette hotkey works from the artifact and the chrome alike", 
   assert.match(html, /"commandPaletteHotkeyKey":"k"/);
   assert.match(html, /<div class="palette-overlay" id="paletteDialog" role="dialog" aria-modal="true"[^>]*hidden>/);
 });
+
+// Jadev fork (docs/jadev-fork.md): upstream #406 serves every file inside the artifact's tree. The
+// fork also refuses any path below that tree with a segment starting with a dot, so a `.env` or a
+// `.git/` beside an artifact is never readable by whoever can reach the server. The artifact's own
+// folder may itself be a dot-folder; only the part below it is checked.
+test("/artifact refuses hidden files and folders below the artifact directory", async () => {
+  const parent = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const dir = path.join(parent, ".lavish");
+  const artifact = path.join(dir, "artifact.html");
+  await mkdir(path.join(dir, "assets"), { recursive: true });
+  await mkdir(path.join(dir, ".git"), { recursive: true });
+  await mkdir(path.join(dir, ".private"), { recursive: true });
+  await writeFile(artifact, '<!doctype html><html><body style="background:#fff">ok</body></html>');
+  await writeFile(path.join(dir, "assets", "style.css"), "body{}\n");
+  await writeFile(path.join(dir, ".env"), "SECRET=not-real\n");
+  await writeFile(path.join(dir, ".git", "config"), "[core]\n");
+  await writeFile(path.join(dir, ".private", "notes.txt"), "private\n");
+  const server = await serve({ port: 0, stateFile: path.join(parent, "state.json"), version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await (
+      await fetch(`${base}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file: artifact }),
+      })
+    ).json();
+    const status = async (asset) => (await fetch(`${base}/artifact/${key}/${asset}`)).status;
+
+    assert.equal(await status("assets/style.css"), 200, "an ordinary asset in a dot-folder artifact still loads");
+    for (const hidden of [".env", ".git/config", ".private/notes.txt", "assets/../.env", "%2Eenv"]) {
+      assert.equal(await status(hidden), 404, hidden);
+    }
+  } finally {
+    await server.close();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
