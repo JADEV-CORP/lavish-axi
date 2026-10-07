@@ -6017,7 +6017,7 @@ test("plain 'i' and other modifier combos do not toggle annotation mode", async 
 
   const bareEvent = chrome.dispatchDocumentKeydown({ key: "i" });
   assert.equal(bareEvent.defaultPrevented, false);
-  assert.equal(chrome.element("annotation")["aria-pressed"], undefined);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "true", "still annotating");
 
   const shiftEvent = chrome.dispatchDocumentKeydown({ key: "i", shiftKey: true });
   assert.equal(shiftEvent.defaultPrevented, false);
@@ -6041,7 +6041,7 @@ test("chrome client reads the mode toggle hotkey from the session bootstrap", as
 
   const oldHotkeyEvent = chrome.dispatchDocumentKeydown({ key: "i", metaKey: true });
   assert.equal(oldHotkeyEvent.defaultPrevented, false);
-  assert.equal(chrome.element("annotation")["aria-pressed"], undefined);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "true", "still annotating");
 
   const bootstrapHotkeyEvent = chrome.dispatchDocumentKeydown({ key: "K", metaKey: true });
   assert.equal(bootstrapHotkeyEvent.defaultPrevented, true);
@@ -8825,10 +8825,11 @@ test("a sent bubble's receipt follows the entry's seen, working, and done stamps
   assert.ok(bubbles[1].innerHTML.includes(`title="Seen ${seenAt}"`), "a lit step names its time");
   assert.ok(bubbles[1].innerHTML.includes(`aria-label="Seen ${seenAt}"`), "and says it to screen readers");
   assert.ok(bubbles[1].innerHTML.includes('aria-label="Done: not yet"'), "an unlit step still names itself");
-  // The glyphs are the Telegram ack protocol's: eyes, tools, check.
-  assert.match(bubbles[1].innerHTML, /<span class="receipt-step is-done"[^>]*>👀<\/span>/);
-  assert.match(bubbles[1].innerHTML, /<span class="receipt-step is-done"[^>]*>🛠️<\/span>/);
-  assert.match(bubbles[1].innerHTML, /<span class="receipt-step"[^>]*>✅<\/span>/);
+  // The Telegram ack protocol's steps as Lucide icons (#3246): eye, wrench, check. No emoji.
+  assert.match(bubbles[1].innerHTML, /<span class="receipt-step is-done"[^>]*><svg[^>]*><path d="M2\.062 12\.348/);
+  assert.match(bubbles[1].innerHTML, /<span class="receipt-step is-done"[^>]*><svg[^>]*><path d="M14\.7 6\.3/);
+  assert.match(bubbles[1].innerHTML, /<span class="receipt-step"[^>]*><svg[^>]*><path d="M20 6 9 17l-5-5"\/>/);
+  assert.doesNotMatch(bubbles[1].innerHTML, /👀|🛠|✅/u);
 });
 
 test("an unseen bubble's receipt names the live presence and re-renders when it changes", async () => {
@@ -9087,6 +9088,7 @@ test("Peek docks the conversation at the bottom with a live composer and an unre
   assert.equal(chrome.element("panelToggle")["aria-expanded"], "false");
 
   chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "Renamed the payment step." }) });
+  chrome.runTimers(200);
   assert.equal(chrome.element("panelSummary").textContent, "Renamed the payment step.");
   assert.match(String(chrome.element("panelSummary").classList), /is-unread/);
 
@@ -9514,4 +9516,87 @@ test("the scroll-to-latest button appears only when the conversation is scrolled
   scroller.scrollTop = 1490;
   scroller.dispatch("scroll", {});
   assert.equal(button.hidden, true);
+});
+
+test("Interact and the rail's Annotate button drive the same pointer mode as the Annotate half", async () => {
+  const chrome = await createChromeHarness();
+  const annotate = chrome.element("annotation");
+  const interact = chrome.element("modeInteract");
+  const rail = chrome.element("railAnnotate");
+  assert.deepEqual(
+    [annotate["aria-pressed"], interact["aria-pressed"], rail["aria-pressed"]],
+    ["true", "false", "true"],
+  );
+
+  interact.onclick();
+  assert.deepEqual(
+    [annotate["aria-pressed"], interact["aria-pressed"], rail["aria-pressed"]],
+    ["false", "true", "false"],
+  );
+  interact.onclick();
+  assert.equal(annotate["aria-pressed"], "false", "Interact while interacting changes nothing");
+
+  rail.onclick();
+  assert.deepEqual(
+    [annotate["aria-pressed"], interact["aria-pressed"], rail["aria-pressed"]],
+    ["true", "false", "true"],
+  );
+  const modes = chrome.postedToFrame
+    .filter((message) => message.type === "lavish:setAnnotationMode")
+    .map((m) => m.enabled);
+  assert.deepEqual(modes.slice(-2), [false, true]);
+});
+
+test("the conversation header switches sides, collapses to the rail, and Peek goes back to the sidebar", async () => {
+  const { chrome } = await createLayoutHarness();
+  chrome.element("panelSwapSide").onclick();
+  assert.deepEqual([layoutState(chrome).side, layoutState(chrome).mode], ["right", "sidebar"]);
+  chrome.element("panelToRail").onclick();
+  assert.equal(layoutState(chrome).mode, "rail");
+  chrome.element("layoutPeek").dispatch("click", {});
+  const opened = chrome.element("panelToggle")["aria-expanded"];
+  // A click on a header tool inside the Peek head does not also toggle Peek open or closed.
+  chrome
+    .element("panelHead")
+    .dispatch("click", { target: { closest: (selector) => (selector === ".panel-head-tools" ? {} : null) } });
+  assert.equal(chrome.element("panelToggle")["aria-expanded"], opened);
+  chrome.element("peekToSidebar").onclick();
+  assert.deepEqual([layoutState(chrome).side, layoutState(chrome).mode], ["right", "sidebar"]);
+});
+
+test("the dock chevron carries a badge with the number of queued notes", async () => {
+  const chrome = await createChromeHarness();
+  const badge = chrome.element("panelQueued");
+  assert.equal(badge.dataset.open, "false");
+  queueHeadingNote(chrome, "First");
+  queueHeadingNote(chrome, "Second", "main > p");
+  assert.equal(badge.dataset.open, "true");
+  assert.equal(chrome.element("panelQueuedCount").textContent, "2");
+});
+
+test("Revisions names the newest round and the palette can jump to or outline each round", async () => {
+  const chrome = await revisionHarness();
+  sendRevisions(chrome, {
+    revisions: [
+      { id: "r1", label: "Round 1" },
+      { id: "r2", label: "Round 2" },
+    ],
+    marks: [
+      { revision_id: "r1", selector: "#a", tag: "p", excerpt: "A" },
+      { revision_id: "r2", selector: "#b", tag: "p", excerpt: "B" },
+    ],
+  });
+  assert.equal(chrome.element("revisionsLatest").textContent, "r2");
+
+  chrome.dispatchDocumentKeydown({ key: "k", ctrlKey: true });
+  const input = chrome.element("paletteInput");
+  input.value = "r2";
+  input.dispatch("input", {});
+  assert.deepEqual(
+    chrome.element("paletteList").children.map((option) => option.textContent),
+    ["Jump to r2 (Round 2)", "Outline what changed in r2"],
+  );
+  input.dispatch("keydown", { key: "Enter", preventDefault() {}, stopPropagation() {} });
+  chrome.runTimers(0);
+  assert.equal(chrome.postedToFrame.filter((m) => m.type === "lavish:revealElement").at(-1).selector, "#b");
 });

@@ -769,23 +769,26 @@ test("annotation card shadow styles use Lavish design-system variables", () => {
   assert.match(js, /:focus-visible\{outline:2px solid var\(--accent\);outline-offset:2px/);
 });
 
-test("chrome top bar uses an Annotate switch instead of a labeled toggle button", () => {
+test("chrome top bar has the prototype's Interact | Annotate pointer-mode segment", () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
 
-  assert.match(html, /class="annotate-switch" id="annotation"[^>]*aria-pressed="true"/);
-  assert.match(html, /class="switch-track"/);
+  assert.match(
+    html,
+    /<div class="pointer-mode" role="group" aria-label="Pointer mode"><button class="pointer-option" id="modeInteract" type="button" aria-pressed="false"[^>]*>.*?<span>Interact<\/span><\/button><button class="pointer-option annotate-switch" id="annotation" type="button" aria-pressed="true"/,
+  );
   assert.match(html, />Annotate</);
+  assert.doesNotMatch(html, /switch-track/);
   assert.doesNotMatch(html, /Annotation: On/);
   assert.doesNotMatch(html, /Inspect/);
 });
 
-test("annotate switch shows a brass track and ink knob when enabled", async () => {
+test("the pressed half of the pointer-mode segment is the shaded one", async () => {
   const js = await chromeClientSource();
   const css = await chromeCssSource();
 
-  assert.match(css, /\.annotate-switch\[aria-pressed="true"\] \.switch-track\{background:var\(--accent\)/);
-  assert.match(css, /\.annotate-switch\[aria-pressed="true"\] \.switch-knob\{[^}]*background:var\(--accent-ink\)/);
+  assert.match(css, /\.pointer-option\[aria-pressed="true"\]\{background:var\(--muted\);color:var\(--fg\)/);
   assert.match(js, /annotationSwitch\.setAttribute\("aria-pressed", String\(annotation\)\)/);
+  assert.match(js, /modeInteractButton\.setAttribute\("aria-pressed", String\(!annotation\)\)/);
 });
 
 test("chrome declares the Lavish design-system tokens", async () => {

@@ -123,6 +123,8 @@ const panelScrim = /** @type {HTMLDivElement} */ (document.getElementById("panel
 const sendButton = /** @type {HTMLButtonElement} */ (document.getElementById("send"));
 const sendAndEndButton = /** @type {HTMLButtonElement} */ (document.getElementById("sendAndEnd"));
 const annotationSwitch = /** @type {HTMLButtonElement} */ (document.getElementById("annotation"));
+const modeInteractButton = /** @type {HTMLButtonElement} */ (document.getElementById("modeInteract"));
+const railAnnotateButton = /** @type {HTMLButtonElement} */ (document.getElementById("railAnnotate"));
 const moreWrap = /** @type {HTMLDivElement} */ (document.getElementById("moreWrap"));
 const moreButton = /** @type {HTMLButtonElement} */ (document.getElementById("moreButton"));
 const moreMenu = /** @type {HTMLDivElement} */ (document.getElementById("moreMenu"));
@@ -185,6 +187,7 @@ const warningsQueueButton = /** @type {HTMLButtonElement} */ (document.getElemen
 const revisionsWrap = /** @type {HTMLDivElement} */ (document.getElementById("revisionsWrap"));
 const revisionsButton = /** @type {HTMLButtonElement} */ (document.getElementById("revisionsButton"));
 const revisionsCount = /** @type {HTMLSpanElement} */ (document.getElementById("revisionsCount"));
+const revisionsLatest = /** @type {HTMLSpanElement} */ (document.getElementById("revisionsLatest"));
 const revisionsDrawer = /** @type {HTMLDivElement} */ (document.getElementById("revisionsDrawer"));
 const revisionsSummary = /** @type {HTMLParagraphElement} */ (document.getElementById("revisionsSummary"));
 const revisionsList = /** @type {HTMLDivElement} */ (document.getElementById("revisionsList"));
@@ -715,9 +718,19 @@ function render() {
     }
   }
   postQueuedAnchors();
+  renderQueuedBadge();
   updateSendState();
   scrollPanelToBottom();
   renderSheetSummary();
+}
+
+// How many notes wait to be sent, on the dock's chevron (Peek and the phone): the notification
+// badge recipe, so it pops in with the first and out with the last.
+const panelQueued = /** @type {HTMLSpanElement} */ (document.getElementById("panelQueued"));
+const panelQueuedCount = /** @type {HTMLSpanElement} */ (document.getElementById("panelQueuedCount"));
+function renderQueuedBadge() {
+  if (queued.length) panelQueuedCount.textContent = String(queued.length);
+  panelQueued.dataset.open = String(queued.length > 0);
 }
 
 function updateSendState() {
@@ -729,6 +742,8 @@ function updateSendState() {
   sendButton.disabled = ended || terminalReserved;
   sendAndEndButton.disabled = ended || Boolean(terminalSubmission?.inFlight);
   annotationSwitch.disabled = ended || terminalReserved;
+  modeInteractButton.disabled = annotationSwitch.disabled;
+  railAnnotateButton.disabled = annotationSwitch.disabled;
   chatInput.disabled = ended || terminalReserved;
   chatAttachButton.disabled = ended || terminalReserved;
   endButton.disabled = ended || terminalReserved;
@@ -1187,10 +1202,23 @@ function replyPartsHtml(parts) {
 // Delivery receipt (docs/delivery-acks.md): the per-note view of what the server observed. Seen,
 // Working, and Done are stamps on the entry, so the row is derived from it on every render and
 // never tracked here. Before Seen, the row says why, from the presence the live stream reports.
-// The three steps are the emoji of the Telegram ack protocol the receipt mirrors (seen, working,
-// done); a step that has not happened is the same glyph dimmed, and every step carries its label
-// and time as `title` and `aria-label`, so hover and screen readers both say the word.
-const RECEIPT_EMOJI = { Seen: "\u{1F440}", Working: "\u{1F6E0}️", Done: "✅" };
+// The three steps mirror the Telegram ack protocol (seen, working, done), drawn as Lucide icons
+// (eye, wrench, check) like the rest of the chrome (#3246). A step that has not happened is the same
+// icon dimmed, and every step carries its label and time as `title` and `aria-label`, so hover and
+// screen readers both say the word.
+const RECEIPT_ICON_PATHS = {
+  Seen: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  Working:
+    '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  Done: '<path d="M20 6 9 17l-5-5"/>',
+};
+function receiptIcon(label) {
+  return (
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    RECEIPT_ICON_PATHS[label] +
+    "</svg>"
+  );
+}
 
 function receiptTime(at) {
   const date = new Date(String(at));
@@ -1210,7 +1238,7 @@ function receiptStepHtml(label, at) {
     '" title="' +
     escapeHtml(text) +
     '">' +
-    RECEIPT_EMOJI[label] +
+    receiptIcon(label) +
     "</span>"
   );
 }
@@ -1822,7 +1850,7 @@ function sheetSummary() {
 
 function renderSheetSummary() {
   const summary = sheetSummary();
-  panelSummary.textContent = summary.text;
+  swapText(panelSummary, summary.text);
   panelSummary.classList.toggle("is-accent", summary.accent);
   panelSummary.classList.toggle("is-unread", summary.unread);
 }
@@ -1885,8 +1913,13 @@ function finishSheetDrag(event) {
   else if (!sheetOpen && offset < -SHEET_DRAG_THRESHOLD_PX) setSheetOpen(true);
 }
 
-panelHead.addEventListener("click", () => {
-  if (!isDockLayout()) return;
+// The header's own tools (side switch, rail, back to the sidebar) keep their clicks to themselves.
+function isPanelHeadTool(target) {
+  return Boolean(target && typeof target.closest === "function" && target.closest(".panel-head-tools"));
+}
+
+panelHead.addEventListener("click", (event) => {
+  if (!isDockLayout() || isPanelHeadTool(event?.target)) return;
   if (suppressSheetClick) {
     suppressSheetClick = false;
     return;
@@ -1895,7 +1928,7 @@ panelHead.addEventListener("click", () => {
 });
 panelScrim.addEventListener("click", () => setSheetOpen(false));
 panelHead.addEventListener("pointerdown", (event) => {
-  if (event.button) return;
+  if (event.button || isPanelHeadTool(event.target)) return;
   if (isPeekLayout()) {
     peekDrag = {
       pointerId: event.pointerId,
@@ -2075,6 +2108,13 @@ function applyChatLayout() {
 }
 
 /** @param {Partial<typeof chatLayout>} change */
+/** @type {HTMLButtonElement} */ (document.getElementById("panelSwapSide")).onclick = () =>
+  setChatLayout({ side: chatLayout.side === "left" ? "right" : "left", mode: "sidebar" });
+/** @type {HTMLButtonElement} */ (document.getElementById("panelToRail")).onclick = () =>
+  setChatLayout({ mode: "rail" });
+/** @type {HTMLButtonElement} */ (document.getElementById("peekToSidebar")).onclick = () =>
+  setChatLayout({ mode: "sidebar" });
+
 function setChatLayout(change) {
   const enteringPeek = chatLayout.mode !== "peek" && change.mode === "peek";
   // A side flip swaps the grid's column order; tweening the tracks across that would stretch the
@@ -3697,6 +3737,8 @@ function renderRevisionLegend() {
   revisionsWrap.hidden = count === 0 || ended;
   if (revisionsWrap.hidden && revisionsDrawerOpen) setRevisionsDrawerOpen(false);
   setCount(revisionsCount, count);
+  // The prototype labels the button with the newest round, the one a reviewer is checking.
+  revisionsLatest.textContent = count ? revisionEntries[count - 1].id : "Revisions";
   revisionsButton.setAttribute("aria-label", count === 1 ? "1 revision" : count + " revisions");
   revisionsSummary.textContent =
     (count === 1 ? "1 revision" : count + " revisions") +
@@ -3836,6 +3878,8 @@ function markSessionEnded() {
   renderRevisionLegend();
   closeWhiteboard();
   annotationSwitch.disabled = true;
+  modeInteractButton.disabled = true;
+  railAnnotateButton.disabled = true;
   moreButton.disabled = true;
   chatInput.disabled = true;
   updateSendState();
@@ -5152,11 +5196,24 @@ loadFrame();
 function toggleAnnotationMode() {
   if (ended || terminalSubmission) return;
   annotation = !annotation;
-  annotationSwitch.setAttribute("aria-pressed", String(annotation));
+  renderPointerMode();
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation });
 }
 
+// Pointer mode is one state shown three ways: the Annotate half of the top bar's segment (the
+// historical #annotation toggle), its Interact half, and the rail's annotate button.
+function renderPointerMode() {
+  annotationSwitch.setAttribute("aria-pressed", String(annotation));
+  modeInteractButton.setAttribute("aria-pressed", String(!annotation));
+  railAnnotateButton.setAttribute("aria-pressed", String(annotation));
+}
+
 annotationSwitch.onclick = toggleAnnotationMode;
+modeInteractButton.onclick = () => {
+  if (annotation) toggleAnnotationMode();
+};
+railAnnotateButton.onclick = toggleAnnotationMode;
+renderPointerMode();
 
 sendButton.onclick = () => sendQueued(false);
 sendAndEndButton.onclick = () => sendQueued(true);
@@ -5265,6 +5322,11 @@ chatInput.addEventListener("input", () => {
   renderSuggestions();
 });
 copyPathButton.onclick = copyFilePath;
+/** @type {HTMLButtonElement} */ (document.getElementById("copyPathBar")).onclick = copyFilePath;
+/** @type {HTMLButtonElement} */ (document.getElementById("openPalette")).onclick = () => {
+  closeMenus();
+  openPalette();
+};
 reloadArtifactButton.onclick = reloadArtifact;
 copySnapshotButton.onclick = copyDomSnapshot;
 exportArtifactButton.onclick = exportArtifact;
@@ -5875,6 +5937,7 @@ function paletteCommands() {
     { label: "Copy the artifact path", control: copyPathButton },
     { label: "Export standalone HTML", control: exportArtifactButton },
     { label: "Publish link", control: shareArtifactButton },
+    ...revisionPaletteCommands(),
     { label: "End session", control: endButton, danger: true },
   ];
   return commands
@@ -5884,6 +5947,20 @@ function paletteCommands() {
       danger: command.danger,
       run: command.run || (() => command.control && command.control.click()),
     }));
+}
+
+function revisionPaletteCommands() {
+  return [...revisionEntries].reverse().flatMap((entry) =>
+    entry.marks.length
+      ? [
+          { label: "Jump to " + entry.id + " (" + entry.label + ")", run: () => revealNextRevisionMark(entry.id) },
+          {
+            label: (outlinedRevisionId === entry.id ? "Stop outlining " : "Outline what changed in ") + entry.id,
+            run: () => setOutlinedRevision(outlinedRevisionId === entry.id ? "" : entry.id),
+          },
+        ]
+      : [],
+  );
 }
 
 function focusComposer() {
