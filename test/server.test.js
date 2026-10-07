@@ -1057,7 +1057,10 @@ test("chrome chat bubbles follow the preview mock shades", async () => {
   assert.match(css, /\.bubble\.agent\{[^}]*border:0/);
   assert.match(css, /\.bubble\.agent\{[^}]*padding:0/);
   assert.match(css, /\.bubble\.agent\{[^}]*max-width:100%/);
-  assert.match(css, /border-top-color:var\(--accent\)/);
+  // The Working spinner is the shadcn Spinner (an SVG arc), not a border ring: Lyra's square
+  // radius tokens turned the ring into a spinning square.
+  assert.match(css, /\.spinner\{[^}]*animation:spin [^}]*\}/);
+  assert.doesNotMatch(css, /\.spinner\{[^}]*border-radius/);
 });
 
 test("chrome includes a chat-like prompt composer and agent reply listener", async () => {
@@ -1094,7 +1097,7 @@ test("chrome shows agent working state when a previous poll has released", async
 
   assert.match(js, /agent-presence/);
   assert.match(js, /Working\.\.\./);
-  assert.match(js, /spinner/);
+  assert.match(js, /<svg class="spinner"[^>]*><path d="M21 12a9 9 0 1 1-6\.219-8\.56"\/><\/svg>/);
 });
 
 test("composer offers two always-visible top-level send actions", async () => {

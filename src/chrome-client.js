@@ -244,6 +244,11 @@ const snapshotRequests = new Map();
 let nextSnapshotRequestId = 0;
 let nextSendOperationOrder = 0;
 let workingBubble = null;
+// The shadcn/ui Spinner: lucide's loader-circle, rotating. An open arc is a circle in its own right,
+// so it never depends on the chrome's radius tokens (Lyra's square corners turned a border ring
+// into a spinning square).
+const SPINNER_SVG =
+  '<svg class="spinner" role="status" aria-label="Loading" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
 let displayedChat = initialChat.slice();
 let chatRevision = initialChatRevision;
 // Settlement is by per-submission identity, not displayed content: two tabs can queue notes
@@ -1362,7 +1367,7 @@ function setAgentPresence(state) {
   if (!workingBubble) {
     workingBubble = document.createElement("div");
     workingBubble.className = "bubble agent agent-working";
-    workingBubble.innerHTML = '<span class="spinner"></span><span>Working...</span>';
+    workingBubble.innerHTML = SPINNER_SVG + "<span>Working...</span>";
     chatLog.appendChild(workingBubble);
   }
   scrollElementIntoView(workingBubble);
