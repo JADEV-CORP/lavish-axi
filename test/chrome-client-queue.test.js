@@ -32,6 +32,8 @@ const PROMPT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 function publicQueuedPrompt(prompt) {
   const rest = { ...prompt };
   delete rest.prompt_id;
+  // The chrome's own pin bookkeeping, stripped before anything is posted.
+  delete rest._lavishPin;
   return rest;
 }
 
@@ -9746,17 +9748,24 @@ test("marked blocks wait in the message box as numbered chips and leave with the
   chrome.element("chatInput").value = "Make [2] as wide as [3]";
   chrome.element("chatInput").dispatch("input", {});
   chrome.runTimers(200);
-  assert.equal(chrome.element("sendLabel").textContent, "Send 4");
+  assert.equal(chrome.element("sendLabel").textContent, "Send 2", "the marks travel inside the message");
 
   chrome.element("queueLater").onclick();
-  assert.deepEqual(
-    chrome.queued().map((prompt) => [prompt.prompt, prompt.selector]),
-    [
-      ["Make this heading bigger", "main > h2"],
-      ["[2]", "main > p"],
-      ["[3] Too wide", "main > table"],
-      ["Make [2] as wide as [3]", ""],
+  // One item, as in the prototype: the words, with the marks as a target they refer to by number.
+  assert.equal(chrome.queued().length, 2);
+  const message = chrome.queued()[1];
+  assert.equal(message.prompt, "Make [2] as wide as [3]");
+  assert.equal(message.tag, "message");
+  assert.deepEqual(JSON.parse(JSON.stringify(message.target)), {
+    type: "marks",
+    marks: [
+      { number: 2, selector: "main > p", tag: "p", text: "Intro copy" },
+      { number: 3, selector: "main > table", tag: "table", text: "Plans", note: "Too wide" },
     ],
+  });
+  assert.match(
+    chrome.element("queuedLog").innerHTML,
+    /<div class="anchor-marks"><span class="mark-chip is-sent" data-mark-selector="main &gt; p"[^>]*><span class="anchor-pin">2<\/span>/,
   );
   assert.equal(box.hidden, true);
   assert.equal(chrome.element("chatInput").value, "");
@@ -9781,8 +9790,9 @@ test("a mark chip lights its block on hover and can be removed", async () => {
     target: { closest: (selector) => (selector === ".mark-chip-remove" ? { dataset: { index: "0" } } : null) },
   });
   assert.equal(box.innerHTML.match(/class="mark-chip"/g).length, 1);
-  assert.match(box.innerHTML, /<span class="anchor-pin">1<\/span><span class="anchor-kind">&lt;h3&gt;<\/span>/);
-  assert.equal(chrome.element("chatInput").placeholder, "Say what to change. Call the marks [1]");
+  // A mark keeps its number when another goes, so [2] still names the same block.
+  assert.match(box.innerHTML, /<span class="anchor-pin">2<\/span><span class="anchor-kind">&lt;h3&gt;<\/span>/);
+  assert.equal(chrome.element("chatInput").placeholder, "Say what to change. Call the marks [2]");
   assert.equal(chrome.postedToFrame.filter((message) => message.type === "lavish:hotPin").at(-1).selector, "");
 });
 
@@ -9872,4 +9882,49 @@ test("Send and end session sits under the Send button's chevron and closes its m
   chrome.element("sendAndEnd").onclick();
   assert.equal(menu.hidden, true);
   assert.equal(chrome.queued().at(-1)?.prompt, "Ship it");
+});
+
+test("a message's marks read the same queued and sent, and the pin bookkeeping never leaves the tab", async () => {
+  const posts = [];
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/prompts")) posts.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  markBlock(chrome, "main > h2", "h2", "Plans");
+  markBlock(chrome, "main > p", "p", "Intro copy", "Shorter");
+  chrome.element("chatInput").value = "Make [1] match [2]";
+  chrome.element("queueLater").onclick();
+
+  const queuedPrompt = chrome.queued()[0];
+  const sent = chatEntryForPrompt({ ...queuedPrompt }, "2026-10-07T00:00:00.000Z").anchor;
+  assert.equal(sent.kind, "marks");
+  assert.deepEqual(
+    sent.marks.map((mark) => [mark.number, mark.label, mark.excerpt]),
+    [
+      [1, "<h2>", "Plans"],
+      [2, "<p>", "Intro copy"],
+    ],
+  );
+  const chips = [
+    ...chrome
+      .element("queuedLog")
+      .innerHTML.matchAll(
+        /<span class="anchor-pin">(\d+)<\/span><span class="anchor-kind">([^<]*)<\/span><span class="mark-chip-excerpt">([^<]*)<\/span>/g,
+      ),
+  ];
+  assert.deepEqual(
+    chips.map((match) => [Number(match[1]), match[2].replace(/&lt;/g, "<").replace(/&gt;/g, ">"), match[3]]),
+    sent.marks.map((mark) => [mark.number, mark.label, mark.excerpt]),
+    "a bubble keeps its chips when it settles",
+  );
+
+  chrome.element("send").onclick?.() ?? chrome.element("send").dispatch?.("click", {});
+  chrome.sendSnapshot("<html></html>");
+  await flushPromises();
+  const body = posts.at(-1);
+  assert.ok(body, "the batch was posted");
+  assert.equal(JSON.stringify(body).includes("_lavishPin"), false);
+  assert.equal(body.prompts[0].target.marks[1].note, "Shorter");
 });

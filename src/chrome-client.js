@@ -19,6 +19,9 @@ const retiredDraftStorageKey = "lavish-axi:retired-drafts:" + key;
 /** @type {any[]} */
 const retiredDraftNodes = [];
 const internalQueueKeyField = "_lavishQueueKey";
+// A queued note's or a mark's pin number, given once and never renumbered, so the [n] a reviewer
+// writes keeps naming the same block (#3260). Chrome-only: stripped before anything is sent.
+const pinNumberField = "_lavishPin";
 const promptIdentityField = "prompt_id";
 const PROMPT_IDENTITY_MAX = 128;
 const PROMPT_IDENTITY_RE = /^[A-Za-z0-9_-]+$/;
@@ -472,7 +475,10 @@ function assignPromptIdentity(prompt, keepExisting) {
 function adoptQueuedPrompt(rawPrompt, keepIdentity) {
   const prompt = sanitizeQueuedPrompt(rawPrompt);
   if (!prompt) return null;
-  if (!keepIdentity) delete prompt[promptIdentityField];
+  if (!keepIdentity) {
+    delete prompt[promptIdentityField];
+    delete prompt[pinNumberField];
+  }
   assignPromptIdentity(prompt, true);
   return prompt;
 }
@@ -542,8 +548,23 @@ function boundAnchorText(value, max) {
 // two against the same fixtures. A bubble must not change its anchor when it settles.
 function promptAnchor(prompt) {
   const tag = String(prompt?.tag || "");
-  if (tag === "message") return null;
   const target = prompt?.target && typeof prompt.target === "object" ? prompt.target : null;
+  if (target?.type === "marks") {
+    const list = Array.isArray(target.marks) ? target.marks : [];
+    return {
+      kind: "marks",
+      label: "marks",
+      marks: list.map((mark) => ({
+        number: Number(mark?.number) || 0,
+        ...(promptAnchor({ selector: mark?.selector, tag: mark?.tag, text: mark?.text, target: mark?.target }) || {
+          kind: "element",
+          label: "",
+          excerpt: "",
+        }),
+      })),
+    };
+  }
+  if (tag === "message") return null;
   const selector = boundAnchorText(prompt?.selector, ANCHOR_SELECTOR_MAX);
   const withSelector = (anchor) => (selector ? { ...anchor, selector } : anchor);
   if (tag === "whiteboard") {
@@ -592,6 +613,7 @@ function promptAnchor(prompt) {
 // excerpt, with the full excerpt and selector on hover.
 function anchorHtml(anchor, pin = 0) {
   if (!anchor || typeof anchor !== "object") return "";
+  if (anchor.kind === "marks") return marksAnchorHtml(anchor.marks);
   const excerpt = String(anchor.excerpt || "");
   const title = [excerpt, anchor.selector].filter(Boolean).join("\n");
   return (
@@ -609,6 +631,34 @@ function anchorHtml(anchor, pin = 0) {
         escapeHtml(excerpt) +
         "\u201D</span>"
       : "") +
+    "</div>"
+  );
+}
+
+// The marked blocks a message talks about, as the numbered chips they were in the message box.
+// Pointing at one outlines its block in the artifact.
+function marksAnchorHtml(list) {
+  if (!Array.isArray(list) || !list.length) return "";
+  return (
+    '<div class="anchor-marks">' +
+    list
+      .map((mark) => {
+        const title = [mark.excerpt, mark.selector].filter(Boolean).join("\n");
+        return (
+          '<span class="mark-chip is-sent" data-mark-selector="' +
+          escapeHtml(mark.selector || "") +
+          '" title="' +
+          escapeHtml(title) +
+          '"><span class="anchor-pin">' +
+          (Number(mark.number) || "") +
+          '</span><span class="anchor-kind">' +
+          escapeHtml(mark.label || "") +
+          "</span>" +
+          (mark.excerpt ? '<span class="mark-chip-excerpt">' + escapeHtml(mark.excerpt) + "</span>" : "") +
+          "</span>"
+        );
+      })
+      .join("") +
     "</div>"
   );
 }
@@ -2339,9 +2389,30 @@ function queuedAnchorSelectorsOf(prompt) {
 // Element-anchored queued notes are numbered 1, 2, 3 in queue order. The same number labels the
 // note's anchor in the panel and its pin on the artifact, which is how the reader matches them.
 function queuedPinNumber(prompt) {
-  if (!isElementAnchoredPrompt(prompt)) return 0;
-  return queued.filter((candidate) => isElementAnchoredPrompt(candidate)).indexOf(prompt) + 1;
+  return isElementAnchoredPrompt(prompt) ? Number(prompt[pinNumberField]) || 0 : 0;
 }
+
+function groupMarks(prompt) {
+  const target = prompt?.target;
+  return target && target.type === "marks" && Array.isArray(target.marks) ? target.marks : [];
+}
+
+// The next free pin: one past the highest in use, so a fresh round starts again at 1.
+function nextPinNumber() {
+  let highest = 0;
+  for (const prompt of queued) {
+    highest = Math.max(highest, Number(prompt[pinNumberField]) || 0);
+    for (const mark of groupMarks(prompt)) highest = Math.max(highest, Number(mark.number) || 0);
+  }
+  for (const mark of marks) highest = Math.max(highest, Number(mark[pinNumberField]) || 0);
+  return highest + 1;
+}
+
+function assignPinNumber(prompt) {
+  if (isElementAnchoredPrompt(prompt) && !prompt[pinNumberField]) prompt[pinNumberField] = nextPinNumber();
+}
+// Notes restored from before pins were stored get theirs in queue order.
+for (const prompt of queued) assignPinNumber(prompt);
 
 // Tells the artifact which element selectors carry a queued note, and where each note's pin goes.
 // Only selectors and pin numbers cross into the frame: the artifact is agent-authored, and the
@@ -2349,7 +2420,12 @@ function queuedPinNumber(prompt) {
 function postQueuedAnchors(force = false) {
   const anchored = queued.filter((prompt) => isElementAnchoredPrompt(prompt));
   const selectors = [...new Set(anchored.flatMap(queuedAnchorSelectorsOf))];
-  const pins = anchored.map((prompt, index) => ({ selector: String(prompt.selector), number: index + 1 }));
+  const pins = anchored.map((prompt) => ({ selector: String(prompt.selector), number: queuedPinNumber(prompt) }));
+  for (const prompt of queued) {
+    for (const mark of groupMarks(prompt)) {
+      if (isElementAnchoredPrompt(mark)) pins.push({ selector: String(mark.selector), number: Number(mark.number) });
+    }
+  }
   marks.forEach((mark, index) => {
     if (isElementAnchoredPrompt(mark)) pins.push({ selector: String(mark.selector), number: markNumber(index) });
   });
@@ -2368,8 +2444,23 @@ function setHotPin(selector) {
   postToFrame({ type: "lavish:hotPin", selector });
 }
 
+function markSelectorAt(target) {
+  const chip = target && typeof target.closest === "function" ? target.closest("[data-mark-selector]") : null;
+  return chip ? String(/** @type {HTMLElement} */ (chip).dataset.markSelector || "") : null;
+}
+chatLog.addEventListener("mouseover", (event) => {
+  const selector = markSelectorAt(/** @type {Element | null} */ (event.target));
+  setHotPin(selector || "");
+});
+chatLog.addEventListener("mouseleave", () => setHotPin(""));
+
 queuedLog.addEventListener("mouseover", (event) => {
   const target = /** @type {Element | null} */ (event.target);
+  const markSelector = markSelectorAt(target);
+  if (markSelector !== null) {
+    setHotPin(markSelector);
+    return;
+  }
   const bubble = target && typeof target.closest === "function" ? target.closest(".queue-item") : null;
   const prompt = bubble ? queued[Number(/** @type {HTMLElement} */ (bubble).dataset.index)] : null;
   setHotPin(prompt && isElementAnchoredPrompt(prompt) ? String(prompt.selector) : "");
@@ -2392,10 +2483,10 @@ queueToggle.onclick = () => {
   queuePanel.classList.toggle("is-collapsed", open);
 };
 
-// A mark's number carries on from the queued notes' pins, so the chip in the box, the pin on the
-// artifact, and the [n] the reviewer types all agree.
+// A mark's number is its pin, given when the block was marked, so the chip in the box, the pin on
+// the artifact, and the [n] the reviewer types all agree.
 function markNumber(index) {
-  return queued.filter((prompt) => isElementAnchoredPrompt(prompt)).length + index + 1;
+  return Number(marks[index]?.[pinNumberField]) || 0;
 }
 
 function addMark(rawPrompt) {
@@ -2407,6 +2498,7 @@ function addMark(rawPrompt) {
   // Marking the same block twice without a word adds nothing. A note on it is worth keeping.
   const bare = (item) => !String(item.prompt || "").trim() && !attachmentCount(item);
   if (bare(mark) && marks.some((item) => item.selector === mark.selector && bare(item))) return;
+  mark[pinNumberField] = nextPinNumber();
   marks.push(mark);
   editFocusPending = !editingPromptId && !note;
   render();
@@ -2456,18 +2548,37 @@ function renderMarks() {
   messageMarks.innerHTML = html;
 }
 
-// The marks become notes of their own, numbered as the chips were, ahead of the message that
-// talks about them. A mark with no words still goes: its number is what the message refers to.
-function takeMarks() {
-  const numbers = marks.map((_, index) => markNumber(index));
-  const taken = marks.splice(0).map((mark, index) => {
-    const note = String(mark.prompt || "").trim();
-    const prompt = { ...mark, prompt: "[" + numbers[index] + "]" + (note ? " " + note : "") };
-    assignPromptIdentity(prompt, false);
-    return prompt;
-  });
-  setHotPin("");
-  return taken;
+// The message box as one prompt, as in the prototype: the words, any images, and the marked blocks
+// as a "marks" target the words refer to by number. Null when the box is empty.
+function composerPrompt(text, attachments) {
+  const taken = marks.splice(0);
+  if (!text && !attachments.length && !taken.length) return null;
+  const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
+  const images = [...attachments];
+  if (taken.length) {
+    prompt.target = {
+      type: "marks",
+      marks: taken.map((mark) => {
+        const item = {
+          number: Number(mark[pinNumberField]) || 0,
+          selector: String(mark.selector || ""),
+          tag: String(mark.tag || ""),
+          text: String(mark.text || ""),
+        };
+        const note = String(mark.prompt || "").trim();
+        if (note) item.note = note;
+        if (mark.target && typeof mark.target === "object") item.target = mark.target;
+        for (const image of Array.isArray(mark.attachments) ? mark.attachments : []) {
+          if (!images.some((existing) => existing.id === image.id)) images.push(image);
+        }
+        return item;
+      }),
+    };
+    setHotPin("");
+  }
+  if (images.length) prompt.attachments = images;
+  assignPromptIdentity(prompt, false);
+  return prompt;
 }
 
 messageMarks.addEventListener("click", (event) => {
@@ -2498,17 +2609,12 @@ function queueComposerDraft() {
   }
   const text = chatInput.value.trim();
   const attachments = chatAttachmentController.collectReady();
-  if (!text && !attachments.length && !marks.length) {
+  const prompt = composerPrompt(text, attachments);
+  if (!prompt) {
     rejectEmptySend();
     return;
   }
-  queued.push(...takeMarks());
-  if (text || attachments.length) {
-    const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
-    if (attachments.length) prompt.attachments = attachments;
-    assignPromptIdentity(prompt, false);
-    queued.push(prompt);
-  }
+  queued.push(prompt);
   persistQueuedPrompts();
   render();
   chatInput.value = "";
@@ -2530,8 +2636,9 @@ function autosizeChatInput() {
 chatInput.addEventListener("input", autosizeChatInput);
 
 function renderSendLabel() {
-  const draft = !editingPromptId && Boolean(chatInput.value.trim());
-  const pending = queued.length + marks.length + (draft ? 1 : 0);
+  // Marks travel inside the message, so a box holding words or marks is one more thing to send.
+  const draft = !editingPromptId && (Boolean(chatInput.value.trim()) || marks.length > 0);
+  const pending = queued.length + (draft ? 1 : 0);
   swapText(sendLabel, pending > 1 ? "Send " + pending : "Send");
 }
 
@@ -2590,6 +2697,7 @@ function enqueuePrompt(rawPrompt, /** @type {FeedbackPreparation | null} */ prep
         endQueuedEdit();
         if (draft !== String(queued[index].prompt || "").trim()) keepRetiredDraft(draft);
       }
+      if (queued[index][pinNumberField]) prompt[pinNumberField] = queued[index][pinNumberField];
       queued[index] = prompt;
     } else {
       queued.push(prompt);
@@ -2597,6 +2705,7 @@ function enqueuePrompt(rawPrompt, /** @type {FeedbackPreparation | null} */ prep
   } else {
     queued.push(prompt);
   }
+  assignPinNumber(prompt);
   persistQueuedPrompts();
   render();
   return true;
@@ -2606,6 +2715,7 @@ function stripInternalPromptFields(prompt) {
   if (!prompt || typeof prompt !== "object") return prompt;
   const clean = { ...prompt };
   delete clean[internalQueueKeyField];
+  delete clean[pinNumberField];
   return clean;
 }
 
@@ -2886,14 +2996,9 @@ function sendQueued(endAfter) {
   if (!chipsBlocked) {
     const text = chatInput.value.trim();
     const attachments = chatAttachmentController.collectReady();
-    if (text || attachments.length || marks.length) {
-      queued.push(...takeMarks());
-      if (text || attachments.length) {
-        const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
-        if (attachments.length) prompt.attachments = attachments;
-        assignPromptIdentity(prompt, false);
-        queued.push(prompt);
-      }
+    const prompt = composerPrompt(text, attachments);
+    if (prompt) {
+      queued.push(prompt);
       persistQueuedPrompts();
       // Render the durable queued bubble before clearing the editor. If anything after this point
       // fails, the user's words are already both stored and visibly recoverable in the tab. It
@@ -2923,7 +3028,7 @@ function sendQueued(endAfter) {
     return;
   }
   lastSentBatch = {
-    annotations: queued.filter((prompt) => Boolean(prompt.selector)).length,
+    annotations: queued.reduce((count, prompt) => count + (prompt.selector ? 1 : 0) + groupMarks(prompt).length, 0),
     messages: queued.length,
   };
   requestSnapshot("submit", queued.slice(), false, null);

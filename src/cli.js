@@ -639,6 +639,9 @@ function createFeedbackNextStep(file, artifactFailures, sessionEnded, endedBy, p
   const layoutNote = prompts.some((prompt) => prompt && prompt.tag === "layout-warnings")
     ? `This feedback includes layout issues the user selected from the Lavish Layout issues inbox (tag "layout-warnings"): the target lists the exact warning ids and targets. Apply every listed fix in one pass before saving so the user's review refreshes once. Queueing is a repair request, not a resolution - Lavish only marks a warning resolved after a newer artifact load and a complete check at the same viewport no longer detects it. `
     : "";
+  const marksNote = prompts.some((prompt) => prompt?.target?.type === "marks")
+    ? `Some prompts talk about several marked blocks at once (target type "marks"): [1], [2] in the prompt text name the entries of target.marks with that number, each with its block's selector, tag, text, and any note the user typed on its card. Apply the message to every block it names. `
+    : "";
   const attachmentNote = prompts.some((prompt) => Array.isArray(prompt?.attachments) && prompt.attachments.length)
     ? `Some prompts carry image attachments the user added: each is an object in the prompt's \`attachments\` array with an absolute local \`path\` (plus id, mime, and dimensions). Open those image files to see what the user is referring to. `
     : "";
@@ -654,13 +657,13 @@ function createFeedbackNextStep(file, artifactFailures, sessionEnded, endedBy, p
         count > 0
           ? ""
           : ` Only run \`lavish-axi ${file} --reopen\` if the user explicitly asks for further review or something genuinely important needs their visual attention.`;
-      return `${failureNote}${layoutNote}${whiteboardNote}${attachmentNote}This was the last feedback before the user ended the session. Stop polling ${file} and do not reopen it - deliver any remaining updates directly in this conversation instead.${reopenNote}`;
+      return `${failureNote}${layoutNote}${marksNote}${whiteboardNote}${attachmentNote}This was the last feedback before the user ended the session. Stop polling ${file} and do not reopen it - deliver any remaining updates directly in this conversation instead.${reopenNote}`;
     }
-    return `${failureNote}${layoutNote}${whiteboardNote}${attachmentNote}This was the last feedback before the Lavish Editor session ended. Stop polling ${file}. Deliver any remaining updates directly in this conversation, or run \`lavish-axi ${file}\` to open a fresh session if the user needs further visual review.`;
+    return `${failureNote}${layoutNote}${marksNote}${whiteboardNote}${attachmentNote}This was the last feedback before the Lavish Editor session ended. Stop polling ${file}. Deliver any remaining updates directly in this conversation, or run \`lavish-axi ${file}\` to open a fresh session if the user needs further visual review.`;
   }
   const prefix =
     count > 0 ? artifactFailuresPrefix(file, artifactFailures) : `Apply the requested changes to ${file}. `;
-  return `${prefix}${layoutNote}${whiteboardNote}${attachmentNote}Do not respond to the user just yet. If you are continuing to wait for feedback, run \`lavish-axi poll ${file} --agent-reply "<message for the user>"\` without --timeout-ms to reply and keep polling. If instead you are handing back a result without starting another long-poll, run \`lavish-axi reply ${file} --agent-reply "<message for the user>"\` to post it and receive an acceptance receipt. ${POLL_AGENT_REPLY_RULE} ${POLL_AGENT_REPLY_NEXT_POINTER} The poll waits silently until the user sends more feedback, ends the session, or leaves every review window disconnected past the reconnect grace period - never kill it. ${pollExecutionGuidance({ agent })}`;
+  return `${prefix}${layoutNote}${marksNote}${whiteboardNote}${attachmentNote}Do not respond to the user just yet. If you are continuing to wait for feedback, run \`lavish-axi poll ${file} --agent-reply "<message for the user>"\` without --timeout-ms to reply and keep polling. If instead you are handing back a result without starting another long-poll, run \`lavish-axi reply ${file} --agent-reply "<message for the user>"\` to post it and receive an acceptance receipt. ${POLL_AGENT_REPLY_RULE} ${POLL_AGENT_REPLY_NEXT_POINTER} The poll waits silently until the user sends more feedback, ends the session, or leaves every review window disconnected past the reconnect grace period - never kill it. ${pollExecutionGuidance({ agent })}`;
 }
 
 // The narrow fatal path. Ordinary layout findings never reach the poll: they wait in the user's

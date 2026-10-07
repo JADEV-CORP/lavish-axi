@@ -434,8 +434,9 @@ function withSelector(anchor, selector) {
 // transcript says `<h2>`, `text`, `cell`, `node`. A cell without a provable row or column label
 // falls back to the element form rather than inventing a name, the rule the card follows too.
 function promptAnchor(prompt, kind) {
-  if (kind === "message") return null;
   const target = prompt.target && typeof prompt.target === "object" ? prompt.target : null;
+  if (target?.type === "marks") return marksAnchor(target);
+  if (kind === "message") return null;
   const selector = bound(prompt.selector, SELECTOR_MAX);
   if (kind === "whiteboard") {
     const index = Number(target?.diagramIndex);
@@ -480,6 +481,19 @@ function promptAnchor(prompt, kind) {
 // client-visible attachment fields are kept: the resolved path, mime, and size stay in the prompt.
 // An accepted prompt keeps its identity even when its only displayable content is an anchor, so
 // the transcript remains the authoritative acknowledgement source after a lost response.
+// A message about marked blocks shows each block as a numbered chip above the words, as it did in
+// the message box. Each chip carries the anchor its block would have on its own.
+function marksAnchor(target) {
+  const marks = (Array.isArray(target.marks) ? target.marks : []).map((mark) => {
+    const anchor = promptAnchor(
+      { selector: mark?.selector, tag: mark?.tag, text: mark?.text, target: mark?.target },
+      "annotation",
+    );
+    return { number: Number(mark?.number) || 0, ...(anchor || { kind: "element", label: "", excerpt: "" }) };
+  });
+  return { kind: "marks", label: "marks", marks };
+}
+
 export function chatEntryForPrompt(prompt, at) {
   if (!prompt || typeof prompt !== "object") return null;
   const text = String(prompt.prompt || "");

@@ -1149,11 +1149,40 @@ function normalizeArtifactFailures(failures) {
     .slice(0, MAX_ARTIFACT_FAILURES);
 }
 
+// A message about several marked blocks (#3260): one prompt whose text refers to them as [1], [2],
+// with each block's number, selector, and the words typed on its card. Only these fields survive,
+// numbers must be positive integers, and a mark cannot nest another marks target.
+const MARKS_TARGET_TYPE = "marks";
+const MARKS_MAX = 50;
+function normalizeMarksTarget(target) {
+  const marks = [];
+  for (const mark of Array.isArray(target.marks) ? target.marks.slice(0, MARKS_MAX) : []) {
+    if (!mark || typeof mark !== "object" || Array.isArray(mark)) continue;
+    const number = Number(mark.number);
+    if (!Number.isSafeInteger(number) || number < 1) continue;
+    const item = {
+      number,
+      selector: String(mark.selector || ""),
+      tag: String(mark.tag || ""),
+      text: String(mark.text || ""),
+    };
+    if (mark.note) item.note = String(mark.note);
+    const inner =
+      mark.target && typeof mark.target === "object" && mark.target.type !== MARKS_TARGET_TYPE
+        ? normalizeTarget(mark.target)
+        : null;
+    if (inner) item.target = inner;
+    marks.push(item);
+  }
+  return { type: MARKS_TARGET_TYPE, marks };
+}
+
 function normalizeTarget(target) {
   if (!target || typeof target !== "object" || Array.isArray(target)) return null;
   if (target.type === "mermaid-node") return normalizeMermaidNodeTarget(target);
   if (target.type === EXCALIDRAW_SCENE_TARGET_TYPE) return normalizeExcalidrawSceneTarget(target);
   if (target.type === LAYOUT_WARNINGS_TARGET_TYPE) return normalizeLayoutWarningsTarget(target);
+  if (target.type === MARKS_TARGET_TYPE) return normalizeMarksTarget(target);
   // text-range and any other/legacy target shapes pass through unchanged.
   return JSON.parse(JSON.stringify(target));
 }

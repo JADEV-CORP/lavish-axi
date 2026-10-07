@@ -3604,3 +3604,31 @@ test("poll and reply help describe the optional reply sections", () => {
     assert.match(help, /skip them for a routine reply/, command);
   }
 });
+
+test("poll output explains a message about marked blocks, and only when one arrives", () => {
+  const prompts = [
+    {
+      uid: "",
+      prompt: "Make [1] as wide as [2]",
+      selector: "",
+      tag: "message",
+      text: "Freeform message",
+      target: {
+        type: "marks",
+        marks: [
+          { number: 1, selector: "main > h2", tag: "h2", text: "Plans" },
+          { number: 2, selector: "main > p", tag: "p", text: "Intro", note: "Too wide" },
+        ],
+      },
+    },
+  ];
+  const output = createPollOutput({ file: "/tmp/a.html", response: { status: "feedback", prompts } });
+  assert.match(output.next_step, /target type "marks"/);
+  assert.match(output.next_step, /\[1\], \[2\] in the prompt text name the entries of target\.marks/);
+
+  const plain = createPollOutput({
+    file: "/tmp/a.html",
+    response: { status: "feedback", prompts: [{ ...prompts[0], target: undefined }] },
+  });
+  assert.doesNotMatch(plain.next_step, /target\.marks/);
+});

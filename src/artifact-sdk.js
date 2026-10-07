@@ -2654,7 +2654,7 @@ export function createArtifactSdk(
   // Redraws every pin and outline from scratch against the elements' current boxes. An element
   // that is gone, or has no box, simply gets no mark.
   function renderOverlayMarks() {
-    if (!shadow && !notePins.length && !outlinedRevision) return;
+    if (!shadow && !notePins.length && !outlinedRevision && !hotPinSelector) return;
     const root = ensureShadow();
     for (const el of [...root.querySelectorAll(".lavish-pin, .lavish-pin-hot, .lavish-outline")]) el.remove();
     if (outlinedRevision) {
@@ -2707,10 +2707,21 @@ export function createArtifactSdk(
         root.appendChild(hot);
       }
     }
+    // A chip in a sent message names a block that no longer has a pin; it still lights up.
+    if (hotPinSelector && !notePins.some((pin) => pin.selector === hotPinSelector)) {
+      const target = safeQuerySelector(hotPinSelector);
+      if (target instanceof Element) {
+        const rect = target.getBoundingClientRect();
+        const hot = document.createElement("div");
+        hot.className = "lavish-pin-hot";
+        placeOverMark(hot, { left: rect.left - 3, top: rect.top - 3, width: rect.width + 6, height: rect.height + 6 });
+        root.appendChild(hot);
+      }
+    }
   }
 
   function scheduleOverlayMarks() {
-    if (overlayFrame || (!notePins.length && !outlinedRevision)) return;
+    if (overlayFrame || (!notePins.length && !outlinedRevision && !hotPinSelector)) return;
     overlayFrame = window.requestAnimationFrame(() => {
       overlayFrame = 0;
       renderOverlayMarks();

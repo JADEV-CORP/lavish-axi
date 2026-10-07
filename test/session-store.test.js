@@ -2846,3 +2846,49 @@ test("a transcript older than receipts is marked at load and never stamped", asy
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a message about marked blocks keeps each mark's number, block and note, and nothing else", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-store-"));
+  try {
+    const stateFile = path.join(dir, "state.json");
+    const artifact = path.join(dir, "artifact.html");
+    await writeFile(artifact, "<main><h2>Plans</h2><p>Intro</p></main>");
+
+    const store = new SessionStore(stateFile);
+    const session = await store.upsertSession(artifact, "http://localhost:4387/session/test");
+    await store.queuePrompts(session.key, {
+      prompts: [
+        {
+          uid: "",
+          prompt: "Make [1] as wide as [2]",
+          selector: "",
+          tag: "message",
+          text: "Freeform message",
+          target: {
+            type: "marks",
+            injected: "dropped",
+            marks: [
+              { number: 1, selector: "main > h2", tag: "h2", text: "Plans", extra: "dropped" },
+              { number: 2, selector: "main > p", tag: "p", text: "Intro", note: "Too wide" },
+              { number: 0, selector: "main", tag: "main", text: "" },
+              { number: 3, selector: "main", tag: "main", text: "", target: { type: "marks", marks: [] } },
+              "not a mark",
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = feedbackResult(await store.takeFeedback(session.key));
+    assert.deepEqual(result.prompts[0].target, {
+      type: "marks",
+      marks: [
+        { number: 1, selector: "main > h2", tag: "h2", text: "Plans" },
+        { number: 2, selector: "main > p", tag: "p", text: "Intro", note: "Too wide" },
+        { number: 3, selector: "main", tag: "main", text: "" },
+      ],
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

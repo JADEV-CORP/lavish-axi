@@ -2825,6 +2825,17 @@ body.layout-gate-active iframe#artifact {
   width: 12px;
   height: 12px;
 }
+/* Sent or queued with a message: the same chips, in a row above its words. */
+.anchor-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.mark-chip.is-sent {
+  padding-right: 6px;
+  animation: none;
+}
 @keyframes mark-chip-in {
   from {
     opacity: 0;
