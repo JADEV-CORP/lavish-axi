@@ -826,11 +826,35 @@ function syncReplyRevisionButtons() {
   }
 }
 
+/** @type {WeakMap<Element, string>} */
+const replyTexts = new WeakMap();
+// When each entry last animated in. The transcript sync that follows a live reply rebuilds the log
+// within milliseconds; an entry that entered moments ago keeps its motion through that rebuild.
+/** @type {Map<string, number>} */
+const enteredAt = new Map();
+
 chatLog.addEventListener("click", (event) => {
   const target = /** @type {Element | null} */ (event.target);
-  const button = target && typeof target.closest === "function" ? target.closest(".reply-revision") : null;
+  if (!target || typeof target.closest !== "function") return;
+  const button = target.closest(".reply-revision");
   if (button) revealNextRevisionMark(String(/** @type {HTMLElement} */ (button).dataset.revision || ""));
+  const copy = target.closest(".msg-copy");
+  if (copy) void copyReply(copy);
 });
+
+async function copyReply(button) {
+  const bubble = button.closest(".bubble");
+  const text = bubble ? replyTexts.get(bubble) : "";
+  if (!text || !(await copyText(text))) return;
+  const swap = button.querySelector(".t-icon-swap");
+  if (!swap) return;
+  swap.dataset.state = "b";
+  button.setAttribute("aria-label", "Copied");
+  setTimeout(() => {
+    swap.dataset.state = "a";
+    button.setAttribute("aria-label", "Copy reply");
+  }, 1500);
+}
 
 const DEFAULT_SEND_HINT = "Write a message or annotate an element first.";
 
@@ -1077,15 +1101,7 @@ async function copyText(text) {
 // user entry is always escaped text, with its anchor line and thumbnails when it carries them.
 function chatBubbleHtml(entry) {
   if (entry.role === "agent") {
-    const parts = replyPartsHtml(entry.parts);
-    // A reply that is only sections has no prose of its own; the raw text would repeat them.
-    const body =
-      typeof entry.html === "string" && entry.html
-        ? '<div class="chat-md">' + entry.html + "</div>"
-        : parts
-          ? ""
-          : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>";
-    return "<small>Agent</small>" + body + parts + replyRevisionHtml(entry.revision_id);
+    return agentHeaderHtml(entry.at) + agentBodyHtml(entry) + agentActionsHtml(entry);
   }
   return (
     "<small>You</small>" +
@@ -1094,6 +1110,52 @@ function chatBubbleHtml(entry) {
     bubbleAttachmentsHtml(entry) +
     receiptHtml(entry)
   );
+}
+
+// The prototype's message header (AI Elements Message): who is speaking and when, so a long review
+// reads as a conversation with timestamps rather than a stack of paragraphs.
+const SPARKLES_SVG =
+  '<svg class="msg-who-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>';
+const COPY_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const CHECK_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+function messageTime(at) {
+  const ms = Date.parse(String(at || ""));
+  if (!Number.isFinite(ms)) return "";
+  const label = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" }).format(ms);
+  return '<time datetime="' + escapeHtml(String(at)) + '">' + escapeHtml(label) + "</time>";
+}
+
+function agentHeaderHtml(at) {
+  return '<div class="msg-who">' + SPARKLES_SVG + "<span>Agent</span>" + messageTime(at) + "</div>";
+}
+
+// AI Elements Actions: shown on hover or focus, always on touch. Copy takes the agent's own text,
+// so a pasted reply keeps its Markdown; View rN is the jump-to-revision button.
+function agentActionsHtml(entry) {
+  return (
+    '<div class="msg-actions"><button class="msg-action msg-copy" type="button" aria-label="Copy reply" title="Copy"><span class="t-icon-swap" data-state="a"><span class="t-icon" data-icon="a">' +
+    COPY_SVG +
+    '</span><span class="t-icon" data-icon="b">' +
+    CHECK_SVG +
+    "</span></span></button>" +
+    replyRevisionHtml(entry.revision_id) +
+    "</div>"
+  );
+}
+
+function agentBodyHtml(entry) {
+  const parts = replyPartsHtml(entry.parts);
+  // A reply that is only sections has no prose of its own; the raw text would repeat them.
+  const body =
+    typeof entry.html === "string" && entry.html
+      ? '<div class="chat-md">' + entry.html + "</div>"
+      : parts
+        ? ""
+        : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>";
+  return body + parts;
 }
 
 // Structured reply parts (src/chat-messages.js `splitReplyParts`): each section the agent wrote
@@ -1186,7 +1248,7 @@ function refreshUnseenReceipts() {
   for (const note of chatLog.querySelectorAll(".receipt-note")) note.textContent = receiptNoteText();
 }
 
-function addChat(entry, shouldScroll = true) {
+function addChat(entry, shouldScroll = true, { enter = false } = {}) {
   if (!entry || typeof entry !== "object") return;
   const role = entry.role === "agent" ? "agent" : "user";
   const text = String(entry.text || "");
@@ -1195,6 +1257,13 @@ function addChat(entry, shouldScroll = true) {
   const el = document.createElement("div");
   el.className = "bubble " + role;
   el.innerHTML = chatBubbleHtml({ ...entry, role, text });
+  if (role === "agent") replyTexts.set(el, text);
+  // A new reply reveals and a new message of yours slides up (transitions-polish tokens). Only
+  // entries that just arrived move; a transcript rebuild never replays them.
+  if (enter && !prefersReducedMotion()) {
+    el.classList.add(role === "agent" ? "msg-reveal" : "msg-send");
+    enteredAt.set(chatEntryDisplayKey(entry), Date.now());
+  }
   chatLog.appendChild(el);
   if (role === "agent" && entry.revision_id) syncReplyRevisionButtons();
   if (shouldScroll) scrollElementIntoView(el);
@@ -1317,13 +1386,18 @@ function syncChat(chat, revision) {
     if (!chatContainsEntries(nextChat, displayedChat)) return false;
   }
   if (nextRevision !== null) chatRevision = nextRevision;
+  const shownBefore = new Set(displayedChat.map(chatEntryDisplayKey));
   displayedChat = nextChat.slice();
   for (const el of [...chatLog.querySelectorAll(".bubble.user,.bubble.agent:not(.agent-working)")]) {
     el.remove();
   }
 
   let lastChatBubble = null;
-  for (const item of nextChat) lastChatBubble = addChat(item, false) || lastChatBubble;
+  for (const item of nextChat) {
+    const key = chatEntryDisplayKey(item);
+    const enter = !shownBefore.has(key) || Date.now() - (enteredAt.get(key) || 0) < 400;
+    lastChatBubble = addChat(item, false, { enter }) || lastChatBubble;
+  }
   if (workingBubble) chatLog.appendChild(workingBubble);
   // Handed-back drafts were written at the end of the conversation, and a rebuild re-appends the
   // whole transcript - so without this they end up above it, where the scroll below would leave
@@ -1498,6 +1572,20 @@ async function refreshChromeLoadHandoff(requestSequence) {
 function scrollPanelToBottom() {
   panelScroll.scrollTop = panelScroll.scrollHeight;
 }
+
+// AI Elements Conversation: once the reader scrolls up, a button at the bottom of the conversation
+// brings them back to the newest message. It uses the dropdown recipe so it eases in and out.
+const scrollLatestButton = /** @type {HTMLButtonElement} */ (document.getElementById("scrollLatest"));
+function syncScrollLatest() {
+  const distance = Number(panelScroll.scrollHeight) - Number(panelScroll.scrollTop) - Number(panelScroll.clientHeight);
+  setLayerOpen(scrollLatestButton, distance > 80);
+}
+panelScroll.addEventListener("scroll", syncScrollLatest, { passive: true });
+scrollLatestButton.addEventListener("click", () => {
+  if (typeof panelScroll.scrollTo === "function") {
+    panelScroll.scrollTo({ top: panelScroll.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  } else scrollPanelToBottom();
+});
 
 // ---- Suggested replies ----
 // The artifact declares them (window.lavish.suggest in the SDK) because only it knows what a sensible
@@ -6038,7 +6126,7 @@ events.set("agent-reply", (data) => {
     text: String(data.text || ""),
     ...(data.at ? { at: String(data.at) } : {}),
   };
-  if (addChat(entry)) displayedChat.push(entry);
+  if (addChat(entry, true, { enter: true })) displayedChat.push(entry);
   noteAgentReply(entry.text);
 });
 events.set("chat-sync", (data) => {

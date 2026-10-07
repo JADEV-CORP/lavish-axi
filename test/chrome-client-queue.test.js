@@ -733,7 +733,7 @@ test("a reconnect's stale initial sync cannot erase a newer reply", async () => 
   const bubbles = chrome.element("chatLog").children;
   assert.equal(bubbles.length, 2);
   assert.match(bubbles[0].innerHTML, /Sent note/);
-  assert.equal(bubbles[1].innerHTML, '<small>Agent</small><div class="chat-md"><p>New reply</p></div>');
+  assert.equal(agentBody(bubbles[1].innerHTML), '<div class="chat-md"><p>New reply</p></div>');
 });
 
 test("a reconnect cannot settle an identical note this tab never submitted", async () => {
@@ -7436,7 +7436,7 @@ test("an accepted note merges before live entries that arrived before its respon
       '<small>You</small><div class="bubble-text">Sent note</div>',
       eventName,
     );
-    assert.equal(bubbles[1].innerHTML, '<small>Agent</small><div class="chat-md"><p>Newer reply</p></div>', eventName);
+    assert.equal(agentBody(bubbles[1].innerHTML), '<div class="chat-md"><p>Newer reply</p></div>', eventName);
     assert.equal(chrome.element("queuedLog").innerHTML, "", eventName);
   }
 });
@@ -7985,7 +7985,7 @@ test("a stale live sync cannot remove a newer agent reply", async () => {
   const bubbles = chrome.element("chatLog").children;
   assert.equal(bubbles.length, 2);
   assert.match(bubbles[0].innerHTML, /Sent note/);
-  assert.equal(bubbles[1].innerHTML, '<small>Agent</small><div class="chat-md"><p>New reply</p></div>');
+  assert.equal(agentBody(bubbles[1].innerHTML), '<div class="chat-md"><p>New reply</p></div>');
 });
 
 test("a transcript sync accepts updated rendering for the same stored agent entry", async () => {
@@ -8006,8 +8006,8 @@ test("a transcript sync accepts updated rendering for the same stored agent entr
   });
 
   assert.equal(
-    chrome.element("chatLog").lastAppendedChild.innerHTML,
-    '<small>Agent</small><div class="chat-md"><p><strong>New rendering</strong></p></div>',
+    agentBody(chrome.element("chatLog").lastAppendedChild.innerHTML),
+    '<div class="chat-md"><p><strong>New rendering</strong></p></div>',
   );
 });
 
@@ -8083,14 +8083,14 @@ test("an agent reply renders the server's html and a text-only reply stays escap
     data: JSON.stringify({ text: "Done.\n\n- one", html: "<p>Done.</p><ul><li>one</li></ul>" }),
   });
   assert.equal(
-    chrome.element("chatLog").lastAppendedChild.innerHTML,
-    '<small>Agent</small><div class="chat-md"><p>Done.</p><ul><li>one</li></ul></div>',
+    agentBody(chrome.element("chatLog").lastAppendedChild.innerHTML),
+    '<div class="chat-md"><p>Done.</p><ul><li>one</li></ul></div>',
   );
 
   chrome.eventSource().listeners.get("agent-reply")({ data: JSON.stringify({ text: "<img src=x onerror=alert(1)>" }) });
   assert.equal(
-    chrome.element("chatLog").lastAppendedChild.innerHTML,
-    '<small>Agent</small><div class="bubble-text">&lt;img src=x onerror=alert(1)&gt;</div>',
+    agentBody(chrome.element("chatLog").lastAppendedChild.innerHTML),
+    '<div class="bubble-text">&lt;img src=x onerror=alert(1)&gt;</div>',
   );
 });
 
@@ -8148,7 +8148,7 @@ test("a synced transcript renders sent notes with anchors and thumbnails and nev
   );
   assert.equal(note.innerHTML.match(/class="bubble-attachment"/g)?.length, 4);
   assert.match(note.innerHTML, /class="bubble-attachment-more"[^>]*>\+2</);
-  assert.equal(reply.innerHTML, '<small>Agent</small><div class="chat-md"><p>ok</p></div>');
+  assert.equal(agentBody(reply.innerHTML), '<div class="chat-md"><p>ok</p></div>');
 });
 
 test("a queued note settles from a compact ack after its transcript entry is evicted", async () => {
@@ -8476,6 +8476,14 @@ test("a mark naming an undeclared revision never reaches the legend", async () =
 
 // A node inside the queued log, as the log's delegated listeners see it: `closest` answers for
 // the classes of the bubble part the test names, carrying that bubble's index.
+// A reply's body without the message header (icon, name, time) and the actions row, which the
+// prototype adds around every agent reply; the tests below are about what the body says.
+function agentBody(html) {
+  return String(html)
+    .replace(/^<div class="msg-who">.*?<\/div>/, "")
+    .replace(/<div class="msg-actions">.*<\/div>$/, "");
+}
+
 function queuedLogNode(classes, index, props = {}) {
   return {
     ...props,
@@ -9445,4 +9453,65 @@ test("an artifact video maximizes in the chrome and hands its position back on c
   assert.equal(viewer.hidden, true);
   const back = chrome.postedToFrame.filter((message) => message.type === "lavish:videoReturn").at(-1);
   assert.deepEqual(JSON.parse(JSON.stringify(back)), { type: "lavish:videoReturn", time: 7.25, paused: false });
+});
+
+test("an agent reply has the prototype's header and a Copy action that copies its Markdown", async () => {
+  const chrome = await createChromeHarness();
+  chrome.eventSource().listeners.get("agent-reply")({
+    data: JSON.stringify({ text: "Done.\n\n- **one**", html: "<p>Done.</p>", at: "2026-10-07T09:05:00.000Z" }),
+  });
+  const bubble = chrome.element("chatLog").children.at(-1);
+  assert.match(
+    bubble.innerHTML,
+    /^<div class="msg-who"><svg class="msg-who-icon"[^>]*>.*<\/svg><span>Agent<\/span><time datetime="2026-10-07T09:05:00.000Z">[^<]+<\/time><\/div>/,
+  );
+  assert.match(
+    bubble.innerHTML,
+    /<div class="msg-actions"><button class="msg-action msg-copy" type="button" aria-label="Copy reply"/,
+  );
+
+  const swap = { dataset: { state: "a" } };
+  const labels = [];
+  const button = {
+    closest: (selector) => (selector === ".msg-copy" ? button : selector === ".bubble" ? bubble : null),
+    querySelector: () => swap,
+    setAttribute: (name, value) => labels.push(value),
+  };
+  chrome.element("chatLog").dispatch("click", { target: button });
+  await flushPromises();
+  assert.deepEqual(chrome.clipboardWrites, ["Done.\n\n- **one**"]);
+  assert.equal(swap.dataset.state, "b");
+  assert.deepEqual(labels, ["Copied"]);
+  chrome.runTimers(1500);
+  assert.equal(swap.dataset.state, "a");
+});
+
+test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const stored = { role: "agent", text: "First.", html: "<p>First.</p>", at: "2026-10-07T09:00:00.000Z" };
+  chrome.eventSource().listeners.get("chat-sync")({ data: JSON.stringify({ chat_revision: 1, chat: [stored] }) });
+  const first = chrome.element("chatLog").children.at(-1);
+  assert.equal(first.classList.contains("msg-reveal"), true, "a reply new to this page reveals");
+
+  // A rebuild moments later (the sync that follows a live reply) keeps the motion going; one that
+  // comes after the reveal has played leaves the older reply still.
+  chrome.advanceClock(1000);
+  const next = { role: "agent", text: "Second.", html: "<p>Second.</p>", at: "2026-10-07T09:01:00.000Z" };
+  chrome.eventSource().listeners.get("chat-sync")({ data: JSON.stringify({ chat_revision: 2, chat: [stored, next] }) });
+  const [again, second] = chrome.element("chatLog").children.slice(-2);
+  assert.equal(again.classList.contains("msg-reveal"), false, "the rebuilt older reply stays still");
+  assert.equal(second.classList.contains("msg-reveal"), true);
+});
+
+test("the scroll-to-latest button appears only when the conversation is scrolled up", async () => {
+  const chrome = await createChromeHarness();
+  const scroller = chrome.element("panelScroll");
+  const button = chrome.element("scrollLatest");
+  button.hidden = true;
+  Object.assign(scroller, { scrollHeight: 2000, clientHeight: 500, scrollTop: 600 });
+  scroller.dispatch("scroll", {});
+  assert.equal(button.hidden, false);
+  scroller.scrollTop = 1490;
+  scroller.dispatch("scroll", {});
+  assert.equal(button.hidden, true);
 });

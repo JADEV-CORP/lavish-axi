@@ -1160,7 +1160,7 @@ test("chrome keeps queued notes at the tail of the one conversation, above the s
   // note is the end of the conversation rather than a second region with its own grammar.
   assert.match(
     html,
-    /<div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"><\/div><div class="chat chat-queued" id="queuedLog"><\/div><\/div><div class="composer" id="chatComposer">/,
+    /<div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"><\/div><div class="chat chat-queued" id="queuedLog"><\/div><button class="scroll-latest t-dropdown"[^>]*id="scrollLatest"[^>]*hidden>.*?<\/button><\/div><div class="composer" id="chatComposer">/,
   );
   assert.doesNotMatch(html, /annotation-pills/);
   assert.doesNotMatch(html, /<h2>Queued Annotations<\/h2>/);

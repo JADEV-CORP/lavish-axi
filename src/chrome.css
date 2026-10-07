@@ -2639,6 +2639,139 @@ body.layout-gate-active iframe#artifact {
   }
 }
 
+/* ---- Conversation details from the prototype (#3241): the message header, hover actions, the
+   scroll-to-latest button, and entrance motion on the transitions-polish token scale. ---- */
+:root {
+  --duration-fast: 250ms;
+  --duration-very-slow: 500ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: ease-in-out;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --blur-medium: 3px;
+}
+.msg-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: var(--w-medium);
+  color: var(--fg);
+}
+.msg-who-icon {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+.msg-who time {
+  font-weight: var(--w-regular);
+  color: var(--fg-faint);
+}
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 2px 0 -8px -6px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.bubble.agent:hover .msg-actions,
+.bubble.agent:focus-within .msg-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .msg-actions {
+    opacity: 1;
+  }
+}
+.msg-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+.msg-action:hover {
+  background: var(--muted);
+  color: var(--fg);
+}
+.msg-actions .reply-revision {
+  margin-top: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.msg-actions .reply-revision:hover {
+  background: var(--muted);
+}
+.scroll-latest {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--shadow-tooltip);
+  cursor: pointer;
+}
+.scroll-latest[hidden] {
+  display: none;
+}
+.scroll-latest.is-closing[hidden] {
+  display: grid;
+}
+.scroll-latest:hover {
+  background: var(--muted);
+}
+@keyframes msg-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-medium));
+    filter: blur(var(--blur-medium));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+@keyframes msg-send {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-base));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.msg-reveal {
+  animation: msg-reveal var(--duration-very-slow) var(--ease-in-out) both;
+}
+.msg-send {
+  animation: msg-send var(--duration-fast) var(--ease-smooth-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg-reveal,
+  .msg-send {
+    animation: none !important;
+  }
+  .msg-actions {
+    transition: none;
+  }
+}
+
 /* ---- Image zoom (#3230): Kibo UI Image Zoom's anatomy (blurred backdrop, the picture gliding
    from its thumbnail, a close button top-right) with an inspection toolbar. Square, per Lyra. ---- */
 .image-zoom {
