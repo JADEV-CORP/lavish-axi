@@ -6461,7 +6461,7 @@ test("layout gate curtain reuses the ended overlay card styling", async () => {
   assert.match(html, /<body class="lavish layout-gate-active">/);
   assert.match(
     html,
-    /<iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" data-artifact-src="\/artifact\/abc\/index\.html"><\/iframe>/,
+    /<iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" allow="fullscreen" data-artifact-src="\/artifact\/abc\/index\.html"><\/iframe>/,
   );
   assert.doesNotMatch(html, /<iframe id="artifact"[^>]* src=/);
   assert.match(html, /class="ended-overlay layout-gate-overlay" id="layoutGateOverlay"/);
@@ -7054,4 +7054,21 @@ test("pictures can be zoomed from the artifact and the conversation", async () =
   assert.match(html, /<div class="image-zoom" id="imageZoom" role="dialog" aria-modal="true"[^>]*hidden>/);
   assert.match(html, /id="imageZoomIn"[^>]*aria-label="Zoom in"/);
   assert.match(html, /id="imageZoomFit"/);
+});
+
+test("videos can be maximized in the chrome or taken to full screen", async () => {
+  const sdk = createSdkJs("abc");
+  assert.match(sdk, /postArtifactMessage\("lavish:maximizeVideo", \{/);
+  assert.match(sdk, /msg\.type === "lavish:videoReturn"/);
+  assert.match(sdk, /video\.requestFullscreen\(\)/);
+  const chrome = await chromeClientSource();
+  assert.match(chrome, /if \(msg\.type === "lavish:maximizeVideo"\) openVideoViewer\(msg\);/);
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  // The artifact frame may go full screen (a video's own control), and only that is granted.
+  assert.match(html, /<iframe id="artifact" sandbox="[^"]*" allow="fullscreen" /);
+  assert.match(
+    html,
+    /<div class="image-zoom video-viewer" id="videoViewer" role="dialog" aria-modal="true"[^>]*hidden>/,
+  );
+  assert.match(html, /id="videoViewerFullscreen"/);
 });

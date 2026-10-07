@@ -349,6 +349,7 @@ async function createChromeHarness({
   element("shareDialog").hidden = true;
   element("paletteDialog").hidden = true;
   element("imageZoom").hidden = true;
+  element("videoViewer").hidden = true;
   element("moreMenu").hidden = true;
   element("warningsDrawer").hidden = true;
   element("revisionsDrawer").hidden = true;
@@ -9401,4 +9402,47 @@ test("a chat thumbnail opens the zoom preview instead of the note it sits in", a
   assert.equal(img.src, "http://lavish.test/api/abc/attachments/a1");
   assert.equal(chrome.element("imageZoom").hidden, false);
   assert.equal(chrome.element("imageZoomCaption").textContent, "review.png · 400 × 300");
+});
+
+test("an artifact video maximizes in the chrome and hands its position back on close", async () => {
+  const chrome = await createChromeHarness();
+  const viewer = chrome.element("videoViewer");
+  const video = chrome.element("videoViewerVideo");
+  video.readyState = 1;
+  video.pause = () => {
+    video.paused = true;
+  };
+  const ask = (props) => chrome.sendFrameMessage({ type: "lavish:maximizeVideo", ...props });
+
+  for (const src of [
+    "javascript:alert(1)",
+    "blob:http://lavish.test/v",
+    "data:text/html,x",
+    "data:image/png;base64,AAAA",
+  ]) {
+    ask({ src });
+    assert.equal(viewer.hidden, true, src);
+  }
+
+  ask({
+    src: "http://lavish.test/artifact/abc/assets/clip.webm",
+    alt: "Checkout recording",
+    time: 3.5,
+    paused: true,
+    muted: true,
+    loop: true,
+  });
+  assert.equal(viewer.hidden, false);
+  assert.equal(video.src, "http://lavish.test/artifact/abc/assets/clip.webm");
+  assert.equal(video.currentTime, 3.5);
+  assert.equal(video.muted, true);
+  assert.equal(video.loop, true);
+  assert.equal(chrome.element("videoViewerCaption").textContent, "Checkout recording");
+
+  video.currentTime = 7.25;
+  video.paused = false;
+  viewer.dispatch("keydown", { key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.equal(viewer.hidden, true);
+  const back = chrome.postedToFrame.filter((message) => message.type === "lavish:videoReturn").at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(back)), { type: "lavish:videoReturn", time: 7.25, paused: false });
 });

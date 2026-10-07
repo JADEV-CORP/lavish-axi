@@ -2540,6 +2540,13 @@ export function createArtifactSdk(
         .map((pin) => ({ selector: pin.selector, number: pin.number }));
       renderOverlayMarks();
     }
+    if (msg.type === "lavish:videoReturn" && maximizedVideo) {
+      const video = maximizedVideo;
+      maximizedVideo = null;
+      const time = Number(msg.time);
+      if (Number.isFinite(time) && time >= 0) video.currentTime = time;
+      if (msg.paused === false && typeof video.play === "function") video.play().catch(() => {});
+    }
     if (msg.type === "lavish:hotPin") {
       hotPinSelector = typeof msg.selector === "string" ? msg.selector : "";
       renderOverlayMarks();
@@ -2717,8 +2724,46 @@ export function createArtifactSdk(
     });
   }
 
+  // ---- Maximized video (#3236): a hovered <video> gets the same corner button, which hands it to
+  // the chrome's large player at the moment it is at. A stream the chrome cannot open (blob: or
+  // MediaSource) goes to the browser's full screen here instead, which the frame's
+  // allow="fullscreen" permits. The chrome sends the position back on close. ----
+  let maximizedVideo = null;
+
+  function maximizableVideoFrom(el) {
+    if (!(el instanceof Element) || isLavishUi(el)) return null;
+    const video = el.closest("video");
+    if (!video) return null;
+    const rect = video.getBoundingClientRect();
+    return rect.width >= 80 && rect.height >= 45 ? video : null;
+  }
+
+  function requestVideoMaximize(video) {
+    const source = video.querySelector ? video.querySelector("source[src]") : null;
+    const src = video.currentSrc || video.src || (source ? source.src : "");
+    if (!src || src.startsWith("blob:")) {
+      if (typeof video.requestFullscreen === "function") video.requestFullscreen().catch(() => {});
+      return;
+    }
+    const rect = video.getBoundingClientRect();
+    maximizedVideo = video;
+    postArtifactMessage("lavish:maximizeVideo", {
+      src,
+      poster: video.poster || "",
+      alt: String(video.getAttribute("aria-label") || video.getAttribute("title") || "").trim(),
+      time: Number(video.currentTime) || 0,
+      paused: video.paused !== false,
+      muted: video.muted === true,
+      loop: video.loop === true,
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    });
+    // One player at a time: the inline one waits while the large one plays.
+    if (typeof video.pause === "function") video.pause();
+  }
+
   let zoomButton = null;
   let zoomButtonImage = null;
+  let zoomButtonKind = "image";
   let zoomButtonHideTimer = 0;
   function showZoomButton(image) {
     const root = ensureShadow();
@@ -2733,13 +2778,28 @@ export function createArtifactSdk(
       zoomButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (zoomButtonImage) requestImageZoom(zoomButtonImage);
+        if (!zoomButtonImage) return;
+        if (zoomButtonKind === "video") requestVideoMaximize(zoomButtonImage);
+        else requestImageZoom(zoomButtonImage);
       });
       zoomButton.addEventListener("mouseenter", () => window.clearTimeout(zoomButtonHideTimer));
       zoomButton.addEventListener("mouseleave", () => scheduleZoomButtonHide());
     }
     if (!zoomButton.isConnected) root.appendChild(zoomButton);
     window.clearTimeout(zoomButtonHideTimer);
+    const kind = image.tagName.toLowerCase() === "video" ? "video" : "image";
+    if (kind !== zoomButtonKind || !zoomButton.firstChild) {
+      zoomButtonKind = kind;
+      const label = kind === "video" ? "Maximize video" : "Zoom image";
+      zoomButton.setAttribute("aria-label", label);
+      zoomButton.title = label;
+      zoomButton.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        (kind === "video"
+          ? '<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>'
+          : '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>') +
+        "</svg>";
+    }
     zoomButtonImage = image;
     const rect = image.getBoundingClientRect();
     zoomButton.style.left = Math.max(4, rect.right - 40) + "px";
@@ -2756,7 +2816,8 @@ export function createArtifactSdk(
   document.addEventListener(
     "mouseover",
     (event) => {
-      const image = zoomableImageFrom(/** @type {Element} */ (event.target));
+      const target = /** @type {Element} */ (event.target);
+      const image = zoomableImageFrom(target) || maximizableVideoFrom(target);
       if (image) showZoomButton(image);
       else if (zoomButtonImage && !isLavishUi(event.target)) scheduleZoomButtonHide();
     },

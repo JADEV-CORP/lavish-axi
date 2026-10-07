@@ -4930,6 +4930,7 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
   if (msg.type === "lavish:toggleCommandPalette") togglePalette();
   if (msg.type === "lavish:zoomImage") openImageZoomFromFrame(msg);
+  if (msg.type === "lavish:maximizeVideo") openVideoViewer(msg);
   if (msg.type === "lavish:editQueuedAnchor") editQueuedAnchor(String(msg.selector || ""));
 });
 
@@ -5635,6 +5636,109 @@ function openImageZoomFromFrame(msg) {
   void openImageZoom(src, { alt: typeof msg.alt === "string" ? msg.alt.slice(0, 300) : "", origin: zoomRect(origin) });
 }
 
+// ---- Maximized video (#3236). The artifact's video plays large over the editor in the picture
+// preview's shell, from the moment it was at; Full screen (or F) hands it to the browser's full
+// screen. Closing sends the position back, and the artifact's own player resumes from there. ----
+
+const videoViewer = /** @type {HTMLDivElement} */ (document.getElementById("videoViewer"));
+const videoViewerStage = /** @type {HTMLDivElement} */ (document.getElementById("videoViewerStage"));
+const videoViewerVideo = /** @type {HTMLVideoElement} */ (document.getElementById("videoViewerVideo"));
+const videoViewerCaption = /** @type {HTMLParagraphElement} */ (document.getElementById("videoViewerCaption"));
+const videoViewerClose = /** @type {HTMLButtonElement} */ (document.getElementById("videoViewerClose"));
+const videoViewerFullscreen = /** @type {HTMLButtonElement} */ (document.getElementById("videoViewerFullscreen"));
+
+/** @type {Element | null} */
+let videoViewerReturnFocus = null;
+
+// Only video: http(s) URLs and video data: URLs; anything else stays in the artifact.
+function playableVideoSrc(value) {
+  if (typeof value !== "string" || !value || value.length > IMAGE_ZOOM_MAX_SRC_LENGTH) return "";
+  if (/^data:/i.test(value)) return /^data:video\/(mp4|webm|ogg|quicktime)[;,]/i.test(value) ? value : "";
+  return /^https?:\/\//i.test(value) ? value : "";
+}
+
+function openVideoViewer(msg) {
+  const src = playableVideoSrc(msg.src);
+  if (!src || !videoViewer.hidden) return;
+  const time = Number(msg.time);
+  const title = typeof msg.alt === "string" ? msg.alt.trim().slice(0, 300) : "";
+  videoViewerReturnFocus = document.activeElement;
+  videoViewerVideo.poster = zoomableSrc(msg.poster) || "";
+  videoViewerVideo.muted = msg.muted === true;
+  videoViewerVideo.loop = msg.loop === true;
+  videoViewerVideo.src = src;
+  videoViewerCaption.textContent = title || "Video";
+  const start = () => {
+    if (Number.isFinite(time) && time > 0) videoViewerVideo.currentTime = time;
+    // Carry on playing if it was playing; a browser that refuses autoplay leaves it paused.
+    if (msg.paused === false && typeof videoViewerVideo.play === "function") {
+      const playing = videoViewerVideo.play();
+      if (playing && typeof playing.catch === "function") playing.catch(() => {});
+    }
+  };
+  if (Number(videoViewerVideo.readyState) >= 1) start();
+  else videoViewerVideo.addEventListener("loadedmetadata", start, { once: true });
+  closeMenus();
+  setLayerOpen(videoViewer, true);
+  videoViewerVideo.focus();
+}
+
+function closeVideoViewer() {
+  if (videoViewer.hidden) return;
+  if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+    document.exitFullscreen().catch(() => {});
+  }
+  const time = Number(videoViewerVideo.currentTime) || 0;
+  const paused = videoViewerVideo.paused !== false;
+  if (typeof videoViewerVideo.pause === "function") videoViewerVideo.pause();
+  postToFrame({ type: "lavish:videoReturn", time, paused });
+  setLayerOpen(videoViewer, false, { closeToken: "--modal-close-dur" });
+  // Let go of the stream once the fade is over, so a closed viewer is not still downloading.
+  setTimeout(
+    () => {
+      if (!videoViewer.hidden) return;
+      videoViewerVideo.removeAttribute("src");
+      if (typeof videoViewerVideo.load === "function") videoViewerVideo.load();
+    },
+    motionMs("--modal-close-dur", 150),
+  );
+  const back = /** @type {HTMLElement | null} */ (videoViewerReturnFocus);
+  videoViewerReturnFocus = null;
+  if (back && typeof back.focus === "function" && back !== document.body) back.focus();
+}
+
+function toggleVideoFullscreen() {
+  if (document.fullscreenElement) {
+    if (typeof document.exitFullscreen === "function") document.exitFullscreen().catch(() => {});
+    return;
+  }
+  if (typeof videoViewerVideo.requestFullscreen === "function") videoViewerVideo.requestFullscreen().catch(() => {});
+}
+
+videoViewerClose.addEventListener("click", () => closeVideoViewer());
+videoViewerFullscreen.addEventListener("click", () => toggleVideoFullscreen());
+// A click on the backdrop around the player closes it, as in the picture preview.
+videoViewerStage.addEventListener("click", (event) => {
+  if (event.target === videoViewerStage) closeVideoViewer();
+});
+videoViewer.addEventListener("keydown", (event) => {
+  const key = String(event.key || "");
+  if (key === "Escape") {
+    // In full screen the browser takes Escape to leave it; this is the next press.
+    event.preventDefault();
+    event.stopPropagation();
+    closeVideoViewer();
+  } else if ((key === "f" || key === "F") && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    toggleVideoFullscreen();
+  } else if (key === "Tab") {
+    const controls = [videoViewerClose, videoViewerVideo, videoViewerFullscreen];
+    const index = controls.indexOf(/** @type {any} */ (document.activeElement));
+    event.preventDefault();
+    controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
+  }
+});
+
 // ---- Command palette (Ctrl/Cmd+K). Each command runs the same control the reader could click, so
 // its guards, focus handling, and side effects stay in one place; a control that is disabled or
 // not on screen in this layout is left out of the list. ----
@@ -5826,7 +5930,13 @@ document.addEventListener(
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    if (!whiteboardOverlay.hidden) {
+    // The media viewers sit above everything else, and focus can end up outside them (leaving
+    // full screen hands it back to the page), so they close first from anywhere.
+    if (!videoViewer.hidden) {
+      closeVideoViewer();
+    } else if (zoomView) {
+      closeImageZoom();
+    } else if (!whiteboardOverlay.hidden) {
       closeWhiteboard();
     } else if (!shareDialog.hidden) {
       closeShareDialog();
