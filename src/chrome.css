@@ -2374,6 +2374,14 @@ body.layout-gate-active iframe#artifact {
   :root[data-chat-layout="peek"] .panel-tool-rail {
     display: none;
   }
+  /* The sidebar header names the agent, as in the prototype: "Conversation", then "Claude Code". */
+  :root[data-chat-layout="sidebar"] .panel-agent:not([hidden]) {
+    display: inline;
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--fg-faint);
+    white-space: nowrap;
+  }
 }
 /* ---- end desktop layout ---- */
 
@@ -3895,4 +3903,8 @@ img.chat-attachment-thumb {
     transition: none !important;
     animation: none !important;
   }
+}
+
+.panel-agent {
+  display: none;
 }

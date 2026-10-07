@@ -323,6 +323,9 @@ test("invoking agent detection recognizes Codex runtime markers only", () => {
   assert.equal(detectInvokingAgent({ PATH: "/bin", CODEX_THREAD_ID: "thread" }), "codex");
   assert.equal(detectInvokingAgent({ PATH: "/bin", CODEX_HOME: "/tmp/codex" }), "generic");
   assert.equal(detectInvokingAgent({ PATH: "/bin", CODEX_EXPERIMENTAL_FEATURE: "1" }), "generic");
+  assert.equal(detectInvokingAgent({ PATH: "/bin", CLAUDECODE: "1" }), "claude-code");
+  assert.equal(detectInvokingAgent({ PATH: "/bin", CLAUDECODE: "0" }), "generic");
+  assert.equal(detectInvokingAgent({ CLAUDECODE: "1", CODEX_THREAD_ID: "t" }), "codex", "Codex guidance wins");
   assert.equal(detectInvokingAgent({ PATH: "/bin" }), "generic");
 });
 

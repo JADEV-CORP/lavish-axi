@@ -18,6 +18,7 @@ import {
   buildAllowedHostnames,
   CHROME_BOOT_FAILSAFE_MS,
   CHROME_LAYOUT_GATE_MAX_HOLD_MS,
+  agentDisplay,
   createChromeHtml,
   createSdkJs,
   displayPathParts,
@@ -7097,4 +7098,18 @@ test("videos can be maximized in the chrome or taken to full screen", async () =
     /<div class="image-zoom video-viewer" id="videoViewer" role="dialog" aria-modal="true"[^>]*hidden>/,
   );
   assert.match(html, /id="videoViewerFullscreen"/);
+});
+
+test("the editor names only the agents it knows, in the sidebar header and the page data", () => {
+  assert.deepEqual(agentDisplay("claude-code"), { id: "claude-code", name: "Claude Code", short: "Claude" });
+  assert.deepEqual(agentDisplay("codex"), { id: "codex", name: "Codex", short: "Codex" });
+  for (const unknown of ["", "generic", "<b>x</b>", "__proto__", "toString"]) assert.equal(agentDisplay(unknown), null);
+
+  const named = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" }, { agentId: "claude-code" });
+  assert.match(named, /<h2>Conversation<\/h2><span class="panel-agent" id="panelAgent">Claude Code<\/span>/);
+  assert.match(named, /"initialAgent":\{"id":"claude-code","name":"Claude Code","short":"Claude"\}/);
+
+  const unnamed = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" }, { agentId: "<script>" });
+  assert.match(unnamed, /<span class="panel-agent" id="panelAgent" hidden><\/span>/);
+  assert.match(unnamed, /"initialAgent":null/);
 });

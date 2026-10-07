@@ -17,7 +17,7 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -9486,7 +9486,7 @@ test("an agent reply has the prototype's header and a Copy action that copies it
   const bubble = chrome.element("chatLog").children.at(-1);
   assert.match(
     bubble.innerHTML,
-    /^<div class="msg-who"><svg class="msg-who-icon"[^>]*>.*<\/svg><span>Agent<\/span><time datetime="2026-10-07T09:05:00.000Z">[^<]+<\/time><\/div>/,
+    /^<div class="msg-who"><svg class="msg-who-icon"[^>]*>.*<\/svg><span class="msg-who-name">Agent<\/span><time datetime="2026-10-07T09:05:00.000Z">[^<]+<\/time><\/div>/,
   );
   assert.match(
     bubble.innerHTML,
@@ -9927,4 +9927,34 @@ test("a message's marks read the same queued and sent, and the pin bookkeeping n
   assert.ok(body, "the batch was posted");
   assert.equal(JSON.stringify(body).includes("_lavishPin"), false);
   assert.equal(body.prompts[0].target.marks[1].note, "Shorter");
+});
+
+test("the editor names the agent a poll reported, on replies and in the sidebar header", async () => {
+  const reply = { role: "agent", text: "Opened it.", html: "<p>Opened it.</p>", at: "2026-10-07T09:00:00.000Z" };
+  const known = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      initialChat: [reply],
+      initialAgent: { id: "codex", name: "Codex", short: "Codex" },
+    },
+  });
+  assert.match(
+    known.element("chatLog").children[0].innerHTML,
+    /<span class="msg-who-name">Codex<\/span>/,
+    "a reload keeps the name",
+  );
+
+  const chrome = await createChromeHarness();
+
+  chrome.eventSource().listeners.get("agent-presence")({
+    data: JSON.stringify({ state: "listening", agent: { id: "claude-code", name: "Claude Code", short: "Claude" } }),
+  });
+  assert.equal(chrome.element("panelAgent").textContent, "Claude Code");
+  assert.equal(chrome.element("panelAgent").hidden, false);
+
+  // A malformed identity changes nothing.
+  chrome.eventSource().listeners.get("agent-presence")({
+    data: JSON.stringify({ state: "listening", agent: "<b>x</b>" }),
+  });
+  assert.equal(chrome.element("panelAgent").textContent, "Claude Code");
 });

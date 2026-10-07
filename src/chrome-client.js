@@ -1194,8 +1194,27 @@ function messageTime(at) {
   return '<time datetime="' + escapeHtml(String(at)) + '">' + escapeHtml(label) + "</time>";
 }
 
+// Who is replying: "Claude" or "Codex" once a poll has said so, "Agent" until then.
+let agentShortName = typeof sessionData.initialAgent?.short === "string" ? sessionData.initialAgent.short : "Agent";
 function agentHeaderHtml(at) {
-  return '<div class="msg-who">' + SPARKLES_SVG + "<span>Agent</span>" + messageTime(at) + "</div>";
+  return (
+    '<div class="msg-who">' +
+    SPARKLES_SVG +
+    '<span class="msg-who-name">' +
+    escapeHtml(agentShortName) +
+    "</span>" +
+    messageTime(at) +
+    "</div>"
+  );
+}
+
+const panelAgent = /** @type {HTMLSpanElement} */ (document.getElementById("panelAgent"));
+function setAgentIdentity(agent) {
+  if (!agent || typeof agent !== "object" || typeof agent.name !== "string" || typeof agent.short !== "string") return;
+  agentShortName = agent.short;
+  panelAgent.textContent = agent.name;
+  panelAgent.hidden = false;
+  for (const name of chatLog.querySelectorAll(".msg-who-name")) name.textContent = agent.short;
 }
 
 // AI Elements Actions: shown on hover or focus, always on touch. Copy takes the agent's own text,
@@ -6536,7 +6555,10 @@ events.set("chat-sync", (data) => {
   rememberChatAckIds(data.ack_ids);
   syncChat(data.chat || [], data.chat_revision);
 });
-events.set("agent-presence", (data) => setAgentPresence(data.mode === "external-listener" ? "external" : data.state));
+events.set("agent-presence", (data) => {
+  setAgentIdentity(data.agent);
+  setAgentPresence(data.mode === "external-listener" ? "external" : data.state);
+});
 events.set("layout-warnings", (data) => setLayoutWarnings(data.warnings || []));
 events.set("ended", () => markSessionEnded());
 connectLiveEvents();

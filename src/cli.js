@@ -119,7 +119,11 @@ export const VERSION =
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 export function detectInvokingAgent(env = process.env) {
-  return ["CODEX_SANDBOX", "CODEX_THREAD_ID"].some((key) => Object.hasOwn(env, key)) ? "codex" : "generic";
+  if (["CODEX_SANDBOX", "CODEX_THREAD_ID"].some((key) => Object.hasOwn(env, key))) return "codex";
+  // Claude Code sets CLAUDECODE=1 in the shells it runs. Only the editor's labels use this; the poll
+  // guidance stays the generic one.
+  if (env.CLAUDECODE === "1") return "claude-code";
+  return "generic";
 }
 
 export function shouldNarratePollWaitTicks({ isTTY }) {
@@ -447,6 +451,9 @@ async function pollCommand(args) {
   const query = new URLSearchParams({ file: absolute });
   if (timeoutMs) query.set("timeoutMs", timeoutMs);
   if (owner) query.set("owner", owner);
+  // Lets the editor name the agent ("Claude Code", "Codex") instead of a generic "Agent".
+  const invokingAgent = detectInvokingAgent(process.env);
+  if (invokingAgent !== "generic") query.set("agent", invokingAgent);
   if (takeover) query.set("takeover", "1");
   // The indefinite poll looks hung from the agent's side (stdout stays empty until the user
   // acts), so narrate the wait on stderr and leave re-run guidance behind if the agent's
