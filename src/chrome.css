@@ -1462,6 +1462,71 @@ body {
   font-variant-numeric: tabular-nums;
 }
 /* Agent prose: the Markdown subset src/chat-messages.js renders, sized for a 360px column. */
+/* Structured reply parts (replyPartsHtml): Reasoning reads as a quiet aside on a left rule, the
+   change and file lists as small bordered tool blocks. All start closed. */
+.reply-part {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.reply-part > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--fg-faint);
+  font-weight: 500;
+}
+.reply-part > summary::-webkit-details-marker {
+  display: none;
+}
+.reply-part > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform var(--dur) var(--ease);
+}
+.reply-part[open] > summary::after {
+  transform: translateY(1px) rotate(225deg);
+}
+.reply-part > summary:hover {
+  color: var(--fg);
+}
+.reply-part > .chat-md {
+  margin-top: 6px;
+  color: var(--fg-muted);
+}
+.reply-part-reasoning > .chat-md {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.reply-part-changes,
+.reply-part-files {
+  border: 1px solid var(--border);
+}
+.reply-part-changes > summary,
+.reply-part-files > summary {
+  padding: 6px 8px;
+}
+.reply-part-changes > summary::after,
+.reply-part-files > summary::after {
+  margin-left: auto;
+}
+.reply-part-changes > .chat-md,
+.reply-part-files > .chat-md {
+  margin-top: 0;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reply-part > summary::after {
+    transition: none;
+  }
+}
+
 /* "View r2" under an agent reply stamped with a revision (see replyRevisionHtml). */
 .reply-revision {
   display: inline-flex;

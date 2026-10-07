@@ -3594,3 +3594,13 @@ test("update is refused in the Jadev fork instead of installing the upstream npm
 test("the fork carries a jadev prerelease version so it is never mistaken for an npm release", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+-jadev\.\d+$/);
 });
+
+test("poll and reply help describe the optional reply sections", () => {
+  for (const command of ["poll", "reply"]) {
+    const help = getCommandHelp(command);
+    assert.match(help, /## What I changed/, command);
+    assert.match(help, /## Files touched/, command);
+    assert.match(help, /## Reasoning/, command);
+    assert.match(help, /skip them for a routine reply/, command);
+  }
+});

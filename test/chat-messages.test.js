@@ -11,6 +11,7 @@ import {
   RECEIPT_NONE,
   renderChatMarkdown,
   serializeChat,
+  splitReplyParts,
   stampDelivered,
   stampDone,
   stampWorking,
@@ -466,4 +467,49 @@ test("pre-receipt entries are marked once and excluded from every stamp", () => 
   assert.equal(stampWorking(chat, at), true);
   assert.equal(stampDone(chat, at), true);
   assert.deepEqual(chat[0], userEntry("Old", { receipt: RECEIPT_NONE }));
+});
+
+test("splitReplyParts lifts the three exact sections out of a reply and leaves the rest as its body", () => {
+  const reply = [
+    "Renamed the payment step.",
+    "",
+    "## What I changed",
+    "- Title now says Payment",
+    "",
+    "## files touched:",
+    "- checkout.html",
+    "",
+    "## Reasoning",
+    "Shorter titles fit the card.",
+  ].join("\n");
+  assert.deepEqual(splitReplyParts(reply), {
+    body: "Renamed the payment step.",
+    parts: [
+      { kind: "changes", text: "- Title now says Payment" },
+      { kind: "files", text: "- checkout.html" },
+      { kind: "reasoning", text: "Shorter titles fit the card." },
+    ],
+  });
+});
+
+test("splitReplyParts leaves ordinary headings, fenced headings, and empty sections alone", () => {
+  const plain = "## Summary\nAll good.\n\n## What changed next\nNothing.";
+  assert.deepEqual(splitReplyParts(plain), { body: plain, parts: [] });
+
+  const fenced = "Example:\n```\n## Reasoning\n```\nDone.";
+  assert.deepEqual(splitReplyParts(fenced), { body: fenced, parts: [] });
+
+  assert.deepEqual(splitReplyParts("Done.\n\n## Reasoning\n\n"), { body: "Done.", parts: [] });
+});
+
+test("serializeChat renders reply parts beside the body, and a plain reply has no parts", () => {
+  const [structured, plain] = serializeChat([
+    { role: "agent", text: "Done.\n\n## Files touched\n- `a.html`", at: "2026-10-06T00:00:00.000Z" },
+    { role: "agent", text: "Done.", at: "2026-10-06T00:00:01.000Z" },
+  ]);
+  assert.equal(structured.html, "<p>Done.</p>");
+  assert.deepEqual(structured.parts, [{ kind: "files", html: "<ul><li><code>a.html</code></li></ul>" }]);
+  assert.equal(structured.text, "Done.\n\n## Files touched\n- `a.html`", "the stored text is untouched");
+  assert.equal("parts" in plain, false);
+  assert.equal(plain.html, "<p>Done.</p>");
 });

@@ -316,6 +316,43 @@ function renderListItems(items) {
   return render(root.children);
 }
 
+// Structured reply parts. An agent reply may end with any of three level-two sections, written
+// with exactly these headings; each becomes a collapsible block under the reply, and the prose
+// above the first one is the reply itself. A reply without them is one body, rendered as before.
+// A heading inside a fenced code block is code, not a section.
+const REPLY_PART_HEADINGS = /^##\s+(what i changed|files touched|reasoning)\s*:?\s*$/i;
+
+function replyPartKind(title) {
+  const key = title.toLowerCase();
+  if (key === "what i changed") return "changes";
+  if (key === "files touched") return "files";
+  return "reasoning";
+}
+
+export function splitReplyParts(text) {
+  const lines = String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n");
+  const body = [];
+  const parts = [];
+  let fence = "";
+  for (const line of lines) {
+    const open = fence ? null : FENCE_OPEN.exec(line);
+    if (open) fence = open[1];
+    else if (fence && line.startsWith(fence)) fence = "";
+    const heading = fence || open ? null : REPLY_PART_HEADINGS.exec(line);
+    if (heading) {
+      parts.push({ kind: replyPartKind(heading[1]), lines: [] });
+      continue;
+    }
+    (parts.length ? parts[parts.length - 1].lines : body).push(line);
+  }
+  return {
+    body: body.join("\n").trim(),
+    parts: parts.map((part) => ({ kind: part.kind, text: part.lines.join("\n").trim() })).filter((part) => part.text),
+  };
+}
+
 // A deliberate subset of Markdown: what makes an agent reply scannable in a 360px column, and
 // nothing that needs a type scale or a wide table. Blocks: paragraphs on blank lines with a
 // single newline as a line break (the chat convention - agents write one thought per line),
@@ -483,7 +520,11 @@ export function serializeChat(chat) {
     if (!item || typeof item !== "object") continue;
     const text = String(item.text || "");
     if (item.role === "agent") {
-      serialized.push({ ...item, role: "agent", text, html: renderChatMarkdown(text) });
+      const { body, parts } = splitReplyParts(text);
+      const entry = { ...item, role: "agent", text, html: renderChatMarkdown(body) };
+      if (parts.length) entry.parts = parts.map((part) => ({ kind: part.kind, html: renderChatMarkdown(part.text) }));
+      else delete entry.parts;
+      serialized.push(entry);
       continue;
     }
     const entry = {

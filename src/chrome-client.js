@@ -1072,13 +1072,15 @@ async function copyText(text) {
 // user entry is always escaped text, with its anchor line and thumbnails when it carries them.
 function chatBubbleHtml(entry) {
   if (entry.role === "agent") {
-    return (
-      "<small>Agent</small>" +
-      (typeof entry.html === "string" && entry.html
+    const parts = replyPartsHtml(entry.parts);
+    // A reply that is only sections has no prose of its own; the raw text would repeat them.
+    const body =
+      typeof entry.html === "string" && entry.html
         ? '<div class="chat-md">' + entry.html + "</div>"
-        : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>") +
-      replyRevisionHtml(entry.revision_id)
-    );
+        : parts
+          ? ""
+          : '<div class="bubble-text">' + escapeHtml(entry.text) + "</div>";
+    return "<small>Agent</small>" + body + parts + replyRevisionHtml(entry.revision_id);
   }
   return (
     "<small>You</small>" +
@@ -1087,6 +1089,32 @@ function chatBubbleHtml(entry) {
     bubbleAttachmentsHtml(entry) +
     receiptHtml(entry)
   );
+}
+
+// Structured reply parts (src/chat-messages.js `splitReplyParts`): each section the agent wrote
+// under a reply becomes a closed disclosure. Titles come from this fixed map, never from the
+// payload, and a kind outside it is dropped; the html is the server's render, like the reply's.
+const REPLY_PART_TITLES = new Map([
+  ["changes", "What I changed"],
+  ["files", "Files touched"],
+  ["reasoning", "Reasoning"],
+]);
+
+function replyPartsHtml(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .filter((part) => part && REPLY_PART_TITLES.has(part.kind) && typeof part.html === "string" && part.html)
+    .map(
+      (part) =>
+        '<details class="reply-part reply-part-' +
+        part.kind +
+        '"><summary>' +
+        REPLY_PART_TITLES.get(part.kind) +
+        '</summary><div class="chat-md">' +
+        part.html +
+        "</div></details>",
+    )
+    .join("");
 }
 
 // Delivery receipt (docs/delivery-acks.md): the per-note view of what the server observed. Seen,

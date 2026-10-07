@@ -9251,3 +9251,43 @@ test("a reply with a malformed revision stamp gets no button", async () => {
   });
   assert.doesNotMatch(chrome.element("chatLog").children.at(-1).innerHTML, /reply-revision/);
 });
+
+test("an agent reply's sections render as closed blocks with fixed titles", async () => {
+  const chrome = await createChromeHarness();
+  chrome.eventSource().listeners.get("agent-reply")({
+    data: JSON.stringify({
+      role: "agent",
+      text: "Done.",
+      html: "<p>Done.</p>",
+      parts: [
+        { kind: "reasoning", html: "<p>Because.</p>" },
+        { kind: "files", html: "<ul><li>a.html</li></ul>" },
+        { kind: "<script>", html: "<p>dropped</p>" },
+      ],
+    }),
+  });
+  const html = chrome.element("chatLog").children.at(-1).innerHTML;
+  assert.match(html, /<div class="chat-md"><p>Done\.<\/p><\/div>/);
+  assert.match(
+    html,
+    /<details class="reply-part reply-part-reasoning"><summary>Reasoning<\/summary><div class="chat-md"><p>Because\.<\/p><\/div><\/details>/,
+  );
+  assert.match(html, /<details class="reply-part reply-part-files"><summary>Files touched<\/summary>/);
+  assert.doesNotMatch(html, /dropped|<script>/);
+  assert.doesNotMatch(html, /<details[^>]* open/);
+});
+
+test("a reply that is only sections shows no raw text above them", async () => {
+  const chrome = await createChromeHarness();
+  chrome.eventSource().listeners.get("agent-reply")({
+    data: JSON.stringify({
+      role: "agent",
+      text: "## Reasoning\nBecause.",
+      html: "",
+      parts: [{ kind: "reasoning", html: "<p>Because.</p>" }],
+    }),
+  });
+  const html = chrome.element("chatLog").children.at(-1).innerHTML;
+  assert.doesNotMatch(html, /bubble-text/);
+  assert.match(html, /reply-part-reasoning/);
+});
