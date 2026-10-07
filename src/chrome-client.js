@@ -4702,13 +4702,24 @@ window.addEventListener("message", (event) => {
   }
 });
 
+// Navigate once. The bootstrapped load belongs to whichever page began it, and the begin below
+// retires it, so navigating to it first only races that begin: the artifact route re-verifies
+// after reading the file, answers the first navigation 409, and Chromium can commit that page in
+// place of the second navigation (AB#3233). The bootstrapped load is the fallback for a begin that
+// did not navigate, such as a superseded reviewer, and is read here rather than at boot because a
+// re-handshake may have replaced it with the current one. A newer request (a live reload that
+// landed meanwhile) owns the frame instead, so the fallback stands down for it.
 function loadFrame() {
-  if (artifactSrc) {
-    if (artifactLoadToken) {
+  if (!artifactSrc) return;
+  const replacement = replaceArtifactFrame();
+  const sequence = artifactLoadRequestSequence;
+  replacement
+    .then((navigated) => {
+      if (navigated || sequence !== artifactLoadRequestSequence) return;
+      if (!artifactLoadToken || frame.src) return;
       frame.src = artifactFrameSrcForLoad({ revision: artifactLoadRevision, token: artifactLoadToken });
-    }
-    replaceArtifactFrame().catch(() => {});
-  }
+    })
+    .catch(() => {});
 }
 
 function reloadArtifact() {

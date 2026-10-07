@@ -3969,6 +3969,53 @@ test("chrome client registers message listener before loading the artifact ifram
   assert.equal(chrome.srcLoads[0].hadMessageListener, true);
 });
 
+// AB#3233: the page used to navigate to the bootstrapped load and begin a new one in the same
+// tick. The begin retires the bootstrapped token, the artifact route re-verifies after reading the
+// file and answers that first navigation 409, and Chromium could commit that page instead of the
+// second navigation. After a restart the server is slow enough that it happened on most reloads.
+test("a page load navigates the artifact frame once, to the load it began", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: {
+      ...defaultSessionData,
+      chromeLoadToken: "page-handoff",
+      initialArtifactRevision: 4,
+      initialArtifactLoadToken: "bootstrap-load",
+      initialArtifactLoadSequence: 4,
+    },
+  });
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(chrome.artifactBeginRequests.length, 1);
+  assert.deepEqual(
+    chrome.srcLoads.map((load) => load.src),
+    ["/artifact/abc/index.html?artifact_revision=1&artifact_load_token=harness-load-1"],
+  );
+});
+
+test("a page load that cannot begin its own load shows the bootstrapped one", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: {
+      ...defaultSessionData,
+      chromeLoadToken: "page-handoff",
+      initialArtifactRevision: 4,
+      initialArtifactLoadToken: "bootstrap-load",
+      initialArtifactLoadSequence: 4,
+    },
+    beginLoadResponses: [{ ok: false, status: 409, json: async () => ({ status: "superseded" }) }],
+  });
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(chrome.element("handoffBanner").hidden, false);
+  assert.deepEqual(
+    chrome.srcLoads.map((load) => load.src),
+    ["/artifact/abc/index.html?artifact_revision=4&artifact_load_token=bootstrap-load"],
+  );
+});
+
 test("the layout gate reveals after a completed pass with no findings", async () => {
   const { posts, fetchImpl } = diagnosticsHarness([[]]);
   const chrome = await createChromeHarness({ fetchImpl });
