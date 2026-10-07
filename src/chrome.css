@@ -1749,6 +1749,7 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
+    "marks marks"
     "attachments attachments"
     "input input"
     "tools actions";
@@ -1763,6 +1764,9 @@ body {
 .prompt-input.is-error,
 .prompt-input.is-error:focus-within {
   border-color: var(--destructive);
+}
+.prompt-input .message-marks {
+  grid-area: marks;
 }
 .prompt-input .chat-attachments {
   grid-area: attachments;
@@ -2298,6 +2302,7 @@ body.layout-gate-active iframe#artifact {
   }
   /* Flattened into the composer's single-column grid, the box's named areas would mint implicit
      columns; the children go back to plain auto placement. */
+  .prompt-input .message-marks,
   .prompt-input .chat-attachments,
   .prompt-input textarea,
   .prompt-input .chat-attachment-toolbar,
@@ -2309,6 +2314,7 @@ body.layout-gate-active iframe#artifact {
     background: var(--bg);
     padding: 10px;
   }
+  .prompt-input .message-marks,
   .prompt-input .chat-attachments,
   .prompt-input .chat-attachment-toolbar,
   .prompt-input .actions {
@@ -2666,8 +2672,87 @@ body.layout-gate-active iframe#artifact {
   }
 }
 
+/* ---- Marks: annotated blocks waiting in the message box as numbered chips (#3241 part 4). ---- */
+.message-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 6px 0;
+  max-height: 88px;
+  overflow-y: auto;
+}
+.message-marks[hidden] {
+  display: none;
+}
+.mark-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 2px 0 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11px;
+  line-height: 1;
+  animation: mark-chip-in var(--dur) var(--ease) both;
+}
+.mark-chip:hover {
+  border-color: var(--accent);
+}
+.mark-chip .anchor-kind {
+  flex: 0 0 auto;
+}
+.mark-chip-excerpt {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.mark-chip-note {
+  flex: 0 0 auto;
+  color: var(--accent-text);
+  font-weight: var(--w-medium);
+}
+.mark-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+.mark-chip-remove:hover {
+  background: var(--muted);
+  color: var(--fg);
+}
+.mark-chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+@keyframes mark-chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mark-chip {
+    animation: none;
+  }
+}
+
 /* ---- Queue list, edit bar, Queue button, key hints (#3241 part 3). ---- */
 .queue {
+  /* A grid item sizes to its content by default, and a long anchor excerpt would widen the
+     whole composer past the panel. */
+  min-width: 0;
   margin-bottom: 8px;
   border: 1px solid var(--border);
   background: var(--bg);

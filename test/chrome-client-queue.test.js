@@ -9713,3 +9713,71 @@ test("the queue list collapses to its header and opens again", async () => {
   assert.equal(toggle["aria-expanded"], "true");
   assert.equal(chrome.element("queuePanel").classList.contains("is-collapsed"), false);
 });
+
+function markBlock(chrome, selector, tag, text, prompt = "") {
+  chrome.sendFrameMessage({ type: "lavish:addMark", prompt: { prompt, selector, tag, text } });
+}
+
+test("marked blocks wait in the message box as numbered chips and leave with the message", async () => {
+  const chrome = await createChromeHarness();
+  queueHeadingNote(chrome);
+  markBlock(chrome, "main > p", "p", "Intro copy");
+  markBlock(chrome, "main > table", "table", "Plans", "Too wide");
+  markBlock(chrome, "main > p", "p", "Intro copy");
+
+  const box = chrome.element("messageMarks");
+  assert.equal(box.hidden, false);
+  // Numbers carry on from the queued note's pin, and marking the same block twice adds nothing.
+  assert.equal(box.innerHTML.match(/class="mark-chip"/g).length, 2);
+  assert.match(box.innerHTML, /<span class="anchor-pin">2<\/span><span class="anchor-kind">&lt;p&gt;<\/span>/);
+  assert.match(box.innerHTML, /<span class="anchor-pin">3<\/span>.*mark-chip-note/);
+  const anchors = chrome.postedToFrame.filter((message) => message.type === "lavish:queuedAnchors").at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(anchors.pins)), [
+    { selector: "main > h2", number: 1 },
+    { selector: "main > p", number: 2 },
+    { selector: "main > table", number: 3 },
+  ]);
+  assert.equal(chrome.element("chatInput").placeholder, "Say what to change. Call the marks [2], [3]");
+
+  chrome.element("chatInput").value = "Make [2] as wide as [3]";
+  chrome.element("chatInput").dispatch("input", {});
+  chrome.runTimers(200);
+  assert.equal(chrome.element("sendLabel").textContent, "Send 4 to Agent");
+
+  chrome.element("queueLater").onclick();
+  assert.deepEqual(
+    chrome.queued().map((prompt) => [prompt.prompt, prompt.selector]),
+    [
+      ["Make this heading bigger", "main > h2"],
+      ["[2]", "main > p"],
+      ["[3] Too wide", "main > table"],
+      ["Make [2] as wide as [3]", ""],
+    ],
+  );
+  assert.equal(box.hidden, true);
+  assert.equal(chrome.element("chatInput").value, "");
+});
+
+test("a mark chip lights its block on hover and can be removed", async () => {
+  const chrome = await createChromeHarness();
+  markBlock(chrome, "main > p", "p", "Intro copy");
+  markBlock(chrome, "main > h3", "h3", "Plans");
+  const box = chrome.element("messageMarks");
+  const chip = (index) => ({
+    closest: (selector) => (selector === ".mark-chip" ? { dataset: { index: String(index) } } : null),
+  });
+
+  box.dispatch("mouseover", { target: chip(1) });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(chrome.postedToFrame.filter((message) => message.type === "lavish:hotPin").at(-1))),
+    { type: "lavish:hotPin", selector: "main > h3" },
+  );
+
+  box.dispatch("click", {
+    target: { closest: (selector) => (selector === ".mark-chip-remove" ? { dataset: { index: "0" } } : null) },
+  });
+  assert.equal(box.innerHTML.match(/class="mark-chip"/g).length, 1);
+  assert.match(box.innerHTML, /<span class="anchor-pin">1<\/span><span class="anchor-kind">&lt;h3&gt;<\/span>/);
+  assert.equal(chrome.element("chatInput").placeholder, "Say what to change. Call the marks [1]");
+  assert.equal(chrome.postedToFrame.filter((message) => message.type === "lavish:hotPin").at(-1).selector, "");
+});

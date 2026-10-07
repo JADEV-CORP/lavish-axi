@@ -111,6 +111,7 @@ const chatLog = /** @type {HTMLDivElement} */ (document.getElementById("chatLog"
 const chatComposer = /** @type {HTMLDivElement} */ (document.getElementById("chatComposer"));
 const chatInput = /** @type {HTMLTextAreaElement} */ (document.getElementById("chatInput"));
 const chatAttachments = /** @type {HTMLDivElement} */ (document.getElementById("chatAttachments"));
+const messageMarks = /** @type {HTMLDivElement} */ (document.getElementById("messageMarks"));
 const chatAttachButton = /** @type {HTMLButtonElement} */ (document.getElementById("chatAttach"));
 const chatAttachInput = /** @type {HTMLInputElement} */ (document.getElementById("chatAttachInput"));
 const chatAttachmentNotice = /** @type {HTMLSpanElement} */ (document.getElementById("chatAttachmentNotice"));
@@ -206,6 +207,10 @@ const whiteboardError = /** @type {HTMLDivElement} */ (document.getElementById("
 const artifactSrc = frame.dataset.artifactSrc || frame.getAttribute?.("data-artifact-src") || frame.src || "";
 
 const queued = loadQueuedPrompts();
+// Marked blocks waiting in the message box as numbered chips. They leave with the next message.
+/** @type {Array<Record<string, any>>} */
+const marks = [];
+let renderedMarks = "";
 let annotation = true;
 let ended = false;
 let agentPresence = "waiting";
@@ -687,7 +692,18 @@ function render() {
   const editIndex = editingPromptId ? queued.findIndex((prompt) => promptIdentity(prompt) === editingPromptId) : -1;
   editBar.hidden = editIndex === -1;
   if (editIndex !== -1) editBarText.textContent = "Editing queued note " + (editIndex + 1);
-  chatInput.placeholder = editIndex === -1 ? COMPOSER_PLACEHOLDER : "Edit the queued note";
+  renderMarks();
+  chatInput.placeholder =
+    editIndex !== -1
+      ? "Edit the queued note"
+      : marks.length
+        ? "Say what to change. Call the marks " +
+          marks
+            .slice(0, 2)
+            .map((_, index) => "[" + markNumber(index) + "]")
+            .join(", ") +
+          (marks.length > 2 ? "..." : "")
+        : COMPOSER_PLACEHOLDER;
   if (editFocusPending) {
     editFocusPending = false;
     chatInput.focus();
@@ -2303,6 +2319,9 @@ function postQueuedAnchors(force = false) {
   const anchored = queued.filter((prompt) => isElementAnchoredPrompt(prompt));
   const selectors = [...new Set(anchored.flatMap(queuedAnchorSelectorsOf))];
   const pins = anchored.map((prompt, index) => ({ selector: String(prompt.selector), number: index + 1 }));
+  marks.forEach((mark, index) => {
+    if (isElementAnchoredPrompt(mark)) pins.push({ selector: String(mark.selector), number: markNumber(index) });
+  });
   const signature = JSON.stringify([selectors, pins]);
   if (!force && signature === postedQueuedAnchors) return;
   postedQueuedAnchors = signature;
@@ -2342,6 +2361,96 @@ queueToggle.onclick = () => {
   queuePanel.classList.toggle("is-collapsed", open);
 };
 
+// A mark's number carries on from the queued notes' pins, so the chip in the box, the pin on the
+// artifact, and the [n] the reviewer types all agree.
+function markNumber(index) {
+  return queued.filter((prompt) => isElementAnchoredPrompt(prompt)).length + index + 1;
+}
+
+function addMark(rawPrompt) {
+  if (ended || terminalSubmission) return;
+  const mark = adoptQueuedPrompt(rawPrompt, false);
+  if (!mark || !mark.selector) return;
+  delete mark[internalQueueKeyField];
+  const note = String(mark.prompt || "").trim();
+  // Marking the same block twice without a word adds nothing. A note on it is worth keeping.
+  const bare = (item) => !String(item.prompt || "").trim() && !attachmentCount(item);
+  if (bare(mark) && marks.some((item) => item.selector === mark.selector && bare(item))) return;
+  marks.push(mark);
+  editFocusPending = !editingPromptId && !note;
+  render();
+  pulseSheetDock();
+}
+
+function removeMark(index) {
+  if (!marks[index]) return;
+  marks.splice(index, 1);
+  setHotPin("");
+  render();
+}
+
+function markChipHtml(mark, index) {
+  const anchor = promptAnchor(mark);
+  const number = markNumber(index);
+  const note = String(mark.prompt || "").trim();
+  const title = [note, anchor?.excerpt, mark.selector].filter(Boolean).join("\n");
+  return (
+    '<span class="mark-chip" data-index="' +
+    index +
+    '" title="' +
+    escapeHtml(title) +
+    '"><span class="anchor-pin">' +
+    number +
+    '</span><span class="anchor-kind">' +
+    escapeHtml(anchor?.label || "") +
+    "</span>" +
+    (anchor?.excerpt ? '<span class="mark-chip-excerpt">' + escapeHtml(anchor.excerpt) + "</span>" : "") +
+    (note || attachmentCount(mark) ? '<span class="mark-chip-note" title="Has its own note">+ note</span>' : "") +
+    '<button class="mark-chip-remove" type="button" aria-label="Remove mark ' +
+    number +
+    '" data-index="' +
+    index +
+    '">' +
+    REMOVE_ICON_SVG +
+    "</button></span>"
+  );
+}
+
+function renderMarks() {
+  const html = marks.map(markChipHtml).join("");
+  messageMarks.hidden = marks.length === 0;
+  if (html === renderedMarks) return;
+  renderedMarks = html;
+  messageMarks.innerHTML = html;
+}
+
+// The marks become notes of their own, numbered as the chips were, ahead of the message that
+// talks about them. A mark with no words still goes: its number is what the message refers to.
+function takeMarks() {
+  const numbers = marks.map((_, index) => markNumber(index));
+  const taken = marks.splice(0).map((mark, index) => {
+    const note = String(mark.prompt || "").trim();
+    const prompt = { ...mark, prompt: "[" + numbers[index] + "]" + (note ? " " + note : "") };
+    assignPromptIdentity(prompt, false);
+    return prompt;
+  });
+  setHotPin("");
+  return taken;
+}
+
+messageMarks.addEventListener("click", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  const remove = target && typeof target.closest === "function" ? target.closest(".mark-chip-remove") : null;
+  if (remove) removeMark(Number(/** @type {HTMLElement} */ (remove).dataset.index));
+});
+messageMarks.addEventListener("mouseover", (event) => {
+  const target = /** @type {Element | null} */ (event.target);
+  const chip = target && typeof target.closest === "function" ? target.closest(".mark-chip") : null;
+  const mark = chip ? marks[Number(/** @type {HTMLElement} */ (chip).dataset.index)] : null;
+  setHotPin(mark && isElementAnchoredPrompt(mark) ? String(mark.selector) : "");
+});
+messageMarks.addEventListener("mouseleave", () => setHotPin(""));
+
 // Queue for later (Ctrl+Q, or the Queue button): the message joins the queue without sending, so
 // several thoughts can go out as one batch.
 function queueComposerDraft() {
@@ -2357,14 +2466,17 @@ function queueComposerDraft() {
   }
   const text = chatInput.value.trim();
   const attachments = chatAttachmentController.collectReady();
-  if (!text && !attachments.length) {
+  if (!text && !attachments.length && !marks.length) {
     rejectEmptySend();
     return;
   }
-  const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
-  if (attachments.length) prompt.attachments = attachments;
-  assignPromptIdentity(prompt, false);
-  queued.push(prompt);
+  queued.push(...takeMarks());
+  if (text || attachments.length) {
+    const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
+    if (attachments.length) prompt.attachments = attachments;
+    assignPromptIdentity(prompt, false);
+    queued.push(prompt);
+  }
   persistQueuedPrompts();
   render();
   chatInput.value = "";
@@ -2379,7 +2491,7 @@ function queueComposerDraft() {
 const sendLabel = /** @type {HTMLSpanElement} */ (document.getElementById("sendLabel"));
 function renderSendLabel() {
   const draft = !editingPromptId && Boolean(chatInput.value.trim());
-  const pending = queued.length + (draft ? 1 : 0);
+  const pending = queued.length + marks.length + (draft ? 1 : 0);
   swapText(sendLabel, pending > 1 ? "Send " + pending + " to Agent" : "Send to Agent");
 }
 
@@ -2734,11 +2846,14 @@ function sendQueued(endAfter) {
   if (!chipsBlocked) {
     const text = chatInput.value.trim();
     const attachments = chatAttachmentController.collectReady();
-    if (text || attachments.length) {
-      const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
-      if (attachments.length) prompt.attachments = attachments;
-      assignPromptIdentity(prompt, false);
-      queued.push(prompt);
+    if (text || attachments.length || marks.length) {
+      queued.push(...takeMarks());
+      if (text || attachments.length) {
+        const prompt = { uid: "", prompt: text, selector: "", tag: "message", text: "Freeform message" };
+        if (attachments.length) prompt.attachments = attachments;
+        assignPromptIdentity(prompt, false);
+        queued.push(prompt);
+      }
       persistQueuedPrompts();
       // Render the durable queued bubble before clearing the editor. If anything after this point
       // fails, the user's words are already both stored and visibly recoverable in the tab. It
@@ -5045,6 +5160,7 @@ window.addEventListener("message", (event) => {
     // Queued from inside the artifact, where the closed dock is the only sign it landed.
     pulseSheetDock();
   }
+  if (msg.type === "lavish:addMark") addMark(msg.prompt);
   if (msg.type === "lavish:snapshot") {
     completeSnapshotRequest(msg.snapshot_request_id, msg.snapshot || "");
   }

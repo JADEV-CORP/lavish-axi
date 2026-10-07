@@ -1117,7 +1117,7 @@ test("composer offers two always-visible top-level send actions", async () => {
   // actions on the right. The hint sits right above the box, next to the actions it explains.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
+    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden><\/div><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput"/,
   );
   assert.match(
     html,
@@ -1132,7 +1132,7 @@ test("composer offers two always-visible top-level send actions", async () => {
   assert.match(css, /\.composer-hints\{display:none;?\}/);
   assert.match(
     css,
-    /\.prompt-input\{display:grid;grid-template-columns:minmax\(0,1fr\) auto;grid-template-areas:"attachments attachments" "input input" "tools actions"/,
+    /\.prompt-input\{display:grid;grid-template-columns:minmax\(0,1fr\) auto;grid-template-areas:"marks marks" "attachments attachments" "input input" "tools actions"/,
   );
   assert.match(css, /@media \(max-width:860px\)\{[\s\S]*\.prompt-input\{display:contents;?\}/);
   assert.doesNotMatch(html, /id="sendCaret"/);
