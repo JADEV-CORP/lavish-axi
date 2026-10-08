@@ -1808,7 +1808,7 @@ function applyTheme({ notifyFrame = true } = {}) {
 // OS. Like the light or dark choice it is a personal preference kept in localStorage, applied
 // before first paint by the head bootstrap, and shared by every Lavish tab.
 const THEME_PRESET_STORAGE_KEY = "lavish-axi:theme-preset";
-/** @type {Array<{ id: string, name: string, css: string, orb: { light: { surface: string, primary: string }, dark: { surface: string, primary: string } } }>} */
+/** @type {Array<{ id: string, name: string, css: string, artifact?: Record<string, string[]> | null, orb: { light: { surface: string, primary: string }, dark: { surface: string, primary: string } } }>} */
 const themePresets = Array.isArray(sessionData.themePresets) ? sessionData.themePresets : [];
 let sessionPresetChoice = "lavish";
 
@@ -1849,13 +1849,15 @@ function setPresetChoice(id) {
   postThemeToFrame();
 }
 
-// The artifact overlay (annotation card, pins) takes the preset's accent, nothing else.
+// The artifact overlay (annotation card, pins) takes the preset's accent; a page on
+// data-theme="lavish-auto" also takes the mode and the preset's colors.
 function postThemeToFrame() {
   const preset = currentPreset();
   postToFrame({
     type: "lavish:theme",
     theme: effectiveTheme(),
     accent: preset ? { light: preset.orb.light.primary, dark: preset.orb.dark.primary } : null,
+    colors: preset?.artifact || null,
   });
 }
 

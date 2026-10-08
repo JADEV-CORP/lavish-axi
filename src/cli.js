@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { AxiError, installSessionStartHooks, RESERVED_COMMANDS, runAxiCli } from "axi-sdk-js";
 
 import { createDesignOutput, DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "./design-reference.js";
+import { PAGE_TEMPLATE } from "./page-template.js";
 import {
   buildSelfContainedHtml,
   exportFileName,
@@ -1314,7 +1315,8 @@ async function playbookCommand(args) {
   return createPlaybookOutput(args);
 }
 
-async function designCommand() {
+async function designCommand(args = []) {
+  if (args.includes("--template")) return PAGE_TEMPLATE;
   return createDesignOutput();
 }
 

@@ -10024,12 +10024,15 @@ test("a theme preset picked from the gallery persists, paints the page, and tint
   const theme = chrome.postedToFrame.filter((message) => message.type === "lavish:theme").at(-1);
   assert.equal(theme.theme, "dark");
   assert.match(theme.accent.light, /^oklch\(/);
+  assert.match(theme.colors["--color-primary"][1], /^oklch\(/, "lavish-auto pages get the preset's colors");
 
   grid.dispatch("click", { target: pick("nonsense") });
   assert.equal(localStore.get("lavish-axi:theme-preset"), "grove", "an unknown preset changes nothing");
 
   grid.dispatch("click", { target: pick("lavish") });
   assert.equal(localStore.has("lavish-axi:theme-preset"), false, "the default leaves nothing stored");
+  const lavish = chrome.postedToFrame.filter((message) => message.type === "lavish:theme").at(-1);
+  assert.equal(lavish.colors, null, "Lavish's own palette is already inline in the page");
 });
 
 test("the top bar and Peek can each be hidden completely, stay hidden, and come back from their edge", async () => {

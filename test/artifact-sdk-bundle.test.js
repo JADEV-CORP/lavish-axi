@@ -831,6 +831,51 @@ test("the overlay takes the editor's preset accent, and only as plain oklch colo
   assert.equal(props.has("--primary"), false, "anything else falls back to Lavish's own rose");
 });
 
+function autoThemeStyle(sdk) {
+  return sdk.documentElement.children
+    .flatMap((child) => [child, ...(child.children || [])])
+    .find((node) => node.getAttribute?.("data-lavish-ui") === "auto-theme");
+}
+
+test("a lavish-auto page follows the editor's mode and preset colors, and only as plain oklch colors", () => {
+  const sdk = bootSdk();
+  sdk.documentElement.setAttribute("data-theme", "lavish-auto");
+  sdk.sendChromeMessage({
+    type: "lavish:theme",
+    theme: "dark",
+    accent: { light: "oklch(0.52 0.12 152)", dark: "oklch(0.54 0.12 152)" },
+    colors: {
+      "--color-primary": ["oklch(0.52 0.12 152)", "oklch(0.54 0.12 152)"],
+      "--color-base-100": ["red", "oklch(0.1 0 0)"],
+      "background:url(x);--x": ["oklch(0.5 0 0)", "oklch(0.5 0 0)"],
+    },
+  });
+  const style = autoThemeStyle(sdk);
+  assert.equal(
+    style.textContent,
+    ':root[data-theme="lavish-auto"]{color-scheme:dark;--color-primary:light-dark(oklch(0.52 0.12 152),oklch(0.54 0.12 152))}',
+  );
+
+  sdk.sendChromeMessage({ type: "lavish:theme", theme: "light", accent: null, colors: null });
+  assert.equal(
+    style.textContent,
+    ':root[data-theme="lavish-auto"]{color-scheme:light}',
+    "Lavish keeps the inline palette",
+  );
+});
+
+test("a page on any other theme is left alone", () => {
+  const sdk = bootSdk();
+  sdk.documentElement.setAttribute("data-theme", "lavish");
+  sdk.sendChromeMessage({
+    type: "lavish:theme",
+    theme: "dark",
+    accent: null,
+    colors: { "--color-primary": ["oklch(0.5 0.1 1)", "oklch(0.5 0.1 1)"] },
+  });
+  assert.equal(autoThemeStyle(sdk), undefined);
+});
+
 test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {
   const sdk = bootSdk();
   const style = sdk.documentElement.children

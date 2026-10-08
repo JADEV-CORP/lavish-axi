@@ -138,12 +138,38 @@ export function themePresetCss() {
     .join("\n");
 }
 
-// What the chrome needs to draw the picker and tint the artifact overlay.
+// A preset as the DaisyUI colors of an artifact on `data-theme="lavish-auto"`: each one a light and a
+// dark value, taken from the chrome token on that side. Lavish itself returns null, since the
+// artifact's inline theme already holds its palette.
+const ARTIFACT_COLOR_SOURCES = {
+  "--color-base-100": ["--background", "--background"],
+  "--color-base-200": ["--muted", "--card"],
+  "--color-base-300": ["--border-color", "--muted"],
+  "--color-base-content": ["--foreground", "--foreground"],
+  "--color-primary": ["--primary", "--primary"],
+  "--color-secondary": ["--secondary", "--secondary"],
+  "--color-secondary-content": ["--foreground", "--foreground"],
+  "--color-accent": ["--muted", "--muted"],
+  "--color-accent-content": ["--foreground", "--foreground"],
+};
+
+export function artifactThemeColors(preset) {
+  if (!preset || preset.builtIn) return null;
+  const colors = {};
+  for (const [name, [lightToken, darkToken]] of Object.entries(ARTIFACT_COLOR_SOURCES)) {
+    colors[name] = [preset.tokens[lightToken][0], preset.tokens[darkToken][1]];
+  }
+  colors["--color-primary-content"] = [preset.primaryForeground, preset.primaryForeground];
+  return colors;
+}
+
+// What the chrome needs to draw the picker, tint the artifact overlay, and color lavish-auto pages.
 export function themePresetSummaries() {
   return THEME_PRESETS.map((preset) => ({
     id: preset.id,
     name: preset.name,
     orb: preset.orb,
     css: `:root {\n${themePresetDeclarations(preset)}\n}`,
+    artifact: artifactThemeColors(preset),
   }));
 }

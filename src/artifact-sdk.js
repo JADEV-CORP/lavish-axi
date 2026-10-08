@@ -2337,6 +2337,34 @@ export function createArtifactSdk(
     pageAccentStyle.textContent = ":root:root{--lavish-accent:" + color + "}";
   }
 
+  // A page on data-theme="lavish-auto" (the `lavish-axi design --template` page) follows the
+  // editor: its light or dark mode, and the preset's DaisyUI colors when one is picked. Any other
+  // page is left alone. Opened on its own, the same page follows the OS.
+  let autoThemeStyle = null;
+  function applyAutoTheme(colors, color) {
+    if (document.documentElement.getAttribute("data-theme") !== "lavish-auto") return;
+    const declarations = [];
+    if (chromeTheme) declarations.push("color-scheme:" + chromeTheme);
+    if (colors && typeof colors === "object") {
+      for (const [name, pair] of Object.entries(colors)) {
+        if (!/^--color-[a-z0-9-]+$/.test(name) || !Array.isArray(pair)) continue;
+        const light = color(pair[0]);
+        const dark = color(pair[1]);
+        if (light && dark) declarations.push(name + ":light-dark(" + light + "," + dark + ")");
+      }
+    }
+    if (!autoThemeStyle) {
+      if (!declarations.length) return;
+      autoThemeStyle = document.createElement("style");
+      autoThemeStyle.setAttribute("data-lavish-ui", "auto-theme");
+      (document.head || document.documentElement).appendChild(autoThemeStyle);
+    }
+    // :root[...] outranks the inline theme's [data-theme="lavish-auto"] wherever it sits.
+    autoThemeStyle.textContent = declarations.length
+      ? ':root[data-theme="lavish-auto"]{' + declarations.join(";") + "}"
+      : "";
+  }
+
   function applyChromeTheme() {
     if (!shadowHost) return;
     if (chromeAccent) {
@@ -2711,6 +2739,7 @@ export function createArtifactSdk(
       // The outline on the artifact's own elements lives in the artifact's document, whose color
       // scheme is its own, so it takes the one color for the editor's current side.
       applyPageAccent(light && dark ? (chromeTheme === "dark" ? dark : light) : "");
+      applyAutoTheme(msg.colors, color);
     }
     if (msg.type === "lavish:queuedAnchors") {
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);

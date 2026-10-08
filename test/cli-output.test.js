@@ -420,8 +420,8 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
   assert.equal("opt_out" in output.design, false);
   assert.equal("rule" in output.design, false);
   assert.equal(output.design.latest_docs, "https://daisyui.com/components/");
-  assert.equal(output.themes.length, 37);
-  assert.deepEqual(output.themes.slice(0, 2), ["lavish", "lavish-dark"]);
+  assert.equal(output.themes.length, 38);
+  assert.deepEqual(output.themes.slice(0, 3), ["lavish-auto", "lavish", "lavish-dark"]);
   assert.ok(output.themes.includes("luxury"));
   assert.ok(output.themes.includes("silk"));
   assert.ok(output.components.actions.includes("button"));
@@ -438,7 +438,7 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
 test("design output recommends the lavish theme by default and warns against @apply on DaisyUI classes", () => {
   const output = createDesignOutput();
 
-  assert.ok(output.theme_usage.some((item) => /Default to `<html data-theme="lavish">`/.test(item)));
+  assert.ok(output.theme_usage.some((item) => /Default to `<html data-theme="lavish-auto">`/.test(item)));
   assert.ok(!output.theme_usage.some((item) => /default.*luxury/i.test(item)));
   assert.ok(output.theme_usage.some((item) => item.includes("@apply") && /daisyui/i.test(item)));
   assert.ok(output.theme_usage.some((item) => /aborts the entire|no Tailwind styles/i.test(item)));

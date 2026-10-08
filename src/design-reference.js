@@ -17,8 +17,48 @@ export const MERMAID_CDN_URL = `https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_V
 // The Lavish theme for DaisyUI: the same mauve-and-rose palette, square corners, and flat surfaces
 // as the review chrome (shadcn/ui preset b50eA1ekc). The DaisyUI CDN only serves its built-in
 // themes, so this one travels inline in the snippet and the artifact stays one portable file.
+// Each color holds its light and its dark value; `lavish` and `lavish-dark` take one side, and
+// `lavish-auto` keeps both in light-dark() so the page follows the color scheme it is shown in.
+const LAVISH_PALETTE = [
+  ["base-100", "oklch(1 0 0)", "oklch(0.145 0.008 326)"],
+  ["base-200", "oklch(0.96 0.003 325.6)", "oklch(0.212 0.019 322.12)"],
+  ["base-300", "oklch(0.922 0.005 325.62)", "oklch(0.263 0.024 320.12)"],
+  ["base-content", "oklch(0.145 0.008 326)", "oklch(0.985 0 0)"],
+  ["primary", "oklch(0.514 0.222 16.935)", "oklch(0.455 0.188 13.697)"],
+  ["primary-content", "oklch(0.969 0.015 12.422)", "oklch(0.969 0.015 12.422)"],
+  ["secondary", "oklch(0.967 0.001 286.375)", "oklch(0.274 0.006 286.033)"],
+  ["secondary-content", "oklch(0.21 0.006 285.885)", "oklch(0.985 0 0)"],
+  ["accent", "oklch(0.96 0.003 325.6)", "oklch(0.263 0.024 320.12)"],
+  ["accent-content", "oklch(0.212 0.019 322.12)", "oklch(0.985 0 0)"],
+  ["neutral", "oklch(0.212 0.019 322.12)", "oklch(0.274 0.006 286.033)"],
+  ["neutral-content", "oklch(0.985 0 0)", "oklch(0.985 0 0)"],
+  ["info", "oklch(0.6 0.12 240)", "oklch(0.7 0.12 240)"],
+  ["info-content", "oklch(0.985 0 0)", "oklch(0.145 0.008 326)"],
+  ["success", "oklch(0.55 0.13 150)", "oklch(0.72 0.15 150)"],
+  ["success-content", "oklch(0.985 0 0)", "oklch(0.145 0.008 326)"],
+  ["warning", "oklch(0.7 0.15 70)", "oklch(0.78 0.14 75)"],
+  ["warning-content", "oklch(0.2 0.03 70)", "oklch(0.2 0.03 70)"],
+  ["error", "oklch(0.577 0.245 27.325)", "oklch(0.704 0.191 22.216)"],
+  ["error-content", "oklch(0.985 0 0)", "oklch(0.145 0.008 326)"],
+];
+
+const paletteLines = (pick) => {
+  const lines = [];
+  for (let i = 0; i < LAVISH_PALETTE.length; i += 2) {
+    lines.push(
+      "    " +
+        LAVISH_PALETTE.slice(i, i + 2)
+          .map(([name, light, dark]) => `--color-${name}: ${pick(light, dark)};`)
+          .join(" "),
+    );
+  }
+  return lines.join("\n");
+};
+
+const ANY_LAVISH = ':is([data-theme="lavish"], [data-theme="lavish-dark"], [data-theme="lavish-auto"])';
+
 export const LAVISH_THEME_CSS = `<style>
-  [data-theme="lavish"], [data-theme="lavish-dark"] {
+  ${ANY_LAVISH} {
     font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
     --radius-selector: 0rem; --radius-field: 0rem; --radius-box: 0rem;
     --size-selector: 0.25rem; --size-field: 0.25rem;
@@ -27,37 +67,25 @@ export const LAVISH_THEME_CSS = `<style>
   }
   /* Inter sits about a pixel low in a fixed-height control; a 2px bottom inset centres its text,
      and inputs share the 1rem inset cards, alerts, and tables use, so text lines up down a page. */
-  :is([data-theme="lavish"], [data-theme="lavish-dark"]) :is(.btn, .badge, .kbd, .tab, .input, .select) {
+  ${ANY_LAVISH} :is(.btn, .badge, .kbd, .tab, .input, .select) {
     padding-bottom: 2px;
   }
-  :is([data-theme="lavish"], [data-theme="lavish-dark"]) :is(.input, .select) {
+  ${ANY_LAVISH} :is(.input, .select) {
     padding-inline: 1rem;
   }
   [data-theme="lavish"] {
     color-scheme: light;
-    --color-base-100: oklch(1 0 0); --color-base-200: oklch(0.96 0.003 325.6); --color-base-300: oklch(0.922 0.005 325.62);
-    --color-base-content: oklch(0.145 0.008 326);
-    --color-primary: oklch(0.514 0.222 16.935); --color-primary-content: oklch(0.969 0.015 12.422);
-    --color-secondary: oklch(0.967 0.001 286.375); --color-secondary-content: oklch(0.21 0.006 285.885);
-    --color-accent: oklch(0.96 0.003 325.6); --color-accent-content: oklch(0.212 0.019 322.12);
-    --color-neutral: oklch(0.212 0.019 322.12); --color-neutral-content: oklch(0.985 0 0);
-    --color-info: oklch(0.6 0.12 240); --color-info-content: oklch(0.985 0 0);
-    --color-success: oklch(0.55 0.13 150); --color-success-content: oklch(0.985 0 0);
-    --color-warning: oklch(0.7 0.15 70); --color-warning-content: oklch(0.2 0.03 70);
-    --color-error: oklch(0.577 0.245 27.325); --color-error-content: oklch(0.985 0 0);
+${paletteLines((light) => light)}
   }
   [data-theme="lavish-dark"] {
     color-scheme: dark;
-    --color-base-100: oklch(0.145 0.008 326); --color-base-200: oklch(0.212 0.019 322.12); --color-base-300: oklch(0.263 0.024 320.12);
-    --color-base-content: oklch(0.985 0 0);
-    --color-primary: oklch(0.455 0.188 13.697); --color-primary-content: oklch(0.969 0.015 12.422);
-    --color-secondary: oklch(0.274 0.006 286.033); --color-secondary-content: oklch(0.985 0 0);
-    --color-accent: oklch(0.263 0.024 320.12); --color-accent-content: oklch(0.985 0 0);
-    --color-neutral: oklch(0.274 0.006 286.033); --color-neutral-content: oklch(0.985 0 0);
-    --color-info: oklch(0.7 0.12 240); --color-info-content: oklch(0.145 0.008 326);
-    --color-success: oklch(0.72 0.15 150); --color-success-content: oklch(0.145 0.008 326);
-    --color-warning: oklch(0.78 0.14 75); --color-warning-content: oklch(0.2 0.03 70);
-    --color-error: oklch(0.704 0.191 22.216); --color-error-content: oklch(0.145 0.008 326);
+${paletteLines((_light, dark) => dark)}
+  }
+  /* Follows the OS when opened on its own; inside Lavish it follows the editor's light or dark
+     mode and theme preset. */
+  [data-theme="lavish-auto"] {
+    color-scheme: light dark;
+${paletteLines((light, dark) => (light === dark ? light : `light-dark(${light}, ${dark})`))}
   }
 </style>`;
 
@@ -202,14 +230,14 @@ export const REVISION_REGISTRY_SNIPPET = `<script type="application/json" data-l
 // summary, and the design command help. The installable skill does not embed this rule;
 // it points at `lavish-axi design`. Edit the rule here only.
 export const DESIGN_PRIORITY_RULE =
-  "Decide the design direction in this priority order: (1) if the user asked for a specific look or named design system, use that; (2) otherwise use the Lavish design: paste the CDN snippet from `lavish-axi design` (Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme), set `<html data-theme=\"lavish\">` (or `lavish-dark`), and prefer that snippet over hand-writing styles unless explicitly instructed otherwise by the user; (3) the one exception to (2) is a screen that previews, proposes, or mocks a specific app's UI. For that screen only, inspect the project the artifact is about - the subject or product whose UI it represents, which may differ from your current working directory - and render the mock in the app's own design system (its Tailwind or theme config, design tokens, component library, and brand assets) inside a framed region, so it faithfully shows the product, while the page around the frame stays in the Lavish design.";
+  "Decide the design direction in this priority order: (1) if the user asked for a specific look or named design system, use that; (2) otherwise use the Lavish design: start the page from the template `lavish-axi design --template` prints and keep its layout, header, section, decision, and footer patterns, so every agent's pages look alike. It carries the CDN snippet (Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme) and `<html data-theme=\"lavish-auto\">`, which follows the editor's light or dark mode and theme preset, or the OS when opened on its own; use `data-theme=\"lavish\"` or `lavish-dark` only to pin one side. Prefer the template and its DaisyUI classes over hand-writing styles unless explicitly instructed otherwise by the user; (3) the one exception to (2) is a screen that previews, proposes, or mocks a specific app's UI. For that screen only, inspect the project the artifact is about - the subject or product whose UI it represents, which may differ from your current working directory - and render the mock in the app's own design system (its Tailwind or theme config, design tokens, component library, and brand assets) inside a framed region, so it faithfully shows the product, while the page around the frame stays in the Lavish design.";
 
 export const DESIGN_SYSTEM_HINT =
   "Lavish does not auto-inject any design system - artifacts stay portable so they render identically when opened directly without lavish-axi running. Before writing any HTML: " +
   DESIGN_PRIORITY_RULE +
   " Run `lavish-axi design` for a content-to-playbook router, a copy-pasteable CDN snippet, the whiteboard (Mermaid) opt-in snippet, and the DaisyUI component reference. When you deliver the artifact, state which of the three design sources you used and why.";
 
-export const LAVISH_THEMES = ["lavish", "lavish-dark"];
+export const LAVISH_THEMES = ["lavish-auto", "lavish", "lavish-dark"];
 
 export const DAISYUI_THEMES = [
   "light",
@@ -259,7 +287,9 @@ export function createDesignOutput() {
       summary:
         "This is the Lavish design, the default for every artifact whose user gave no design direction. A screen that mocks a specific product keeps that product's own design system inside its frame. Lavish does not auto-inject any design system; artifacts stay portable HTML. Paint an explicit page background and readable text. " +
         DESIGN_PRIORITY_RULE +
-        " Paste the CDN snippet below into your `<head>`.",
+        " Start from `lavish-axi design --template`; the CDN snippet below is what its `<head>` carries.",
+      page_template:
+        "`lavish-axi design --template` prints the starting page as plain HTML: redirect it into your artifact file, then replace the [bracketed] placeholders and repeat or drop blocks. Keep its classes; add DaisyUI parts from the reference below.",
       cdn_snippet: DESIGN_CDN_SNIPPET,
       lavish_theme_note:
         'The snippet ends with the Lavish theme as an inline `<style>`: `data-theme="lavish"` (light) and `data-theme="lavish-dark"`. Keep it inline; the DaisyUI CDN cannot serve a custom theme.',
@@ -288,7 +318,7 @@ export function createDesignOutput() {
       how: 'Append one entry per round to the `data-lavish-revisions` JSON (oldest first, stable `id`s), and put `data-lavish-revision="<id>"` on each block you actually edited or added. Lavish reads them and never restyles the page, so the saved file looks the same opened directly.',
     },
     theme_usage: [
-      'Default to `<html data-theme="lavish">`, or `lavish-dark` for a dark page. Both ship inline in the CDN snippet. Pick a DaisyUI theme from the list below only when the user asked for one.',
+      'Default to `<html data-theme="lavish-auto">` (the template has it): it follows the light or dark mode and theme preset of the editor. `lavish` and `lavish-dark` pin one side. All three ship inline in the CDN snippet. Pick a DaisyUI theme from the list below only when the user asked for one.',
       'Set a nested section theme with `<section data-theme="night">`.',
       "Prefer semantic colors such as `bg-base-100`, `bg-base-200`, `text-base-content`, `bg-primary`, `text-primary-content`, `alert-warning`, and `btn-primary` so themes remain readable.",
       "Avoid hardcoded Tailwind color names for text and surfaces unless the user asked for exact colors.",
