@@ -3180,6 +3180,23 @@ export function createArtifactSdk(
     true,
   );
 
+  // A link that only points at a picture file - `<a href="shot.png"><img src="shot-small.png"></a>`, as
+  // agents write for "see full size" - opens the viewer on the linked file instead of navigating the
+  // frame or a new tab (#3326). A link to a page keeps its click.
+  const PICTURE_LINK_PATH = /\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i;
+  function linkedPictureHref(anchor) {
+    if (anchor.tagName !== "A" || anchor.hasAttribute("download")) return "";
+    let url;
+    try {
+      url = new URL(anchor.href, document.baseURI);
+    } catch {
+      return "";
+    }
+    if (url.protocol === "data:") return /^data:image\//i.test(anchor.href) ? anchor.href : "";
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return PICTURE_LINK_PATH.test(url.pathname) ? url.href : "";
+  }
+
   // Explore-mode click-to-zoom, registered after the annotation click handler, which owns clicks
   // in annotate mode.
   document.addEventListener(
@@ -3187,8 +3204,21 @@ export function createArtifactSdk(
     (event) => {
       if (annotationMode || event.defaultPrevented) return;
       const target = /** @type {Element} */ (event.target);
-      if (!(target instanceof Element) || target.closest("a[href], button, label, summary, [role='button'], [onclick]"))
+      if (!(target instanceof Element)) return;
+      const interactive = target.closest("a[href], button, label, summary, [role='button'], [onclick]");
+      if (interactive) {
+        const href = linkedPictureHref(interactive);
+        const image = href ? zoomableImageFrom(target) : null;
+        if (!image || !interactive.contains(image)) return;
+        event.preventDefault();
+        const rect = image.getBoundingClientRect();
+        postArtifactMessage("lavish:zoomImage", {
+          src: href,
+          alt: zoomImageAlt(image),
+          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        });
         return;
+      }
       const image = zoomableImageFrom(target);
       if (!image) return;
       event.preventDefault();

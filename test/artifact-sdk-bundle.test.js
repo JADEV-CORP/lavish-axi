@@ -39,6 +39,13 @@ function createElement(tag) {
     getAttribute(name) {
       return attributes.has(name) ? attributes.get(name) : null;
     },
+    hasAttribute(name) {
+      return attributes.has(name);
+    },
+    contains(other) {
+      for (let current = other; current; current = current.parentElement) if (current === element) return true;
+      return false;
+    },
     matches(selectorList) {
       return String(selectorList)
         .split(",")
@@ -141,11 +148,12 @@ function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionM
       observe() {}
       disconnect() {}
     },
-    URL: {
-      createObjectURL() {
+    // A real URL constructor, so link resolution runs as in a browser, plus the blob helpers.
+    URL: class extends URL {
+      static createObjectURL() {
         return "blob:lavish-test";
-      },
-      revokeObjectURL() {},
+      }
+      static revokeObjectURL() {}
     },
     getComputedStyle: () => ({}),
     setTimeout: scheduleTimer,
@@ -191,6 +199,21 @@ function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionM
     body,
     documentElement,
     api: sandbox.window.lavish,
+    Element: sandbox.Element,
+    // Explore mode's own click listener (zoom), registered after the annotation one.
+    exploreClick(target) {
+      const listener = documentListeners.filter((entry) => entry.type === "click").at(-1);
+      const event = {
+        target,
+        defaultPrevented: false,
+        preventDefault() {
+          event.defaultPrevented = true;
+        },
+        stopPropagation() {},
+      };
+      listener.handler(event);
+      return event;
+    },
     // Returns the dispatched event so a test can tell whether the SDK swallowed the click.
     click(target, modifiers = {}) {
       const listener = documentListeners.find((entry) => entry.type === "click");
@@ -874,6 +897,53 @@ test("a page on any other theme is left alone", () => {
     colors: { "--color-primary": ["oklch(0.5 0.1 1)", "oklch(0.5 0.1 1)"] },
   });
   assert.equal(autoThemeStyle(sdk), undefined);
+});
+
+function linkedPicture(sdk, href, attributes = {}) {
+  const link = appendTo(sdk.body, createElement("a"));
+  link.setAttribute("href", href);
+  for (const [name, value] of Object.entries(attributes)) link.setAttribute(name, value);
+  link.href = new URL(href, "http://127.0.0.1/artifact/abc/index.html").href;
+  const image = appendTo(link, createElement("img"));
+  image.setAttribute("alt", "Check-in email");
+  Object.assign(image, { complete: true, naturalWidth: 680, src: "http://127.0.0.1/artifact/abc/thumb.png" });
+  for (const node of [link, image]) Object.setPrototypeOf(node, sdk.Element.prototype);
+  return image;
+}
+
+test("a picture linked to a picture file opens the viewer on the linked file instead of following the link", () => {
+  const sdk = bootSdk();
+  sdk.sendChromeMessage({ type: "lavish:setAnnotationMode", enabled: false });
+  for (const attributes of [{}, { target: "_blank" }]) {
+    const image = linkedPicture(sdk, "assets/check-in.en.680.jpg?v=2", attributes);
+    const event = sdk.exploreClick(image);
+    assert.equal(event.defaultPrevented, true, "the link is not followed");
+    const message = sdk.posted.at(-1);
+    assert.equal(message.type, "lavish:zoomImage");
+    assert.equal(message.src, "http://127.0.0.1/artifact/abc/assets/check-in.en.680.jpg?v=2");
+    assert.equal(message.alt, "Check-in email");
+  }
+});
+
+test("a picture linked to a page, or a download link, keeps its click", () => {
+  const sdk = bootSdk();
+  sdk.sendChromeMessage({ type: "lavish:setAnnotationMode", enabled: false });
+  /** @type {Array<[string, Record<string, string>]>} */
+  const links = [
+    ["https://example.com/report", {}],
+    ["assets/shot.png", { download: "" }],
+    ["javascript:alert(1)//.png", {}],
+  ];
+  for (const [href, attributes] of links) {
+    const before = sdk.posted.length;
+    const event = sdk.exploreClick(linkedPicture(sdk, href, attributes));
+    assert.equal(event.defaultPrevented, false, href);
+    assert.equal(
+      sdk.posted.slice(before).some((message) => message.type === "lavish:zoomImage"),
+      false,
+      href,
+    );
+  }
 });
 
 test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {
