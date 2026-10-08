@@ -282,19 +282,19 @@ body {
   cursor: not-allowed;
   opacity: 0.55;
 }
+/* The line height is the badge's height, as on the queue and revisions counts: .t-digit-group
+   aligns its digits on the baseline, so a shorter line height left them riding high. */
 .warnings-count {
   min-width: 18px;
-  height: 18px;
   padding: 0 5px;
   display: inline-flex;
-  align-items: center;
   justify-content: center;
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 11px;
   font-weight: var(--w-bold);
-  line-height: 1;
+  line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
 .warnings-drawer {
