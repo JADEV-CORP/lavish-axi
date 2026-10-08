@@ -113,6 +113,15 @@ const queuedLog = /** @type {HTMLDivElement} */ (document.getElementById("queued
 const chatLog = /** @type {HTMLDivElement} */ (document.getElementById("chatLog"));
 const chatComposer = /** @type {HTMLDivElement} */ (document.getElementById("chatComposer"));
 const chatInput = /** @type {HTMLTextAreaElement} */ (document.getElementById("chatInput"));
+/**
+ * The rich composer's extra surface (#3328), when composer.js replaced the textarea; null when the
+ * composer is the plain textarea.
+ * @returns {{ syncPictures: (list: { id: string, url: string, name: string }[]) => void, insertPicture: (id: string) => void, syncMarks: (list: { number: number, label: string }[]) => void } | null}
+ */
+function composerEditor() {
+  const host = /** @type {any} */ (chatInput);
+  return typeof host.syncPictures === "function" ? host : null;
+}
 const chatAttachments = /** @type {HTMLDivElement} */ (document.getElementById("chatAttachments"));
 const messageMarks = /** @type {HTMLDivElement} */ (document.getElementById("messageMarks"));
 const chatAttachButton = /** @type {HTMLButtonElement} */ (document.getElementById("chatAttach"));
@@ -2790,6 +2799,13 @@ function markChipHtml(mark, index) {
 function renderMarks() {
   const html = marks.map(markChipHtml).join("");
   messageMarks.hidden = marks.length === 0;
+  // The rich composer (#3328) offers these after `@`, as Mark N, the number the agent receives.
+  composerEditor()?.syncMarks(
+    marks.map((mark, index) => ({
+      number: markNumber(index),
+      label: String(promptAnchor(mark)?.excerpt || promptAnchor(mark)?.label || mark.selector || ""),
+    })),
+  );
   if (html === renderedMarks) return;
   renderSuggestions();
   renderedMarks = html;
@@ -3031,9 +3047,15 @@ function createChatAttachmentsController() {
     return items.filter((item) => item.file && CHAT_ATTACHMENT_MIME.has(item.file.type)).length;
   }
 
+  // The pictures the message carries, in the order the agent receives them: Image 1, Image 2, ...
+  // The rich composer (#3329) shows each as an inline chip with that label.
+  const numbered = () => items.filter((item) => item.preview);
+
   function renderAttachments() {
+    const pictures = numbered();
     chatAttachments.innerHTML = items
       .map((item) => {
+        const number = pictures.indexOf(item) + 1;
         const status = item.status === "uploading" ? "Uploading…" : item.status === "error" ? item.error : "";
         const preview = item.preview
           ? '<img class="chat-attachment-thumb" src="' +
@@ -3059,8 +3081,9 @@ function createChatAttachmentsController() {
           ">" +
           preview +
           '<span class="chat-attachment-copy"><strong>' +
+          (number ? "Image " + number + '</strong><span class="chat-attachment-name">' : "") +
           escapeHtml(item.name) +
-          "</strong>" +
+          (number ? "</span>" : "</strong>") +
           (status ? '<span class="chat-attachment-status" aria-live="polite">' + escapeHtml(status) + "</span>" : "") +
           "</span>" +
           retry +
@@ -3075,6 +3098,7 @@ function createChatAttachmentsController() {
       })
       .join("");
     syncNotice();
+    composerEditor()?.syncPictures(pictures.map((item) => ({ id: item.localId, url: item.preview, name: item.name })));
   }
 
   // The notice is DERIVED from the current item states on every render, never
@@ -3130,6 +3154,7 @@ function createChatAttachmentsController() {
 
   function addFiles(files) {
     let added = false;
+    const fresh = [];
     let imageCount = currentImageCount();
     for (const file of Array.from(files || [])) {
       if (!CHAT_ATTACHMENT_MIME.has(String(file.type || ""))) continue;
@@ -3156,10 +3181,13 @@ function createChatAttachmentsController() {
       };
       items.push(item);
       if (!tooLarge) imageCount += 1;
+      if (item.preview) fresh.push(localId);
       added = true;
       if (!tooLarge) startUpload(item);
     }
     renderAttachments();
+    // Each new picture's chip goes where the cursor is, right after the words it was pasted beside.
+    for (const localId of fresh) composerEditor()?.insertPicture(localId);
     return added;
   }
 
@@ -3222,6 +3250,11 @@ function createChatAttachmentsController() {
 }
 
 const chatAttachmentController = createChatAttachmentsController();
+// Deleting a picture's chip in the rich composer drops the picture from the message too.
+chatInput.addEventListener("lavish-picture-removed", (event) => {
+  const id = /** @type {CustomEvent} */ (event).detail?.id;
+  if (typeof id === "string") chatAttachmentController.remove(id);
+});
 
 function sendQueued(endAfter) {
   if (ended) return;

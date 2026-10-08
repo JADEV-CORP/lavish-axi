@@ -3627,7 +3627,10 @@ test("poll output explains a message about marked blocks, and only when one arri
   ];
   const output = createPollOutput({ file: "/tmp/a.html", response: { status: "feedback", prompts } });
   assert.match(output.next_step, /target type "marks"/);
-  assert.match(output.next_step, /\[1\], \[2\] in the prompt text name the entries of target\.marks/);
+  assert.match(
+    output.next_step,
+    /\[1\], \[2\] or \[Mark 1\], \[Mark 2\] in the prompt text name the entries of target\.marks/,
+  );
 
   const plain = createPollOutput({
     file: "/tmp/a.html",

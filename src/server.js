@@ -175,6 +175,14 @@ export function defaultWhiteboardAssetsDir() {
   return fileURLToPath(new URL("../dist/whiteboard", import.meta.url));
 }
 
+// The composer editor bundle (#3328), found the same way as the whiteboard's: next to the packaged
+// server, or in dist/ when running from a checkout.
+export function defaultComposerBundleFile() {
+  const packaged = fileURLToPath(new URL("./composer/composer.js", import.meta.url));
+  if (existsSync(packaged)) return packaged;
+  return fileURLToPath(new URL("../dist/composer/composer.js", import.meta.url));
+}
+
 // Whiteboard scene saves carry full Excalidraw scenes (and, at queue time, a
 // PNG preview data URL), which outgrow the default 2 MB JSON cap. Only the
 // whiteboard write routes get the larger limit.
@@ -1648,6 +1656,17 @@ export async function serve({
     } catch (error) {
       next(error);
     }
+  });
+
+  // Without a build the bundle is missing and the composer stays a plain textarea.
+  app.get("/composer.js", (req, res) => {
+    const file = defaultComposerBundleFile();
+    if (!existsSync(file)) {
+      res.status(404).type("text/plain").send("Composer bundle missing - run `pnpm run build`");
+      return;
+    }
+    res.setHeader("cache-control", "no-cache");
+    res.type("application/javascript").sendFile(file, { dotfiles: "allow" });
   });
 
   app.get("/chrome.css", async (req, res, next) => {
@@ -3277,6 +3296,7 @@ ${faviconTag}
 <div class="theme-icons" hidden><span id="themeIconSun">${chromeIcons.sunSmall}</span><span id="themeIconMoon">${chromeIcons.moonSmall}</span><span id="themeIconCopy">${chromeIcons.copy}</span></div>
 <div class="ui-tooltip" id="uiTooltip" role="tooltip" hidden></div>
 <script id="lavish-session" type="application/json">${sessionJson}</script>
+<script src="/composer.js"></script>
 <script>${CHROME_BOOT_FAILSAFE_JS}</script>
 <script src="/chrome-client.js" onerror="window.__lavishChromeBootFailed()"></script>
 </body>

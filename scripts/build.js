@@ -60,6 +60,20 @@ for (const file of ["inter-latin-wght-normal.woff2", "inter-latin-ext-wght-norma
 }
 await copyFile("node_modules/@fontsource-variable/inter/LICENSE", "dist/fonts/OFL.txt");
 
+// Composer editor (#3328): TipTap with Markdown, links, mentions and picture chips, bundled for the
+// chrome, which loads it before chrome-client.js. Vendored so the composer works offline.
+await mkdir("dist/composer", { recursive: true });
+await esbuild.build({
+  entryPoints: { composer: "src/composer-editor.js" },
+  outdir: "dist/composer",
+  bundle: true,
+  minify: true,
+  format: "iife",
+  platform: "browser",
+  target: ["es2022"],
+  legalComments: "linked",
+});
+
 // Whiteboard frame: a self-contained browser bundle (Excalidraw + the Mermaid
 // converter + its exactly-pinned mermaid + React) served from
 // /whiteboard-assets/ by an embedded frame for every rendered Mermaid diagram

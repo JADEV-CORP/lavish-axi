@@ -93,6 +93,10 @@ async function createChromeHarness({
   mobile = false,
   /** @type {{ localStore: Map<string, string>, prefersDark?: boolean } | null} */
   theme = null,
+  // Opt-in rich composer: methods composer.js would give #chatInput (syncPictures, insertPicture,
+  // syncMarks), set on the element before the client boots.
+  /** @type {Record<string, (...args: any[]) => void> | null} */
+  composer = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -531,6 +535,7 @@ async function createChromeHarness({
     };
   }
 
+  if (composer) Object.assign(element("chatInput"), composer);
   vm.runInNewContext(source, context, { filename: "chrome-client.js" });
   await flushPromises();
   if (artifactSrc) frame.dispatch("load");
@@ -9455,6 +9460,44 @@ test("the preview steps through the artifact's pictures, asking the frame for ea
   show(7, 3);
   await flushPromises();
   assert.equal(position.textContent, "3 / 3", "an index outside the set is ignored");
+});
+
+test("the rich composer gets each picture as a numbered chip and drops a picture whose chip is deleted", async () => {
+  const calls = [];
+  const chrome = await createChromeHarness({
+    composer: {
+      syncPictures: (list) => calls.push(["sync", list.map((picture) => picture.id + ":" + picture.name).join(",")]),
+      insertPicture: (id) => calls.push(["insert", id]),
+      syncMarks: (list) => calls.push(["marks", list.map((mark) => mark.number).join(",")]),
+    },
+  });
+  const file = (name) => ({ name, type: "image/png", size: 10, arrayBuffer: async () => new ArrayBuffer(4) });
+  chrome.element("chatInput").dispatch("paste", {
+    clipboardData: { files: [file("a.png"), file("b.png")], items: [], getData: () => "" },
+    preventDefault() {},
+  });
+  await flushPromises();
+  assert.deepEqual(
+    calls.filter(([kind]) => kind === "insert").map(([, id]) => id),
+    ["0", "1"],
+    "each pasted picture gets its chip, in order",
+  );
+  assert.equal(calls.filter(([kind]) => kind === "sync").at(-1)?.[1], "0:a.png,1:b.png");
+  assert.match(
+    chrome.element("chatAttachments").innerHTML,
+    /<strong>Image 1<\/strong><span class="chat-attachment-name">a\.png/,
+  );
+  assert.match(
+    chrome.element("chatAttachments").innerHTML,
+    /<strong>Image 2<\/strong><span class="chat-attachment-name">b\.png/,
+  );
+
+  chrome.element("chatInput").dispatch("lavish-picture-removed", { detail: { id: "0" } });
+  assert.equal(calls.filter(([kind]) => kind === "sync").at(-1)?.[1], "1:b.png", "the picture goes with its chip");
+  assert.match(
+    chrome.element("chatAttachments").innerHTML,
+    /<strong>Image 1<\/strong><span class="chat-attachment-name">b\.png/,
+  );
 });
 
 test("a chat thumbnail opens the zoom preview instead of the note it sits in", async () => {

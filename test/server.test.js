@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { on, once } from "node:events";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -21,6 +22,7 @@ import {
   agentDisplay,
   createChromeHtml,
   createSdkJs,
+  defaultComposerBundleFile,
   displayPathParts,
   exportContentDisposition,
   extractArtifactHead,
@@ -7068,6 +7070,30 @@ test("/artifact refuses hidden files and folders below the artifact directory", 
   } finally {
     await server.close();
     await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the rich composer bundle loads before chrome-client.js and is served when built", async () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  const composerAt = html.indexOf('<script src="/composer.js"></script>');
+  assert.ok(composerAt > 0, "the page loads the composer bundle");
+  assert.ok(composerAt < html.indexOf('<script src="/chrome-client.js"'), "before chrome-client.js finds #chatInput");
+  assert.match(html, /<textarea id="chatInput"/, "the textarea stays as the fallback");
+
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.port}/composer.js`);
+    if (existsSync(defaultComposerBundleFile())) {
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get("content-type") || "", /javascript/);
+    } else {
+      assert.equal(res.status, 404);
+      assert.match(await res.text(), /run `pnpm run build`/);
+    }
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

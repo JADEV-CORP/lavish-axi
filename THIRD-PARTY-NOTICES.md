@@ -35,6 +35,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Bundled into `dist/composer/composer.js`
+
+The composer editor is built from these packages by `scripts/build.js`. Each is under the MIT license, whose full text is given above.
+
+| Package                                                                                                                                                                                     | License | Copyright                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------- |
+| `@tiptap/core`, `@tiptap/starter-kit`, `@tiptap/markdown`, `@tiptap/extension-link`, `@tiptap/extension-mention`, `@tiptap/extensions`, `@tiptap/pm` and the TipTap extensions they include | MIT     | Copyright (c) 2025, Tiptap GmbH                                             |
+| `prosemirror-*`, `orderedmap`, `rope-sequence`, `w3c-keyname`                                                                                                                               | MIT     | Copyright (C) 2016 by Marijn Haverbeke and others                           |
+| `marked`                                                                                                                                                                                    | MIT     | Copyright (c) 2018+, MarkedJS; Copyright (c) 2011-2018, Christopher Jeffrey |
+| `linkifyjs`                                                                                                                                                                                 | MIT     | Copyright (c) 2024 Nick Frasser                                             |
+
 ## Fonts vendored into `dist/whiteboard/fonts/` (from `@excalidraw/excalidraw`)
 
 | Family          | License                                      |

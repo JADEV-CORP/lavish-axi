@@ -648,10 +648,10 @@ function createFeedbackNextStep(file, artifactFailures, sessionEnded, endedBy, p
     ? `This feedback includes layout issues the user selected from the Lavish Layout issues inbox (tag "layout-warnings"): the target lists the exact warning ids and targets. Apply every listed fix in one pass before saving so the user's review refreshes once. Queueing is a repair request, not a resolution - Lavish only marks a warning resolved after a newer artifact load and a complete check at the same viewport no longer detects it. `
     : "";
   const marksNote = prompts.some((prompt) => prompt?.target?.type === "marks")
-    ? `Some prompts talk about several marked blocks at once (target type "marks"): [1], [2] in the prompt text name the entries of target.marks with that number, each with its block's selector, tag, text, and any note the user typed on its card. Apply the message to every block it names. `
+    ? `Some prompts talk about several marked blocks at once (target type "marks"): [1], [2] or [Mark 1], [Mark 2] in the prompt text name the entries of target.marks with that number, each with its block's selector, tag, text, and any note the user typed on its card. Apply the message to every block it names. `
     : "";
   const attachmentNote = prompts.some((prompt) => Array.isArray(prompt?.attachments) && prompt.attachments.length)
-    ? `Some prompts carry image attachments the user added: each is an object in the prompt's \`attachments\` array with an absolute local \`path\` (plus id, mime, and dimensions). Open those image files to see what the user is referring to. `
+    ? `Some prompts carry image attachments the user added: each is an object in the prompt's \`attachments\` array with an absolute local \`path\` (plus id, mime, and dimensions). Open those image files to see what the user is referring to. [Image 1], [Image 2] in the prompt text name the attachments in that order, at the point in the sentence where the user placed them. `
     : "";
   if (sessionEnded) {
     const failureNote =
