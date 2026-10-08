@@ -114,7 +114,12 @@ function cell(tag, text) {
   return element;
 }
 
-function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionMarkElements = [] } = {}) {
+function bootSdk({
+  runAnimationFrames = false,
+  revisionsScript = null,
+  revisionMarkElements = [],
+  query = () => null,
+} = {}) {
   const posted = [];
   const documentListeners = [];
   // Deferred work the SDK schedules, run only when a test asks for it: the draft-anchor settle
@@ -125,7 +130,7 @@ function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionM
     if (timers[id - 1]) timers[id - 1].cancelled = true;
   };
   /** @type {(selector: string) => any} */
-  let documentQuery = () => null;
+  let documentQuery = query;
   /** @type {any} */
   let selection = null;
   const documentElement = createElement("html");
@@ -985,6 +990,27 @@ test("a picture linked to a page, or a download link, keeps its click", () => {
       href,
     );
   }
+});
+
+function scrollbarReset(sdk) {
+  return sdk.documentElement.children
+    .flatMap((child) => [child, ...(child.children || [])])
+    .find((node) => node.getAttribute?.("data-lavish-ui") === "scrollbar-reset");
+}
+
+test("a DaisyUI page gets its root scrollbar-color reset, so the editor's scrollbar shows", () => {
+  const daisy = createElement("link");
+  const sdk = bootSdk({
+    query: (selector) => (selector === 'link[rel~="stylesheet"][href*="daisyui"]' ? daisy : null),
+  });
+  const style = scrollbarReset(sdk);
+  assert.ok(style, "the SDK adds the reset");
+  assert.match(style.textContent, /^:root:root\{scrollbar-color:auto\}/);
+  assert.match(style.textContent, /@supports \(-moz-appearance:none\)\{:root:root\{scrollbar-color:oklch/);
+});
+
+test("a page without DaisyUI keeps its own scrollbar-color", () => {
+  assert.equal(scrollbarReset(bootSdk()), undefined);
 });
 
 test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {

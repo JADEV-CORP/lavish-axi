@@ -1081,9 +1081,30 @@ export function createArtifactSdk(
     if (typeof head.insertBefore === "function") head.insertBefore(style, head.firstChild || null);
     else head.appendChild(style);
   }
+  // DaisyUI sets `:root{scrollbar-color}` (#3331). Chrome ignores ::-webkit-scrollbar wherever that
+  // standard property applies, and it inherits, so every DaisyUI page - the Lavish design and
+  // `lavish-axi design --template` pages included - fell back to the browser's rounded scrollbar
+  // tinted by the text colour: white on a dark page. On a page that loads DaisyUI, the root's value
+  // goes back to auto, after DaisyUI, and Firefox gets the editor's thin colours instead.
+  function usesDaisyUi() {
+    if (document.querySelector('link[rel~="stylesheet"][href*="daisyui"]')) return true;
+    return [...document.querySelectorAll("style")].some((style) =>
+      String(style.textContent || "").includes("scrollbar-color:color-mix(in oklch,currentColor 35%,#0000)"),
+    );
+  }
+  function resetDaisyUiScrollbar() {
+    if (document.querySelector('style[data-lavish-ui="scrollbar-reset"]') || !usesDaisyUi()) return;
+    const style = document.createElement("style");
+    style.setAttribute("data-lavish-ui", "scrollbar-reset");
+    style.textContent =
+      ":root:root{scrollbar-color:auto}" +
+      "@supports (-moz-appearance:none){:root:root{scrollbar-color:oklch(0.6 0.02 325 / 55%) transparent}}";
+    (document.head || document.documentElement).appendChild(style);
+  }
   // Cosmetic only: a page that refuses the style must never stop the SDK from starting.
   try {
     installArtifactScrollbar();
+    resetDaisyUiScrollbar();
   } catch {
     // The browser's own scrollbar stays.
   }
