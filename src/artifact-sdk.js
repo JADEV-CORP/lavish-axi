@@ -2728,6 +2728,10 @@ export function createArtifactSdk(
     }
     if (msg.type === "lavish:restoreReviewState") restoreReviewState(msg.state);
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
+    if (msg.type === "lavish:zoomPicture" && Number.isSafeInteger(msg.index)) {
+      const image = zoomPictureList()[msg.index];
+      if (image) requestImageZoom(image, zoomPictureSource(image));
+    }
     if (msg.type === "lavish:theme") {
       chromeTheme = msg.theme === "light" || msg.theme === "dark" ? msg.theme : null;
       // Only plain oklch() colors are taken, so the message can never inject other CSS.
@@ -2937,14 +2941,31 @@ export function createArtifactSdk(
     ).trim();
   }
 
-  function requestImageZoom(image) {
-    const src = zoomImageSource(image);
+  // The page's pictures in document order, for the viewer's previous and next (#3327): every
+  // picture a click or the zoom button could open, an SVG counted once at its outermost element.
+  function zoomPictureList() {
+    return [...document.querySelectorAll("img, svg")].filter((el) => zoomableImageFrom(el) === el);
+  }
+
+  // What the viewer shows for a picture: the linked file when the picture links to one.
+  function zoomPictureSource(image) {
+    const link = image.closest ? image.closest("a[href]") : null;
+    return (link && linkedPictureHref(link)) || zoomImageSource(image);
+  }
+
+  function requestImageZoom(image, src = zoomImageSource(image)) {
     if (!src) return;
     const rect = image.getBoundingClientRect();
+    const onScreen =
+      rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+    const pictures = zoomPictureList();
     postArtifactMessage("lavish:zoomImage", {
       src,
       alt: zoomImageAlt(image),
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      // A picture stepped to off screen has nowhere to glide from or back to.
+      rect: onScreen ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
+      index: pictures.indexOf(image),
+      count: pictures.length,
     });
   }
 
@@ -3004,7 +3025,7 @@ export function createArtifactSdk(
         event.stopPropagation();
         if (!zoomButtonImage) return;
         if (zoomButtonKind === "video") requestVideoMaximize(zoomButtonImage);
-        else requestImageZoom(zoomButtonImage);
+        else requestImageZoom(zoomButtonImage, zoomPictureSource(zoomButtonImage));
       });
       zoomButton.addEventListener("mouseenter", () => window.clearTimeout(zoomButtonHideTimer));
       zoomButton.addEventListener("mouseleave", () => scheduleZoomButtonHide());
@@ -3211,12 +3232,7 @@ export function createArtifactSdk(
         const image = href ? zoomableImageFrom(target) : null;
         if (!image || !interactive.contains(image)) return;
         event.preventDefault();
-        const rect = image.getBoundingClientRect();
-        postArtifactMessage("lavish:zoomImage", {
-          src: href,
-          alt: zoomImageAlt(image),
-          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-        });
+        requestImageZoom(image, href);
         return;
       }
       const image = zoomableImageFrom(target);

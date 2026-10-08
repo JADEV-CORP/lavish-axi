@@ -9412,6 +9412,51 @@ test("an artifact can open a picture in the zoom preview, but only a picture", a
   assert.equal(dialog.hidden, true);
 });
 
+test("the preview steps through the artifact's pictures, asking the frame for each one", async () => {
+  const chrome = await createChromeHarness();
+  const img = chrome.element("imageZoomImg");
+  img.naturalWidth = 800;
+  img.naturalHeight = 600;
+  const prev = chrome.element("imageZoomPrev");
+  const next = chrome.element("imageZoomNext");
+  const position = chrome.element("imageZoomPosition");
+  const show = (index, count) =>
+    chrome.sendFrameMessage({
+      type: "lavish:zoomImage",
+      src: `http://lavish.test/a/${index}.png`,
+      alt: "",
+      index,
+      count,
+    });
+  const asked = () => ({ ...chrome.postedToFrame.filter((message) => message.type === "lavish:zoomPicture").at(-1) });
+
+  show(0, 1);
+  await flushPromises();
+  assert.equal(prev.hidden, true, "a lone picture has no previous or next");
+  assert.equal(position.hidden, true);
+  chrome.element("imageZoom").dispatch("keydown", { key: "Escape", preventDefault() {}, stopPropagation() {} });
+
+  show(1, 3);
+  await flushPromises();
+  assert.equal(position.textContent, "2 / 3");
+  assert.equal(prev.hidden, false);
+  assert.equal(next.disabled, false);
+
+  next.dispatch("click");
+  assert.deepEqual(asked(), { type: "lavish:zoomPicture", index: 2 });
+  show(2, 3);
+  await flushPromises();
+  assert.equal(position.textContent, "3 / 3");
+  assert.equal(next.disabled, true, "it stops at the last picture");
+
+  chrome.element("imageZoom").dispatch("keydown", { key: "ArrowLeft", preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(asked(), { type: "lavish:zoomPicture", index: 1 });
+
+  show(7, 3);
+  await flushPromises();
+  assert.equal(position.textContent, "3 / 3", "an index outside the set is ignored");
+});
+
 test("a chat thumbnail opens the zoom preview instead of the note it sits in", async () => {
   const chrome = await createChromeHarness();
   const img = chrome.element("imageZoomImg");

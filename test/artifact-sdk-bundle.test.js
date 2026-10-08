@@ -172,7 +172,22 @@ function bootSdk({ runAnimationFrames = false, revisionsScript = null, revisionM
       getElementById: () => null,
       querySelector: (selector) =>
         selector === "script[data-lavish-revisions]" ? revisionsScript : documentQuery(selector),
-      querySelectorAll: (selector) => (selector === "[data-lavish-revision]" ? revisionMarkElements : []),
+      querySelectorAll: (selector) => {
+        if (selector === "[data-lavish-revision]") return revisionMarkElements;
+        // The page's pictures, in document order, for the viewer's previous and next.
+        if (selector === "img, svg") {
+          const found = [];
+          const walk = (node) => {
+            for (const child of node.children) {
+              if (child.tagName === "IMG" || child.tagName === "SVG") found.push(child);
+              walk(child);
+            }
+          };
+          walk(body);
+          return found;
+        }
+        return [];
+      },
       getSelection: () => selection,
     },
   };
@@ -923,6 +938,32 @@ test("a picture linked to a picture file opens the viewer on the linked file ins
     assert.equal(message.src, "http://127.0.0.1/artifact/abc/assets/check-in.en.680.jpg?v=2");
     assert.equal(message.alt, "Check-in email");
   }
+});
+
+test("the viewer's previous and next get each picture with its place in the page", () => {
+  const sdk = bootSdk();
+  const linked = linkedPicture(sdk, "assets/full.png");
+  const plain = appendTo(sdk.body, createElement("img"));
+  plain.setAttribute("alt", "Second");
+  Object.assign(plain, { complete: true, naturalWidth: 400, src: "http://127.0.0.1/artifact/abc/second.png" });
+  Object.setPrototypeOf(plain, sdk.Element.prototype);
+
+  sdk.sendChromeMessage({ type: "lavish:zoomPicture", index: 1 });
+  let message = sdk.posted.at(-1);
+  assert.equal(message.type, "lavish:zoomImage");
+  assert.equal(message.src, "http://127.0.0.1/artifact/abc/second.png");
+  assert.equal(message.index, 1);
+  assert.equal(message.count, 2);
+
+  sdk.sendChromeMessage({ type: "lavish:zoomPicture", index: 0 });
+  message = sdk.posted.at(-1);
+  assert.equal(message.src, "http://127.0.0.1/artifact/abc/assets/full.png", "a linked picture shows its linked file");
+  assert.equal(message.alt, linked.getAttribute("alt"));
+
+  const before = sdk.posted.length;
+  sdk.sendChromeMessage({ type: "lavish:zoomPicture", index: 5 });
+  sdk.sendChromeMessage({ type: "lavish:zoomPicture", index: "1" });
+  assert.equal(sdk.posted.length, before, "an index with no picture asks for nothing");
 });
 
 test("a picture linked to a page, or a download link, keeps its click", () => {

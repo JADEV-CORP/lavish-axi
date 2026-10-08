@@ -5957,6 +5957,10 @@ const imageZoomInButton = /** @type {HTMLButtonElement} */ (document.getElementB
 const imageZoomOutButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomOut"));
 const imageZoomFitButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomFit"));
 const imageZoomActualButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomActual"));
+const imageZoomPrevButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomPrev"));
+const imageZoomNextButton = /** @type {HTMLButtonElement} */ (document.getElementById("imageZoomNext"));
+const imageZoomPosition = /** @type {HTMLOutputElement} */ (document.getElementById("imageZoomPosition"));
+const imageZoomPositionSep = /** @type {HTMLSpanElement} */ (document.getElementById("imageZoomPositionSep"));
 
 // Room kept around a fitted picture, and below it for the toolbar.
 const IMAGE_ZOOM_MARGIN = 48;
@@ -6107,9 +6111,9 @@ function zoomStep(direction) {
 
 /**
  * @param {string} src
- * @param {{ alt?: string, origin?: ZoomRect | null }} [options]
+ * @param {{ alt?: string, origin?: ZoomRect | null, set?: ZoomSet | null }} [options]
  */
-async function openImageZoom(src, { alt = "", origin = null } = {}) {
+async function openImageZoom(src, { alt = "", origin = null, set = null } = {}) {
   if (!src || zoomView) return;
   const opening = ++zoomOpening;
   const returnFocus = document.activeElement;
@@ -6129,6 +6133,8 @@ async function openImageZoom(src, { alt = "", origin = null } = {}) {
   const vector = /^data:image\/svg\+xml/i.test(src) || /\.svgz?(?:[?#]|$)/i.test(src);
   zoomView = { width, height, scale: 1, x: 0, y: 0, origin, returnFocus, vector };
   imageZoomCaption.textContent = (alt ? alt + " · " : "") + width + " × " + height;
+  zoomSet = set;
+  renderZoomSet();
   closeMenus();
   setLayerOpen(imageZoom, true);
   if (origin) {
@@ -6145,6 +6151,85 @@ async function openImageZoom(src, { alt = "", origin = null } = {}) {
   imageZoomClose.focus();
 }
 
+// ---- Previous and next (#3327). A picture opens with the set it belongs to: the page's pictures,
+// which the SDK counts and hands over one at a time, or the conversation's thumbnails, which live
+// here. Stepping swaps the picture in place, fitted, and stops at either end. ----
+/** @typedef {{ source: "artifact" | "conversation", index: number, count: number }} ZoomSet */
+/** @type {ZoomSet | null} */
+let zoomSet = null;
+
+function conversationPictures() {
+  return /** @type {HTMLImageElement[]} */ ([
+    ...panel.querySelectorAll("img.bubble-attachment, img.chat-attachment-thumb"),
+  ]).filter((image) => zoomableSrc(image.currentSrc || image.src, { allowBlob: true }));
+}
+
+function renderZoomSet() {
+  const several = !!zoomSet && zoomSet.count > 1;
+  imageZoomPrevButton.hidden = !several;
+  imageZoomNextButton.hidden = !several;
+  imageZoomPosition.hidden = !several;
+  imageZoomPositionSep.hidden = !several;
+  if (!zoomSet || !several) return;
+  imageZoomPosition.textContent = zoomSet.index + 1 + " / " + zoomSet.count;
+  imageZoomPrevButton.disabled = zoomSet.index <= 0;
+  imageZoomNextButton.disabled = zoomSet.index >= zoomSet.count - 1;
+  // A button disabled at either end drops focus out of the viewer, and its keys with it.
+  if (imageZoomPrevButton.disabled && document.activeElement === imageZoomPrevButton) imageZoomNextButton.focus();
+  if (imageZoomNextButton.disabled && document.activeElement === imageZoomNextButton) imageZoomPrevButton.focus();
+}
+
+/**
+ * Shows another picture in the open viewer, fitted, without the opening glide.
+ * @param {string} src
+ * @param {{ alt?: string, origin?: ZoomRect | null }} [options]
+ */
+async function replaceZoomPicture(src, { alt = "", origin = null } = {}) {
+  if (!src || !zoomView) return;
+  const opening = ++zoomOpening;
+  const probe = /** @type {HTMLImageElement} */ (document.createElement("img"));
+  probe.src = src;
+  try {
+    if (typeof probe.decode === "function") await probe.decode();
+  } catch {
+    return;
+  }
+  if (opening !== zoomOpening || !zoomView) return;
+  const width = Number(probe.naturalWidth) || 0;
+  const height = Number(probe.naturalHeight) || 0;
+  if (!width || !height) return;
+  imageZoomImg.alt = alt;
+  imageZoomImg.src = src;
+  const vector = /^data:image\/svg\+xml/i.test(src) || /\.svgz?(?:[?#]|$)/i.test(src);
+  Object.assign(zoomView, { width, height, origin, vector });
+  imageZoomCaption.textContent = (alt ? alt + " · " : "") + width + " × " + height;
+  zoomToFit({ animate: false });
+}
+
+/** @param {number} direction */
+function stepZoomPicture(direction) {
+  if (!zoomView || !zoomSet) return;
+  const index = zoomSet.index + direction;
+  if (index < 0 || index >= zoomSet.count) return;
+  if (zoomSet.source === "artifact") {
+    postToFrame({ type: "lavish:zoomPicture", index });
+    return;
+  }
+  const pictures = conversationPictures();
+  const image = pictures[index];
+  if (!image) return;
+  zoomSet = { source: "conversation", index, count: pictures.length };
+  renderZoomSet();
+  const box = typeof image.getBoundingClientRect === "function" ? image.getBoundingClientRect() : null;
+  void replaceZoomPicture(zoomableSrc(image.currentSrc || image.src, { allowBlob: true }), {
+    alt: String(image.alt || ""),
+    origin: zoomRect(box),
+  });
+}
+
+imageZoomPrevButton.addEventListener("click", () => stepZoomPicture(-1));
+imageZoomNextButton.addEventListener("click", () => stepZoomPicture(1));
+
 function closeImageZoom() {
   if (!zoomView) return;
   const view = zoomView;
@@ -6158,6 +6243,7 @@ function closeImageZoom() {
     });
   }
   zoomView = null;
+  zoomSet = null;
   setLayerOpen(imageZoom, false, { closeToken: "--modal-open-dur" });
   const back = /** @type {HTMLElement | null} */ (view.returnFocus);
   if (back && typeof back.focus === "function" && back !== document.body) back.focus();
@@ -6279,6 +6365,15 @@ imageZoom.addEventListener("keydown", (event) => {
   } else if (key === "1") {
     event.preventDefault();
     imageZoomActualButton.click();
+  } else if (
+    (key === "ArrowLeft" || key === "ArrowRight") &&
+    zoomSet &&
+    zoomSet.count > 1 &&
+    !imageZoomStage.classList.contains("can-pan")
+  ) {
+    // Left and right step through the set while the picture fits; zoomed in, they pan.
+    event.preventDefault();
+    stepZoomPicture(key === "ArrowLeft" ? -1 : 1);
   } else if (key.startsWith("Arrow")) {
     event.preventDefault();
     zoomView.x += key === "ArrowLeft" ? pan : key === "ArrowRight" ? -pan : 0;
@@ -6289,11 +6384,13 @@ imageZoom.addEventListener("keydown", (event) => {
     // The preview is modal: Tab cycles through its own controls.
     const controls = [
       imageZoomClose,
+      imageZoomPrevButton,
+      imageZoomNextButton,
       imageZoomOutButton,
       imageZoomInButton,
       imageZoomFitButton,
       imageZoomActualButton,
-    ].filter((control) => !control.disabled);
+    ].filter((control) => !control.disabled && !control.hidden);
     const index = controls.indexOf(/** @type {HTMLButtonElement} */ (document.activeElement));
     event.preventDefault();
     const next = (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
@@ -6325,7 +6422,13 @@ document.addEventListener(
     event.preventDefault();
     event.stopPropagation();
     const box = typeof image.getBoundingClientRect === "function" ? image.getBoundingClientRect() : null;
-    void openImageZoom(src, { alt: String(image.alt || ""), origin: zoomRect(box) });
+    const pictures = conversationPictures();
+    const index = pictures.indexOf(image);
+    void openImageZoom(src, {
+      alt: String(image.alt || ""),
+      origin: zoomRect(box),
+      set: index >= 0 ? { source: "conversation", index, count: pictures.length } : null,
+    });
   },
   true,
 );
@@ -6346,7 +6449,20 @@ function openImageZoomFromFrame(msg) {
           height: inner.height,
         }
       : null;
-  void openImageZoom(src, { alt: typeof msg.alt === "string" ? msg.alt.slice(0, 300) : "", origin: zoomRect(origin) });
+  const alt = typeof msg.alt === "string" ? msg.alt.slice(0, 300) : "";
+  const count = Number.isSafeInteger(msg.count) && msg.count > 0 && msg.count <= 10000 ? msg.count : 0;
+  const index = count && Number.isSafeInteger(msg.index) && msg.index >= 0 && msg.index < count ? msg.index : -1;
+  /** @type {ZoomSet | null} */
+  const set = index >= 0 ? { source: "artifact", index, count } : null;
+  if (zoomView) {
+    // The answer to a previous or next step, taken only while the page's set is open.
+    if (zoomSet?.source !== "artifact" || !set) return;
+    zoomSet = set;
+    renderZoomSet();
+    void replaceZoomPicture(src, { alt, origin: zoomRect(origin) });
+    return;
+  }
+  void openImageZoom(src, { alt, origin: zoomRect(origin), set });
 }
 
 // ---- Maximized video (#3236). The artifact's video plays large over the editor in the picture

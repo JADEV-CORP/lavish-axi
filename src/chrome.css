@@ -3296,6 +3296,7 @@ body.layout-gate-active iframe#artifact {
 .image-zoom-overlay,
 .image-zoom-caption,
 .image-zoom-close,
+.image-zoom-step,
 .image-zoom-bar {
   opacity: 0;
   transition: opacity var(--modal-open-dur) var(--modal-ease);
@@ -3303,12 +3304,14 @@ body.layout-gate-active iframe#artifact {
 .image-zoom.is-open .image-zoom-overlay,
 .image-zoom.is-open .image-zoom-caption,
 .image-zoom.is-open .image-zoom-close,
+.image-zoom.is-open .image-zoom-step,
 .image-zoom.is-open .image-zoom-bar {
   opacity: 1;
 }
 .image-zoom.is-closing .image-zoom-overlay,
 .image-zoom.is-closing .image-zoom-caption,
 .image-zoom.is-closing .image-zoom-close,
+.image-zoom.is-closing .image-zoom-step,
 .image-zoom.is-closing .image-zoom-bar {
   transition-duration: var(--modal-close-dur);
 }
@@ -3384,6 +3387,41 @@ body.layout-gate-active iframe#artifact {
 .image-zoom-close:hover {
   background: var(--foreground);
 }
+/* Previous and next (#3327): the close button's dark square, centred on each side edge, shown only
+   when the picture's set holds more than one. */
+.image-zoom-step {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: color-mix(in oklch, var(--foreground) 70%, transparent);
+  color: var(--background);
+  cursor: pointer;
+  translate: 0 -50%;
+}
+.image-zoom-step[hidden] {
+  display: none;
+}
+.image-zoom-prev {
+  left: 20px;
+}
+.image-zoom-next {
+  right: 20px;
+}
+.image-zoom-step:hover:not(:disabled) {
+  background: var(--foreground);
+}
+.image-zoom-step:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.image-zoom.is-open .image-zoom-step:disabled {
+  opacity: 0.3;
+}
 .image-zoom-bar {
   position: absolute;
   bottom: 20px;
@@ -3423,6 +3461,18 @@ body.layout-gate-active iframe#artifact {
   font-variant-numeric: tabular-nums;
   text-align: center;
   color: var(--fg-muted);
+}
+.image-zoom-position {
+  min-width: 52px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--fg);
+}
+.image-zoom-position[hidden],
+.image-zoom-sep[hidden] {
+  display: none;
 }
 .image-zoom-sep {
   width: 1px;
