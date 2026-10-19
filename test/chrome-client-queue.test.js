@@ -51,10 +51,15 @@ function assertPromptIdentity(id) {
   assert.match(String(id || ""), PROMPT_ID_RE);
 }
 
+// A bubble's content without its Copy action row, which every message with text carries.
+function withoutActions(html) {
+  return String(html).replace(/<div class="msg-actions">[\s\S]*?<\/button><\/div>/, "");
+}
+
 // A sent user bubble ends with its delivery receipt (docs/delivery-acks.md). Tests about the
 // bubble's words, anchor, and thumbnails compare everything before it; the receipt has its own tests.
 function withoutReceipt(html) {
-  return String(html).replace(/<div class="receipt">[\s\S]*<\/div>$/, "");
+  return withoutActions(html).replace(/<div class="receipt">[\s\S]*<\/div>$/, "");
 }
 
 function identicalProjectionNote(offset) {
@@ -8933,10 +8938,10 @@ test("a transcript entry from before receipts renders no receipt and ignores pre
     },
   });
   const bubbles = chrome.element("chatLog").children;
-  assert.equal(bubbles[0].innerHTML, '<small>You</small><div class="bubble-text">Old note</div>');
+  assert.equal(withoutActions(bubbles[0].innerHTML), '<small>You</small><div class="bubble-text">Old note</div>');
   assert.deepEqual(receiptSteps(bubbles[1].innerHTML), [false, false, false]);
   chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify({ state: "working" }) });
-  assert.equal(bubbles[0].innerHTML, '<small>You</small><div class="bubble-text">Old note</div>');
+  assert.equal(withoutActions(bubbles[0].innerHTML), '<small>You</small><div class="bubble-text">Old note</div>');
   assert.equal(receiptNote(bubbles[1].innerHTML), "Agent is busy; delivered on its next poll");
 });
 
@@ -9597,6 +9602,39 @@ test("an agent reply has the prototype's header and a Copy action that copies it
   assert.deepEqual(labels, ["Copied"]);
   chrome.runTimers(1500);
   assert.equal(swap.dataset.state, "a");
+});
+
+test("your own message has a Copy action that copies what you wrote, and its label comes back", async () => {
+  const chrome = await createChromeHarness();
+  const message = { role: "user", text: "Make the **title** bigger", at: "2026-10-19T09:00:00.000Z" };
+  chrome.eventSource().listeners.get("chat-sync")({ data: JSON.stringify({ chat_revision: 1, chat: [message] }) });
+  const bubble = chrome.element("chatLog").children.at(-1);
+  assert.match(bubble.innerHTML, /<button class="msg-action msg-copy" type="button" aria-label="Copy message"/);
+
+  const swap = { dataset: { state: "a" } };
+  const labels = [];
+  const button = {
+    dataset: { copyLabel: "Copy message" },
+    closest: (selector) => (selector === ".msg-copy" ? button : selector === ".bubble" ? bubble : null),
+    querySelector: () => swap,
+    setAttribute: (name, value) => labels.push(value),
+  };
+  chrome.element("chatLog").dispatch("click", { target: button });
+  await flushPromises();
+  assert.deepEqual(chrome.clipboardWrites, ["Make the **title** bigger"]);
+  chrome.runTimers(1500);
+  assert.deepEqual(labels, ["Copied", "Copy message"]);
+
+  const picturesOnly = {
+    role: "user",
+    text: "",
+    attachments: [{ id: "a", name: "shot.png" }],
+    at: "2026-10-19T09:01:00.000Z",
+  };
+  chrome.eventSource().listeners.get("chat-sync")({
+    data: JSON.stringify({ chat_revision: 2, chat: [message, picturesOnly] }),
+  });
+  assert.doesNotMatch(chrome.element("chatLog").children.at(-1).innerHTML, /msg-copy/, "nothing to copy, no Copy");
 });
 
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {

@@ -900,6 +900,7 @@ function syncReplyRevisionButtons() {
   }
 }
 
+// The text each bubble's Copy takes: an agent reply, or one of the reviewer's own messages.
 /** @type {WeakMap<Element, string>} */
 const replyTexts = new WeakMap();
 // When each entry last animated in. The transcript sync that follows a live reply rebuilds the log
@@ -913,10 +914,10 @@ chatLog.addEventListener("click", (event) => {
   const button = target.closest(".reply-revision");
   if (button) revealNextRevisionMark(String(/** @type {HTMLElement} */ (button).dataset.revision || ""));
   const copy = target.closest(".msg-copy");
-  if (copy) void copyReply(copy);
+  if (copy) void copyMessage(copy);
 });
 
-async function copyReply(button) {
+async function copyMessage(button) {
   const bubble = button.closest(".bubble");
   const text = bubble ? replyTexts.get(bubble) : "";
   if (!text || !(await copyText(text))) return;
@@ -926,7 +927,7 @@ async function copyReply(button) {
   button.setAttribute("aria-label", "Copied");
   setTimeout(() => {
     swap.dataset.state = "a";
-    button.setAttribute("aria-label", "Copy reply");
+    button.setAttribute("aria-label", button.dataset?.copyLabel || "Copy");
   }, 1500);
 }
 
@@ -1183,6 +1184,7 @@ function chatBubbleHtml(entry) {
     anchorHtml(entry.anchor) +
     userBubbleTextHtml(entry, entry.text) +
     bubbleAttachmentsHtml(entry) +
+    (entry.text ? copyActionHtml("Copy message") : "") +
     receiptHtml(entry)
   );
 }
@@ -1226,18 +1228,27 @@ function setAgentIdentity(agent) {
   for (const name of chatLog.querySelectorAll(".msg-who-name")) name.textContent = agent.short;
 }
 
-// AI Elements Actions: shown on hover or focus, always on touch. Copy takes the agent's own text,
-// so a pasted reply keeps its Markdown; View rN is the jump-to-revision button.
-function agentActionsHtml(entry) {
+// AI Elements Actions: shown on hover or focus, always on touch. Copy takes the message's own
+// text, so a pasted reply or message keeps its Markdown; View rN is the jump-to-revision button.
+function copyButtonHtml(label) {
   return (
-    '<div class="msg-actions"><button class="msg-action msg-copy" type="button" aria-label="Copy reply" title="Copy"><span class="t-icon-swap" data-state="a"><span class="t-icon" data-icon="a">' +
+    '<button class="msg-action msg-copy" type="button" aria-label="' +
+    label +
+    '" data-copy-label="' +
+    label +
+    '" title="Copy"><span class="t-icon-swap" data-state="a"><span class="t-icon" data-icon="a">' +
     COPY_SVG +
     '</span><span class="t-icon" data-icon="b">' +
     CHECK_SVG +
-    "</span></span></button>" +
-    replyRevisionHtml(entry.revision_id) +
-    "</div>"
+    "</span></span></button>"
   );
+}
+// The reviewer's own messages get the same Copy (#3779).
+function copyActionHtml(label) {
+  return '<div class="msg-actions">' + copyButtonHtml(label) + "</div>";
+}
+function agentActionsHtml(entry) {
+  return '<div class="msg-actions">' + copyButtonHtml("Copy reply") + replyRevisionHtml(entry.revision_id) + "</div>";
 }
 
 function agentBodyHtml(entry) {
@@ -1364,7 +1375,7 @@ function addChat(entry, shouldScroll = true, { enter = false } = {}) {
   const el = document.createElement("div");
   el.className = "bubble " + role;
   el.innerHTML = chatBubbleHtml({ ...entry, role, text });
-  if (role === "agent") replyTexts.set(el, text);
+  if (text) replyTexts.set(el, text);
   // A new reply reveals and a new message of yours slides up (transitions-polish tokens). Only
   // entries that just arrived move; a transcript rebuild never replays them.
   if (enter && !prefersReducedMotion()) {

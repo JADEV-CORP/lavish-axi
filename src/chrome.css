@@ -447,7 +447,7 @@ body {
 .warning-target {
   display: block;
   margin-top: 5px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   line-height: 1.45;
   color: var(--fg-label);
@@ -564,7 +564,7 @@ body {
   margin: 0 -4px;
   border-radius: 0;
   cursor: pointer;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 12px;
   color: var(--fg-muted);
 }
@@ -1037,7 +1037,7 @@ body {
   min-width: 0;
 }
 .share-copy-row input {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
 }
 .share-copy-btn {
@@ -1148,7 +1148,11 @@ body {
 .chat:empty:has(+ .chat-queued:not(:empty))::before {
   display: none;
 }
+/* Long paths, URLs and unbroken tokens wrap inside the bubble instead of running past its edge
+   (#3778); a code block scrolls sideways instead (.chat-md pre). */
 .bubble {
+  min-width: 0;
+  overflow-wrap: anywhere;
   max-width: 85%;
   border-radius: var(--radius-xl);
   padding: 10px 12px;
@@ -1369,7 +1373,7 @@ body {
 }
 .anchor-kind {
   flex: 0 0 auto;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--fg-dim);
   background: var(--bg);
@@ -1586,11 +1590,16 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* Code keeps its lines: it scrolls sideways rather than breaking an identifier in two. */
+  white-space: pre;
+  overflow-x: auto;
+  overflow-wrap: normal;
   color: var(--foreground);
 }
 .chat-md code {
+  /* An inline path or identifier wraps with the sentence; each line keeps the chip's border. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   font-family: var(--font-mono);
   font-size: 0.92em;
   background: var(--bg);
@@ -2164,7 +2173,7 @@ body {
 .ended-copy {
   margin: 0;
   color: var(--fg-faint);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -3361,9 +3370,13 @@ body.layout-gate-active iframe#artifact {
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease);
 }
-.bubble.agent:hover .msg-actions,
-.bubble.agent:focus-within .msg-actions {
+.bubble:hover .msg-actions,
+.bubble:focus-within .msg-actions {
   opacity: 1;
+}
+.bubble.user .msg-actions {
+  justify-content: flex-end;
+  margin: 2px -6px -4px 0;
 }
 @media (hover: none) {
   .msg-actions {

@@ -898,7 +898,7 @@ test("overflow menu shows the artifact path with a copy affordance", async () =>
   assert.match(html, /class="menu-label">Editing</);
   assert.match(html, /class="menu-file" id="copyPath"[^>]*title="Copy path · \/tmp\/artifact\/index\.html"/);
   assert.match(html, /class="copy-hint"/);
-  assert.match(css, /\.menu-file\{[^}]*font-family:var\(--font-mono\)/);
+  assert.match(css, /\.menu-file\{[^}]*font-family:var\(--font-sans\)/, "the path is interface text, in Inter");
   assert.match(css, /\.copy-hint\.copied\{color:var\(--accent-text-hover\)/);
 });
 

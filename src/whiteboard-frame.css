@@ -158,7 +158,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   padding: 8px 10px;
   border-radius: 8px;
   background: rgba(128, 128, 128, 0.12);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: inherit;
 }
 
 .wb-link-confirm-actions {
