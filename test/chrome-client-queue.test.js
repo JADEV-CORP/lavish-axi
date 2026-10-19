@@ -102,6 +102,10 @@ async function createChromeHarness({
   // syncMarks), set on the element before the client boots.
   /** @type {Record<string, (...args: any[]) => void> | null} */
   composer = null,
+  // Opt-in background tab: the page is hidden, has a title, and the browser has a Notification API
+  // granting `permission`; created notifications collect in `notifications`.
+  /** @type {{ permission: string } | null} */
+  background = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -541,6 +545,22 @@ async function createChromeHarness({
   }
 
   if (composer) Object.assign(element("chatInput"), composer);
+  /** @type {{ title: string, body: string, tag: string }[]} */
+  const notifications = [];
+  if (background) {
+    const backgroundContext = /** @type {any} */ (context);
+    backgroundContext.document.visibilityState = "hidden";
+    backgroundContext.document.title = "page.html · Lavish";
+    backgroundContext.document.hasFocus = () => backgroundContext.document.visibilityState === "visible";
+    backgroundContext.window.Notification = class {
+      static permission = background.permission;
+      static requestPermission = async () => background.permission;
+      constructor(title, options) {
+        notifications.push({ title, body: options.body, tag: options.tag });
+      }
+      close() {}
+    };
+  }
   vm.runInNewContext(source, context, { filename: "chrome-client.js" });
   await flushPromises();
   if (artifactSrc) frame.dispatch("load");
@@ -630,6 +650,8 @@ async function createChromeHarness({
       assert.ok(handlers.length > 0, "chrome-client registered a message handler");
       for (const handler of handlers) handler({ source: whiteboard.source, data });
     },
+    notifications,
+    document: /** @type {any} */ (context).document,
     dispatchDocumentKeydown(eventProps) {
       const handlers = documentListeners.get("keydown") || [];
       assert.ok(handlers.length > 0, "chrome-client registered a document keydown handler");
@@ -9649,6 +9671,55 @@ test("Ctrl+I is italic in the rich composer and switches Interact/Annotate every
   const toggled = chrome.dispatchDocumentKeydown({ key: "i", ctrlKey: true, target: elsewhere });
   assert.equal(toggled.defaultPrevented, true);
   assert.equal(chrome.element("annotation")["aria-pressed"], "false", "outside the composer it switches to Interact");
+});
+
+test("pages open in the mode chosen in the More menu, and choosing it switches this page too", async () => {
+  const localStore = new Map([["lavish-axi:start-mode", "interact"]]);
+  const chrome = await createChromeHarness({ theme: { localStore } });
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false", "opens in Interact");
+  assert.equal(chrome.element("startInteract")["aria-checked"], "true");
+
+  chrome.element("startInteract").onclick();
+  assert.equal(localStore.has("lavish-axi:start-mode"), false, "Annotate is the default, stored as nothing");
+  assert.equal(chrome.element("startInteract")["aria-checked"], "false");
+  assert.equal(chrome.element("annotation")["aria-pressed"], "true", "this page switched to Annotate");
+
+  const fresh = await createChromeHarness({ theme: { localStore: new Map() } });
+  assert.equal(fresh.element("annotation")["aria-pressed"], "true", "with nothing stored, pages open in Annotate");
+});
+
+test("in a background tab, replies, page updates and a quiet agent notify; the count clears on return", async () => {
+  const localStore = new Map();
+  const chrome = await createChromeHarness({ theme: { localStore }, background: { permission: "granted" } });
+  const live = (name, data) => chrome.eventSource().listeners.get(name)({ data: JSON.stringify(data) });
+
+  live("agent-reply", { text: "Done. The **title** is bigger now.", html: "<p>Done.</p>" });
+  assert.equal(chrome.document.title, "(1) page.html · Lavish");
+  assert.equal(chrome.notifications.at(-1).body, "Agent replied: Done. The title is bigger now.");
+
+  live("reload", {});
+  assert.equal(chrome.document.title, "(2) page.html · Lavish");
+  assert.equal(chrome.notifications.at(-1).body, "The page was updated.");
+
+  live("agent-presence", { state: "listening" });
+  live("agent-presence", { state: "waiting" });
+  live("agent-presence", { state: "listening" });
+  chrome.runTimers(30_000);
+  assert.equal(chrome.notifications.length, 2, "a moment between two polls is not worth a notification");
+  live("agent-presence", { state: "waiting" });
+  chrome.runTimers(30_000);
+  assert.match(chrome.notifications.at(-1).body, /^Agent stopped listening\./);
+
+  chrome.document.visibilityState = "visible";
+  chrome.dispatchDocumentEvent("visibilitychange", {});
+  assert.equal(chrome.document.title, "page.html · Lavish", "coming back clears the count");
+
+  chrome.document.visibilityState = "hidden";
+  chrome.element("notifyToggle").onclick();
+  assert.equal(localStore.get("lavish-axi:notifications"), "off");
+  live("agent-reply", { text: "Again.", html: "<p>Again.</p>" });
+  assert.equal(chrome.document.title, "page.html · Lavish", "turned off, nothing changes");
+  assert.equal(chrome.notifications.length, 3);
 });
 
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {

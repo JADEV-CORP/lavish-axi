@@ -2935,6 +2935,17 @@ body.layout-gate-active iframe#artifact {
 .menu-item[aria-checked="false"] .menu-check {
   visibility: hidden;
 }
+.menu-item[hidden] {
+  display: none;
+}
+/* A follow-up action under the item it belongs to, such as Allow desktop notifications under
+   Notifications (#3781). */
+.menu-subitem {
+  padding-top: 4px;
+  padding-left: 35px;
+  font-size: var(--text-xs);
+  color: var(--accent-text);
+}
 
 /* ---- Scrollbars: square like Lyra, a mauve thumb that turns rose while dragged ---- */
 ::-webkit-scrollbar {

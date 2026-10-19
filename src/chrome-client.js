@@ -229,7 +229,16 @@ const queued = loadQueuedPrompts();
 /** @type {Array<Record<string, any>>} */
 const marks = [];
 let renderedMarks = "";
-let annotation = true;
+// The mode pages open in (#3775): Annotate, unless the reviewer chose Interact in the More menu.
+const START_MODE_STORAGE_KEY = "lavish-axi:start-mode";
+function storedStartsInInteract() {
+  try {
+    return localStorage.getItem(START_MODE_STORAGE_KEY) === "interact";
+  } catch {
+    return false;
+  }
+}
+let annotation = !storedStartsInInteract();
 let ended = false;
 let agentPresence = "waiting";
 const layoutGateEnabled = sessionData.layoutGateEnabled !== false;
@@ -1541,7 +1550,9 @@ function renderAgentStatus() {
 }
 
 function setAgentPresence(state) {
+  const wasListening = agentPresence !== "waiting";
   agentPresence = state === "listening" || state === "external" || state === "working" ? state : "waiting";
+  noteAgentPresenceForNotifications(wasListening);
   renderAgentStatus();
   updateSendState();
   renderSheetSummary();
@@ -5788,6 +5799,25 @@ annotationSwitch.onclick = toggleAnnotationMode;
 modeInteractButton.onclick = () => {
   if (annotation) toggleAnnotationMode();
 };
+
+const startInteractItem = /** @type {HTMLButtonElement} */ (document.getElementById("startInteract"));
+function renderStartMode() {
+  startInteractItem.setAttribute("aria-checked", String(storedStartsInInteract()));
+}
+/** @param {boolean} interact */
+function setStartsInInteract(interact) {
+  try {
+    if (interact) localStorage.setItem(START_MODE_STORAGE_KEY, "interact");
+    else localStorage.removeItem(START_MODE_STORAGE_KEY);
+  } catch {
+    // Storage refused: this page still switches below.
+  }
+  renderStartMode();
+  // The page you are on switches too, so the choice shows at once.
+  if (annotation === interact) toggleAnnotationMode();
+}
+startInteractItem.onclick = () => setStartsInInteract(!storedStartsInInteract());
+renderStartMode();
 railAnnotateButton.onclick = toggleAnnotationMode;
 composerAnnotateButton.onclick = toggleAnnotationMode;
 renderPointerMode();
@@ -6659,6 +6689,14 @@ function paletteCommands() {
       control: themeToggle,
     },
     { label: "Follow system theme", run: () => setThemeChoice(null), when: Boolean(storedThemeChoice()) },
+    {
+      label: storedStartsInInteract() ? "Open pages in Annotate" : "Open pages in Interact",
+      run: () => setStartsInInteract(!storedStartsInInteract()),
+    },
+    {
+      label: notificationsOn() ? "Turn notifications off" : "Turn notifications on",
+      run: () => setNotificationsOn(!notificationsOn()),
+    },
     { label: "Choose a theme preset", run: openThemeDialog },
     ...themePresets.map((preset) => ({
       label: "Theme preset: " + preset.name,
@@ -7021,10 +7059,174 @@ function noteLiveEventsUnreachable() {
   setChromeOutdated(true, "");
 }
 
+// ---- Notifications (#3781). While this tab is in the background, a reply, a page update or the
+// agent going quiet shows a desktop notification (once the browser allows it), a count in the tab
+// title and a soft chime. On by default; the More menu turns them off. ----
+const NOTIFY_STORAGE_KEY = "lavish-axi:notifications";
+// The agent has to stay away this long before "stopped listening" is worth a notification: between
+// two polls it is briefly not listening while it works.
+const AGENT_QUIET_NOTIFY_MS = 30_000;
+const notifyItem = /** @type {HTMLButtonElement} */ (document.getElementById("notifyToggle"));
+const notifyAllowItem = /** @type {HTMLButtonElement} */ (document.getElementById("notifyAllow"));
+let sessionNotifyOff = false;
+
+function notificationsOn() {
+  try {
+    return localStorage.getItem(NOTIFY_STORAGE_KEY) !== "off";
+  } catch {
+    return !sessionNotifyOff;
+  }
+}
+
+// The browser's Notification API, when it has one.
+const DesktopNotification = typeof window.Notification === "function" ? window.Notification : null;
+
+/** @returns {NotificationPermission | "unsupported"} */
+function desktopPermission() {
+  return DesktopNotification ? DesktopNotification.permission : "unsupported";
+}
+
+function renderNotifySetting() {
+  const on = notificationsOn();
+  notifyItem.setAttribute("aria-checked", String(on));
+  notifyAllowItem.hidden = !on || desktopPermission() !== "default";
+  notifyItem.title =
+    on && desktopPermission() === "denied"
+      ? "This browser blocks desktop notifications for Lavish; the tab count and the chime still work."
+      : "";
+}
+
+/** @param {boolean} on */
+function setNotificationsOn(on) {
+  try {
+    if (on) localStorage.removeItem(NOTIFY_STORAGE_KEY);
+    else localStorage.setItem(NOTIFY_STORAGE_KEY, "off");
+  } catch {
+    sessionNotifyOff = !on;
+  }
+  renderNotifySetting();
+  if (!on) clearUnseen();
+}
+
+notifyItem.onclick = () => setNotificationsOn(!notificationsOn());
+// The browser asks only after a click, so permission is requested from this menu item.
+notifyAllowItem.onclick = () => {
+  if (desktopPermission() !== "default") return;
+  Promise.resolve(DesktopNotification?.requestPermission()).then(renderNotifySetting, renderNotifySetting);
+};
+renderNotifySetting();
+
+let unseenCount = 0;
+const titleWithoutCount = () => document.title.replace(/^\(\d+\) /, "");
+function clearUnseen() {
+  if (!unseenCount) return;
+  unseenCount = 0;
+  document.title = titleWithoutCount();
+}
+function pageInBackground() {
+  return document.visibilityState === "hidden" || (typeof document.hasFocus === "function" && !document.hasFocus());
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") clearUnseen();
+});
+window.addEventListener("focus", clearUnseen);
+
+// The chime is two soft notes made with WebAudio, so there is no sound file. A browser lets a page
+// play sound only after the reviewer has used it, so the audio context starts on the first click or
+// key press here, and plays later from the background.
+/** @type {AudioContext | null} */
+let chime = null;
+function unlockChime() {
+  const Context = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+  if (chime || typeof Context !== "function") return;
+  try {
+    chime = new Context();
+  } catch {
+    chime = null;
+  }
+}
+document.addEventListener("pointerdown", unlockChime, { capture: true, once: true });
+document.addEventListener("keydown", unlockChime, { capture: true, once: true });
+function playChime() {
+  if (!chime) return;
+  try {
+    if (chime.state === "suspended") void chime.resume();
+    const start = chime.currentTime;
+    for (const [frequency, offset] of [
+      [880, 0],
+      [1318.5, 0.12],
+    ]) {
+      const tone = chime.createOscillator();
+      const level = chime.createGain();
+      tone.type = "sine";
+      tone.frequency.value = frequency;
+      level.gain.setValueAtTime(0.0001, start + offset);
+      level.gain.exponentialRampToValueAtTime(0.06, start + offset + 0.02);
+      level.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.35);
+      tone.connect(level).connect(chime.destination);
+      tone.start(start + offset);
+      tone.stop(start + offset + 0.4);
+    }
+  } catch {
+    // No sound is better than a broken page.
+  }
+}
+
+const notifyPageName = filePath.split(/[\\/]/).pop() || "Lavish";
+/** @param {string} body */
+function notify(body) {
+  if (!notificationsOn() || ended || !pageInBackground()) return;
+  unseenCount += 1;
+  document.title = "(" + unseenCount + ") " + titleWithoutCount();
+  playChime();
+  if (desktopPermission() !== "granted") return;
+  try {
+    const note = new /** @type {typeof Notification} */ (DesktopNotification)(notifyPageName + " · Lavish", {
+      body,
+      tag: "lavish-" + key,
+      silent: true,
+    });
+    note.onclick = () => {
+      window.focus();
+      note.close();
+    };
+  } catch {
+    // A browser that refuses the notification keeps the tab count and the chime.
+  }
+}
+
+/** @param {string} text */
+function replySummary(text) {
+  const plain = String(text || "")
+    .replace(/[`*_#>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length > 140 ? plain.slice(0, 139) + "…" : plain;
+}
+
+/** @type {ReturnType<typeof setTimeout> | 0} */
+let agentQuietTimer = 0;
+/** @param {boolean} wasListening */
+function noteAgentPresenceForNotifications(wasListening) {
+  if (agentPresence !== "waiting") {
+    clearTimeout(agentQuietTimer);
+    agentQuietTimer = 0;
+    return;
+  }
+  if (!wasListening || agentQuietTimer) return;
+  agentQuietTimer = setTimeout(() => {
+    agentQuietTimer = 0;
+    if (agentPresence === "waiting") {
+      notify(agentShortName + " stopped listening. Your next message waits until it polls again.");
+    }
+  }, AGENT_QUIET_NOTIFY_MS);
+}
+
 events.set("reload", () => {
   resetFrame().then((reloaded) => {
     if (reloaded) refreshWhiteboardSource();
   });
+  notify("The page was updated.");
 });
 events.set("chrome-reload", (data) => reloadAfterServerRestart(String(data.reason || "")));
 // The replacement server serves a different artifact's review. This page keeps working against
@@ -7039,6 +7241,7 @@ events.set("agent-reply", (data) => {
   };
   if (addChat(entry, true, { enter: true })) displayedChat.push(entry);
   noteAgentReply(entry.text);
+  notify(agentShortName + " replied: " + replySummary(entry.text));
 });
 events.set("chat-sync", (data) => {
   rememberChatAckIds(data.ack_ids);
