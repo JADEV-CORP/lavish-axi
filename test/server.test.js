@@ -1174,6 +1174,7 @@ test("chrome shows a waiting banner when no agent has attached", async () => {
 
   assert.match(html, /id="presenceBanner"/);
   assert.match(html, /Your agent is not listening/);
+  assert.match(html, /<button class="handoff-takeover" id="copyNudge" type="button">Copy nudge<\/button>/);
   assert.match(js, /presenceBanner\.hidden = ended \|\| agentPresence !== "waiting"/);
   assert.match(css, /\.presence-banner\{/);
 });
@@ -5389,6 +5390,53 @@ test("event WebSocket agent-presence returns to waiting when a poll times out wi
       assert.equal(await presence.next(), "waiting");
     } finally {
       await presence.close();
+    }
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a poll whose round runs out says the agent is between rounds; a new poll or a disconnect does not", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const open = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    });
+    const { key } = await open.json();
+    const stream = await startEventStream(base, key, "agent-presence");
+    // The state and the round flag; other presence fields (mode, agent) have their own tests.
+    const next = async () => {
+      const data = await stream.next();
+      return { state: data.state, between_rounds: data.between_rounds === true };
+    };
+    try {
+      assert.deepEqual(await next(), { state: "waiting", between_rounds: false });
+      const poll = await fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=1`);
+      assert.deepEqual(await poll.json(), { status: "waiting" });
+      assert.deepEqual(await next(), { state: "listening", between_rounds: false });
+      assert.deepEqual(await next(), { state: "waiting", between_rounds: true });
+
+      const abort = new AbortController();
+      const nextPoll = fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}`, { signal: abort.signal }).catch(
+        () => null,
+      );
+      assert.deepEqual(await next(), { state: "listening", between_rounds: false }, "the agent's next poll clears it");
+      abort.abort();
+      await nextPoll;
+      assert.deepEqual(
+        await next(),
+        { state: "waiting", between_rounds: false },
+        "a poll that just went away is not between rounds",
+      );
+    } finally {
+      await stream.close();
     }
   } finally {
     await server.close();

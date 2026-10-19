@@ -2441,7 +2441,7 @@ test("waiting next step reassures agents that re-running poll loses nothing", ()
   });
 
   assert.match(output.next_step, /lavish-axi poll \/tmp\/report\.html/);
-  assert.match(output.next_step, /without --timeout-ms/);
+  assert.match(output.next_step, /again now, the same way, to keep listening/);
   assert.match(output.next_step, /feedback remains queued until delivery/);
 });
 

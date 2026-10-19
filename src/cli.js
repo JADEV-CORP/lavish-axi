@@ -92,6 +92,7 @@ export const POLL_WAKE_PATH_RULES = Object.freeze([
   "Never use `nohup`, shell `&`, `disown`, redirected fire-and-forget processes, or a detached terminal without an explicit verified callback merely to keep polling alive.",
   "If the harness has no completion-aware background facility, use the foreground poll or first wire a verified wake callback into the surrounding supervisor.",
   "Do not tell the user the artifact is being monitored until that wake path is live.",
+  "Each poll returns on its own after 8 minutes with status waiting when nothing arrived, under the usual 10-minute limit on one tool command; run the same poll again straight away to keep listening. Give the command a time limit of at least 9 minutes so the tool does not cut it off first.",
   "If the poll gets killed or times out before feedback arrives, re-run it - feedback remains queued until delivery. Poll delivery consumes the response, so read it completely.",
   "If it returns browser_disconnected, the review window stayed disconnected past its reconnect grace period but the session remains resumable; ask the user whether to reopen or end it, and do neither uninvited.",
 ]);
@@ -113,6 +114,16 @@ const AGENT_REPLY_JSON_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ agent
 const AGENT_REPLY_INPUT_LIMIT_BYTES = AGENT_REPLY_JSON_LIMIT_BYTES - AGENT_REPLY_JSON_ENVELOPE_BYTES;
 const AGENT_REPLY_LIMIT_LABEL = "2 MB JSON request limit";
 const POLL_STATE_HEADER = "lavish-poll-state";
+// A poll returns on its own after this long with status "waiting" (#3782), under the usual 10-minute
+// limit agent tools put on one command, so a tool never kills it and the agent simply polls again.
+// LAVISH_AXI_POLL_ROUND_MS overrides it; 0 waits indefinitely, as polls did before.
+export const POLL_ROUND_MS = 8 * 60_000;
+export function pollRoundMs(env = process.env) {
+  const raw = env.LAVISH_AXI_POLL_ROUND_MS;
+  if (raw === undefined || raw === "") return POLL_ROUND_MS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : POLL_ROUND_MS;
+}
 const CODEX_POLL_WAKE_PATH_GUIDANCE =
   "Codex detected: completed background tasks may not resume Codex automatically, so keep the poll attached to the active turn.";
 // Inlined at build time from package.json; falls back to reading package.json so source-run tests work.
@@ -451,7 +462,9 @@ async function pollCommand(args) {
   const baseUrl = await ensureServer();
   const timeoutMs = flagValue(args, "--timeout-ms");
   const query = new URLSearchParams({ file: absolute });
+  const roundMs = pollRoundMs();
   if (timeoutMs) query.set("timeoutMs", timeoutMs);
+  else if (roundMs > 0) query.set("timeoutMs", String(roundMs));
   if (owner) query.set("owner", owner);
   // Lets the editor name the agent ("Claude Code", "Codex") instead of a generic "Agent".
   const invokingAgent = detectInvokingAgent(process.env);
@@ -636,7 +649,7 @@ export function createPollOutput({ file, response, agent = "generic" }) {
   }
   return {
     session: { file, status: response.status || "waiting" },
-    next_step: `No user feedback arrived before the optional timeout. Run \`lavish-axi poll ${file}\` without --timeout-ms to wait indefinitely - feedback remains queued until delivery, so re-running the poll is safe while waiting. Poll delivery consumes the response, so read it completely.`,
+    next_step: `No feedback arrived during this poll round. Run \`lavish-axi poll ${file}\` again now, the same way, to keep listening: each poll returns on its own after a few minutes so a tool's time limit never cuts it off, and feedback remains queued until delivery. Poll delivery consumes the response, so read it completely.`,
   };
 }
 

@@ -1351,7 +1351,7 @@ function receiptStepHtml(label, at) {
 // that will take the note within milliseconds, and `working` or an external listener is an agent
 // whose next poll will take it.
 function receiptNoteText() {
-  if (agentPresence === "waiting") return "No agent is listening";
+  if (agentPresence === "waiting") return "Waiting for the agent to poll";
   if (agentPresence === "listening") return "Delivering";
   return "Agent is busy; delivered on its next poll";
 }
@@ -7292,6 +7292,17 @@ updateButton.onclick = () => toggleMenu(updateButton, updatePopover);
 setForkUpdate(sessionData.forkUpdate);
 events.set("fork-update", (data) => setForkUpdate(data.update));
 
+// The nudge (#3782): one line to paste into the agent when it stopped polling, naming this page.
+const copyNudgeButton = /** @type {HTMLButtonElement} */ (document.getElementById("copyNudge"));
+copyNudgeButton.onclick = async () => {
+  const nudge = 'Feedback is waiting in Lavish. Run: lavish-axi poll "' + filePath + '"';
+  if (!(await copyText(nudge))) return;
+  copyNudgeButton.textContent = "Copied";
+  setTimeout(() => {
+    copyNudgeButton.textContent = "Copy nudge";
+  }, 1500);
+};
+
 events.set("reload", () => {
   resetFrame().then((reloaded) => {
     if (reloaded) refreshWhiteboardSource();
@@ -7317,8 +7328,22 @@ events.set("chat-sync", (data) => {
   rememberChatAckIds(data.ack_ids);
   syncChat(data.chat || [], data.chat_revision);
 });
+// Between two poll rounds (#3782) the agent is about to poll again, so the editor keeps showing it
+// listening for a moment; if it does not come back in time, it is shown as gone, as before.
+const BETWEEN_ROUNDS_GRACE_MS = 60_000;
+/** @type {ReturnType<typeof setTimeout> | 0} */
+let betweenRoundsTimer = 0;
 events.set("agent-presence", (data) => {
   setAgentIdentity(data.agent);
+  clearTimeout(betweenRoundsTimer);
+  betweenRoundsTimer = 0;
+  if (data.between_rounds === true && agentPresence !== "waiting") {
+    betweenRoundsTimer = setTimeout(() => {
+      betweenRoundsTimer = 0;
+      setAgentPresence("waiting");
+    }, BETWEEN_ROUNDS_GRACE_MS);
+    return;
+  }
   setAgentPresence(data.mode === "external-listener" ? "external" : data.state);
 });
 events.set("layout-warnings", (data) => setLayoutWarnings(data.warnings || []));

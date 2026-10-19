@@ -8867,7 +8867,7 @@ test("a sent bubble's receipt follows the entry's seen, working, and done stamps
   const bubbles = chrome.element("chatLog").children;
   assert.equal(bubbles.length, 4);
   assert.deepEqual(receiptSteps(bubbles[0].innerHTML), [false, false, false]);
-  assert.equal(receiptNote(bubbles[0].innerHTML), "No agent is listening");
+  assert.equal(receiptNote(bubbles[0].innerHTML), "Waiting for the agent to poll");
   assert.deepEqual(receiptSteps(bubbles[1].innerHTML), [true, true, false]);
   assert.equal(receiptNote(bubbles[1].innerHTML), "");
   assert.deepEqual(receiptSteps(bubbles[2].innerHTML), [true, false, true]);
@@ -8905,7 +8905,7 @@ test("an unseen bubble's receipt names the live presence and re-renders when it 
   presence({ state: "listening", mode: "agent-listener" });
   assert.equal(receiptNote(bubbles[0].innerHTML), "Delivering");
   presence({ state: "waiting" });
-  assert.equal(receiptNote(bubbles[0].innerHTML), "No agent is listening");
+  assert.equal(receiptNote(bubbles[0].innerHTML), "Waiting for the agent to poll");
   assert.equal(bubbles[1].innerHTML, seenHtml, "a seen bubble does not depend on presence");
 });
 
@@ -9749,6 +9749,24 @@ test("a newer Jadev version shows Update in the top bar with its steps, until di
   assert.equal(chrome.element("updateWrap").hidden, true, "caught up, nothing to show");
   live({ update: { version: "<script>", current: "x" } });
   assert.equal(chrome.element("updateWrap").hidden, true, "only a plain version string is shown");
+});
+
+test("between two poll rounds the agent still shows as listening, unless it does not come back", async () => {
+  const chrome = await createChromeHarness();
+  const live = (data) => chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify(data) });
+  const banner = () => chrome.element("presenceBanner").hidden;
+
+  live({ state: "listening" });
+  assert.equal(banner(), true);
+  live({ state: "waiting", between_rounds: true });
+  assert.equal(banner(), true, "a round ending is not the agent leaving");
+  live({ state: "listening" });
+  chrome.runTimers(60_000);
+  assert.equal(banner(), true, "it polled again in time");
+
+  live({ state: "waiting", between_rounds: true });
+  chrome.runTimers(60_000);
+  assert.equal(banner(), false, "it did not come back: not listening, with the nudge");
 });
 
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {
