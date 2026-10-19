@@ -31,6 +31,8 @@ is how agents reach the fork.
 A running Lavish server from an older version shuts itself down the next time any session opens, because the CLI
 replaces a server whose `/health` reports a different version. Open review tabs reload onto the new server, or show a banner first when they hold an unsent draft.
 
+The running server checks for a newer fork version shortly after it starts and then every six hours (`src/fork-update.js`). It fetches the fork's `main` with `--depth=1 --filter=blob:none` into `update-check.git` under the state directory and reads only `package.json`, so git's own credential manager signs in and Lavish never handles a token; terminal and Git Credential Manager prompts are off, so a machine that is not signed in skips the check silently. A higher `-jadev.N` shows **Update** in every open editor's top bar, with the steps above and Copy and Dismiss (dismissed per version). `LAVISH_AXI_UPDATE_CHECK=0` turns the check off.
+
 `lavish-axi update` is disabled in the fork. The built-in updater installs the newest npm release, which semver ranks
 above every `-jadev.N` prerelease, so it would quietly replace the fork with upstream. It exits with
 `FORK_UPDATE_DISABLED` instead.

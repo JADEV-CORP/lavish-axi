@@ -18,7 +18,7 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -9720,6 +9720,35 @@ test("in a background tab, replies, page updates and a quiet agent notify; the c
   live("agent-reply", { text: "Again.", html: "<p>Again.</p>" });
   assert.equal(chrome.document.title, "page.html · Lavish", "turned off, nothing changes");
   assert.equal(chrome.notifications.length, 3);
+});
+
+test("a newer Jadev version shows Update in the top bar with its steps, until dismissed for that version", async () => {
+  const localStore = new Map();
+  const forkUpdate = { version: "0.1.83-jadev.13", current: "0.1.83-jadev.12" };
+  const chrome = await createChromeHarness({
+    sessionData: { ...defaultSessionData, forkUpdate },
+    theme: { localStore },
+  });
+  assert.equal(chrome.element("updateWrap").hidden, false);
+  assert.match(
+    chrome.element("updateCopy").textContent,
+    /0\.1\.83‑jadev\.13 is on the Jadev fork; you have 0\.1\.83‑jadev\.12/,
+  );
+  assert.match(chrome.element("updateSteps").textContent, /npm i -g \.\/lavish-axi-0\.1\.83-jadev\.13\.tgz$/);
+
+  chrome.element("updateDismiss").onclick();
+  assert.equal(chrome.element("updateWrap").hidden, true);
+  assert.equal(localStore.get("lavish-axi:update-dismissed"), "0.1.83-jadev.13");
+
+  const live = (data) => chrome.eventSource().listeners.get("fork-update")({ data: JSON.stringify(data) });
+  live({ update: forkUpdate });
+  assert.equal(chrome.element("updateWrap").hidden, true, "the dismissed version stays quiet");
+  live({ update: { version: "0.1.83-jadev.14", current: "0.1.83-jadev.12" } });
+  assert.equal(chrome.element("updateWrap").hidden, false, "a newer one shows again");
+  live({ update: null });
+  assert.equal(chrome.element("updateWrap").hidden, true, "caught up, nothing to show");
+  live({ update: { version: "<script>", current: "x" } });
+  assert.equal(chrome.element("updateWrap").hidden, true, "only a plain version string is shown");
 });
 
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {

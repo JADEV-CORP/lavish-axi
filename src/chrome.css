@@ -247,6 +247,65 @@ body {
   border: 0;
 }
 
+/* A newer Jadev version (#3788): a quiet button in the top bar, with the update steps one click
+   away. It only exists while there is something to install. */
+.update-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.update-wrap[hidden] {
+  display: none;
+}
+.update-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--accent-text);
+  font: 600 12px/1 var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.update-button:hover,
+.update-button[aria-expanded="true"] {
+  background: var(--bg-elevated);
+}
+.update-popover {
+  right: 0;
+  top: 42px;
+  width: min(360px, calc(100vw - 24px));
+  padding: 14px;
+}
+.update-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--w-semi);
+  color: var(--fg);
+}
+.update-copy {
+  margin: 4px 0 10px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  color: var(--fg-faint);
+}
+.update-steps {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px/1.5 var(--font-mono);
+}
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 /* Passive layout-warning inbox. The button only exists while there is unresolved work, so it
    must never reserve bar space when the count is zero. */
 .warnings-wrap {

@@ -145,6 +145,10 @@ const composerAnnotateButton = /** @type {HTMLButtonElement} */ (document.getEle
 const moreWrap = /** @type {HTMLDivElement} */ (document.getElementById("moreWrap"));
 const moreButton = /** @type {HTMLButtonElement} */ (document.getElementById("moreButton"));
 const moreMenu = /** @type {HTMLDivElement} */ (document.getElementById("moreMenu"));
+// The top bar's Update notice (#3788).
+const updateWrap = /** @type {HTMLDivElement} */ (document.getElementById("updateWrap"));
+const updateButton = /** @type {HTMLButtonElement} */ (document.getElementById("updateButton"));
+const updatePopover = /** @type {HTMLDivElement} */ (document.getElementById("updatePopover"));
 const reloadArtifactButton = /** @type {HTMLButtonElement} */ (document.getElementById("reloadArtifact"));
 const copySnapshotButton = /** @type {HTMLButtonElement} */ (document.getElementById("copySnapshot"));
 const exportArtifactButton = /** @type {HTMLButtonElement} */ (document.getElementById("exportArtifact"));
@@ -1153,6 +1157,7 @@ function setMenuOpen(button, menu, open) {
 function closeMenus() {
   setMenuOpen(moreButton, moreMenu, false);
   setMenuOpen(sendMoreButton, sendMenu, false);
+  setMenuOpen(updateButton, updatePopover, false);
 }
 
 function toggleMenu(button, menu) {
@@ -6000,6 +6005,7 @@ document.addEventListener("mousedown", (event) => {
   const target = /** @type {Node} */ (event.target);
   if (!moreMenu.hidden && !moreWrap.contains(target)) setMenuOpen(moreButton, moreMenu, false);
   if (!sendMenu.hidden && !sendSplit.contains(target)) setMenuOpen(sendMoreButton, sendMenu, false);
+  if (!updatePopover.hidden && !updateWrap.contains(target)) setMenuOpen(updateButton, updatePopover, false);
   if (warningsDrawerOpen && !warningsWrap.contains(target)) closeWarningsDrawer();
   if (revisionsDrawerOpen && !revisionsWrap.contains(target)) closeRevisionsDrawer();
 });
@@ -7221,6 +7227,70 @@ function noteAgentPresenceForNotifications(wasListening) {
     }
   }, AGENT_QUIET_NOTIFY_MS);
 }
+
+// ---- A newer Jadev version (#3788). The server checks the fork's main branch every few hours and
+// says so here; the top bar shows Update until the reviewer installs it or dismisses that version. ----
+const UPDATE_DISMISSED_KEY = "lavish-axi:update-dismissed";
+const updateCopy = /** @type {HTMLParagraphElement} */ (document.getElementById("updateCopy"));
+const updateSteps = /** @type {HTMLPreElement} */ (document.getElementById("updateSteps"));
+/** @type {{ version: string, current: string } | null} */
+let forkUpdate = null;
+
+function dismissedUpdateVersion() {
+  try {
+    return localStorage.getItem(UPDATE_DISMISSED_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+/** @param {unknown} update */
+function setForkUpdate(update) {
+  const value = /** @type {any} */ (update);
+  const valid =
+    value &&
+    typeof value.version === "string" &&
+    typeof value.current === "string" &&
+    /^[\w.-]{1,40}$/.test(value.version);
+  forkUpdate = valid ? { version: value.version, current: value.current } : null;
+  const show = Boolean(forkUpdate) && forkUpdate?.version !== dismissedUpdateVersion();
+  updateWrap.hidden = !show;
+  if (!show) setMenuOpen(updateButton, updatePopover, false);
+  if (!forkUpdate) return;
+  updateButton.title = "Lavish " + forkUpdate.version + " is available";
+  // Non-breaking hyphens keep each version on one line.
+  const unbroken = (/** @type {string} */ version) => version.replaceAll("-", "‑");
+  updateCopy.textContent =
+    "Version " +
+    unbroken(forkUpdate.version) +
+    " is on the Jadev fork; you have " +
+    unbroken(forkUpdate.current) +
+    ". In your lavish-axi checkout:";
+  // The fork's install steps (docs/jadev-fork.md). The running server hands over to the new one
+  // the next time a session opens, and open tabs reload onto it.
+  updateSteps.textContent = [
+    "git pull",
+    "pnpm install",
+    "pnpm run build",
+    "npm pack",
+    "npm i -g ./lavish-axi-" + forkUpdate.version + ".tgz",
+  ].join("\n");
+}
+
+updateButton.onclick = () => toggleMenu(updateButton, updatePopover);
+/** @type {HTMLButtonElement} */ (document.getElementById("updateCopySteps")).onclick = () =>
+  void copyText(updateSteps.textContent || "");
+/** @type {HTMLButtonElement} */ (document.getElementById("updateDismiss")).onclick = () => {
+  try {
+    if (forkUpdate) localStorage.setItem(UPDATE_DISMISSED_KEY, forkUpdate.version);
+  } catch {
+    // Storage refused: it hides for this page only.
+  }
+  updateWrap.hidden = true;
+  setMenuOpen(updateButton, updatePopover, false);
+};
+setForkUpdate(sessionData.forkUpdate);
+events.set("fork-update", (data) => setForkUpdate(data.update));
 
 events.set("reload", () => {
   resetFrame().then((reloaded) => {

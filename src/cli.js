@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { AxiError, installSessionStartHooks, RESERVED_COMMANDS, runAxiCli } from "axi-sdk-js";
 
 import { createDesignOutput, DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "./design-reference.js";
+import { defaultForkUpdateChecker } from "./fork-update.js";
 import { PAGE_TEMPLATE } from "./page-template.js";
 import {
   buildSelfContainedHtml,
@@ -1698,12 +1699,14 @@ function deepEqual(a, b) {
 async function serverCommand(args) {
   const port = Number(flagValue(args, "--port") || defaultPort());
   const debug = args.includes("--verbose") || process.env.LAVISH_AXI_DEBUG === "1";
+  const state = stateFile();
   const server = await serve({
     port,
-    stateFile: stateFile(),
+    stateFile: state,
     version: VERSION,
     debug,
     extraListenHosts: flagValues(args, "--also-listen"),
+    forkUpdates: defaultForkUpdateChecker({ currentVersion: VERSION, stateDir: path.dirname(state) }),
   });
   await server.done;
   return "";
