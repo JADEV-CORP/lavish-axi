@@ -42,6 +42,12 @@ function createElement(tag) {
     hasAttribute(name) {
       return attributes.has(name);
     },
+    after(node) {
+      const parent = element.parentElement;
+      if (!parent) return;
+      node.parentElement = parent;
+      parent.children.splice(parent.children.indexOf(element) + 1, 0, node);
+    },
     contains(other) {
       for (let current = other; current; current = current.parentElement) if (current === element) return true;
       return false;
@@ -119,6 +125,9 @@ function bootSdk({
   revisionsScript = null,
   revisionMarkElements = [],
   query = () => null,
+  // What getComputedStyle answers, per element, for tests that read the page's colours.
+  /** @type {(el: any, page: { documentElement: any, body: any }) => Record<string, string>} */
+  computedStyle = (/** @type {any} */ _el, /** @type {any} */ _page) => /** @type {Record<string, string>} */ ({}),
 } = {}) {
   const posted = [];
   const documentListeners = [];
@@ -160,7 +169,7 @@ function bootSdk({
       }
       static revokeObjectURL() {}
     },
-    getComputedStyle: () => ({}),
+    getComputedStyle: (/** @type {any} */ el) => computedStyle(el, { documentElement, body }),
     setTimeout: scheduleTimer,
     clearTimeout: cancelTimer,
     requestAnimationFrame: (fn) => (runAnimationFrames ? scheduleTimer(fn, 0) : 0),
@@ -1011,6 +1020,49 @@ test("a DaisyUI page gets its root scrollbar-color reset, so the editor's scroll
 
 test("a page without DaisyUI keeps its own scrollbar-color", () => {
   assert.equal(scrollbarReset(bootSdk()), undefined);
+});
+
+function scrollbarStyles(sdk) {
+  return sdk.documentElement.children[0].children.filter((node) =>
+    String(node.getAttribute?.("data-lavish-ui") || "").startsWith("scrollbar"),
+  );
+}
+
+function bootWithPageBackground(html, body) {
+  const page = { head: null };
+  const sdk = bootSdk({
+    runAnimationFrames: true,
+    query: (selector) =>
+      selector === 'style[data-lavish-ui="scrollbar"]'
+        ? page.head?.children.find((node) => node.getAttribute?.("data-lavish-ui") === "scrollbar")
+        : null,
+    computedStyle: (el, { documentElement, body: pageBody }) =>
+      el === documentElement ? { backgroundColor: html } : el === pageBody ? { backgroundColor: body } : {},
+  });
+  page.head = sdk.documentElement.children[0];
+  sdk.runTimers();
+  return sdk;
+}
+
+test("the page's own scrollbar track takes the page's background, right after the editor's scrollbar", () => {
+  const sdk = bootWithPageBackground("rgba(0, 0, 0, 0)", "rgb(20, 16, 22)");
+  const styles = scrollbarStyles(sdk);
+  assert.deepEqual(
+    styles.map((node) => node.getAttribute("data-lavish-ui")),
+    ["scrollbar", "scrollbar-track"],
+    "after the transparent track it overrides, before anything the page styles itself",
+  );
+  assert.equal(
+    styles[1].textContent,
+    ":where(html,body)::-webkit-scrollbar-track,:where(html,body)::-webkit-scrollbar-corner{background-color:rgb(20, 16, 22)}",
+  );
+});
+
+test("a page without a background keeps the transparent track, and only a plain colour is written", () => {
+  assert.equal(scrollbarStyles(bootWithPageBackground("rgba(0, 0, 0, 0)", "transparent")).length, 1);
+  assert.equal(scrollbarStyles(bootWithPageBackground("red}body{display:none", "")).length, 1);
+  const html = scrollbarStyles(bootWithPageBackground("oklch(0.145 0.008 326)", "rgb(1, 2, 3)"));
+  assert.match(html[1].textContent, /background-color:oklch\(0\.145 0\.008 326\)\}$/, "html's own background wins");
 });
 
 test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {

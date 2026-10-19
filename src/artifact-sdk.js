@@ -1101,10 +1101,72 @@ export function createArtifactSdk(
       "@supports (-moz-appearance:none){:root:root{scrollbar-color:oklch(0.6 0.02 325 / 55%) transparent}}";
     (document.head || document.documentElement).appendChild(style);
   }
+  // The page's own scrollbar track (#3777). Inside the editor's frame, Chrome draws the page
+  // scrollbar from body's style and a transparent track shows the frame's white backdrop, so a dark
+  // page got a white strip. The html/body track takes the page's own background instead, right
+  // after the rules above (so it beats their transparent track) and still at zero specificity (so
+  // a page's own scrollbar wins). It follows theme and class changes; a page with no background
+  // keeps the transparent track, which is the white it already is.
+  let pageTrackStyle = null;
+  let pageTrackQueued = false;
+  // A computed background, or "" when it is fully transparent.
+  function opaqueColor(color) {
+    return color && color !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(color) && !/\/\s*0\)$/.test(color)
+      ? color
+      : "";
+  }
+  function pageBackground() {
+    const color =
+      opaqueColor(getComputedStyle(document.documentElement).backgroundColor) ||
+      (document.body ? opaqueColor(getComputedStyle(document.body).backgroundColor) : "");
+    // Only a plain colour function reaches the stylesheet.
+    return /^[a-z-]+\([0-9a-z.,%\s/+-]+\)$/i.test(color) ? color : "";
+  }
+  function paintPageScrollbarTrack() {
+    pageTrackQueued = false;
+    const color = pageBackground();
+    if (!pageTrackStyle) {
+      if (!color) return;
+      const base = document.querySelector('style[data-lavish-ui="scrollbar"]');
+      if (!base || typeof base.after !== "function") return;
+      pageTrackStyle = document.createElement("style");
+      pageTrackStyle.setAttribute("data-lavish-ui", "scrollbar-track");
+      base.after(pageTrackStyle);
+    }
+    pageTrackStyle.textContent = color
+      ? ":where(html,body)::-webkit-scrollbar-track,:where(html,body)::-webkit-scrollbar-corner{background-color:" +
+        color +
+        "}"
+      : "";
+  }
+  function queuePageScrollbarTrack() {
+    if (pageTrackQueued) return;
+    pageTrackQueued = true;
+    (window.requestAnimationFrame || window.setTimeout)(() => paintPageScrollbarTrack());
+  }
+  function watchPageScrollbarTrack() {
+    queuePageScrollbarTrack();
+    window.addEventListener("load", queuePageScrollbarTrack, { once: true });
+    if (typeof MutationObserver === "function") {
+      const observer = new MutationObserver(queuePageScrollbarTrack);
+      for (const el of [document.documentElement, document.body]) {
+        if (el) observer.observe(el, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
+      }
+    }
+    window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", queuePageScrollbarTrack);
+    document.addEventListener(
+      "transitionend",
+      (event) => {
+        if (event.propertyName === "background-color") queuePageScrollbarTrack();
+      },
+      true,
+    );
+  }
   // Cosmetic only: a page that refuses the style must never stop the SDK from starting.
   try {
     installArtifactScrollbar();
     resetDaisyUiScrollbar();
+    watchPageScrollbarTrack();
   } catch {
     // The browser's own scrollbar stays.
   }
@@ -2765,6 +2827,8 @@ export function createArtifactSdk(
       // scheme is its own, so it takes the one color for the editor's current side.
       applyPageAccent(light && dark ? (chromeTheme === "dark" ? dark : light) : "");
       applyAutoTheme(msg.colors, color);
+      // A lavish-auto page changes background with the editor's mode: repaint its scrollbar track.
+      queuePageScrollbarTrack();
     }
     if (msg.type === "lavish:queuedAnchors") {
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);
@@ -2946,9 +3010,99 @@ export function createArtifactSdk(
     const clone = /** @type {SVGSVGElement} */ (image.cloneNode(true));
     const rect = image.getBoundingClientRect();
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    if (!clone.getAttribute("width")) clone.setAttribute("width", String(Math.round(rect.width)));
-    if (!clone.getAttribute("height")) clone.setAttribute("height", String(Math.round(rect.height)));
+    for (const side of ["width", "height"]) {
+      const value = clone.getAttribute(side) || "";
+      if (!value || value.endsWith("%")) clone.setAttribute(side, String(Math.round(rect[side])));
+    }
+    try {
+      bakeSvgStyles(image, clone);
+      paintSvgBackdrop(image, clone, rect);
+    } catch {
+      // A diagram that cannot be read keeps the plain copy.
+    }
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+  }
+
+  // A diagram in the viewer is an <img> of a copy, which has none of the page's CSS: colours from
+  // classes, currentColor and theme variables fell back to black, so a dark page's diagram showed
+  // as black boxes with no labels (#3776). Each element's computed paint and type are written onto
+  // the copy instead. Inherited properties are written only where they differ from the parent's,
+  // the others only where they differ from their default, to keep large diagrams small.
+  const SVG_INHERITED = [
+    "color",
+    "fill",
+    "fill-opacity",
+    "fill-rule",
+    "stroke",
+    "stroke-width",
+    "stroke-opacity",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "paint-order",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "letter-spacing",
+    "text-anchor",
+    "dominant-baseline",
+    "visibility",
+  ];
+  const SVG_OWN_DEFAULTS = {
+    opacity: "1",
+    "stop-color": "rgb(0, 0, 0)",
+    "stop-opacity": "1",
+    filter: "none",
+    mask: "none",
+    "clip-path": "none",
+  };
+  // A computed url() comes back absolute (the page's address plus #id); inside the copy it must
+  // point at the copy's own #id.
+  const localSvgUrl = (value) => String(value).replace(/url\(\s*["']?[^"')]*?(#[^"')]+)["']?\s*\)/g, "url($1)");
+  function bakeSvgStyles(image, clone) {
+    const originals = [image, ...image.querySelectorAll("*")];
+    const copies = [clone, ...clone.querySelectorAll("*")];
+    if (originals.length !== copies.length) return;
+    const computed = new Map();
+    originals.forEach((original, index) => {
+      const copy = copies[index];
+      if (!copy.style) return;
+      const style = getComputedStyle(original);
+      computed.set(original, style);
+      const parent = index === 0 ? null : computed.get(original.parentElement);
+      for (const name of SVG_INHERITED) {
+        const value = style.getPropertyValue(name);
+        if (value && (!parent || parent.getPropertyValue(name) !== value))
+          copy.style.setProperty(name, localSvgUrl(value));
+      }
+      for (const [name, initial] of Object.entries(SVG_OWN_DEFAULTS)) {
+        const value = style.getPropertyValue(name);
+        if (value && value !== initial) copy.style.setProperty(name, localSvgUrl(value));
+      }
+      if (style.getPropertyValue("display") === "none") copy.style.setProperty("display", "none");
+    });
+  }
+
+  // The background the diagram sits on in the page, behind the copy, so its contrast in the
+  // viewer is the contrast the author chose rather than whatever the viewer's backdrop is.
+  function paintSvgBackdrop(image, clone, rect) {
+    let color = "";
+    for (let node = image.parentElement; node && !color; node = node.parentElement) {
+      color = opaqueColor(getComputedStyle(node).backgroundColor);
+    }
+    const box = image.viewBox?.baseVal;
+    const backdrop = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    const [x, y, width, height] =
+      box && box.width > 0 && box.height > 0 ? [box.x, box.y, box.width, box.height] : [0, 0, rect.width, rect.height];
+    for (const [name, value] of Object.entries({ x, y, width, height })) backdrop.setAttribute(name, String(value));
+    backdrop.setAttribute("fill", color || "rgb(255, 255, 255)");
+    clone.insertBefore(backdrop, clone.firstChild);
   }
 
   function zoomImageAlt(image) {
