@@ -30,7 +30,7 @@ const initialChatAckIds = Array.isArray(sessionData.initialChatAckIds) ? session
 const initialChatRevision = parseChatRevision(sessionData.initialChatRevision) || 0;
 const MODE_TOGGLE_HOTKEY_KEY = String(sessionData.modeToggleHotkeyKey || "").toLowerCase();
 const attachmentMaxBytes = Number(sessionData.attachmentMaxBytes) || 0;
-const attachmentMaxCount = Number(sessionData.attachmentMaxCount) || 4;
+const attachmentMaxCount = Number(sessionData.attachmentMaxCount) || 20;
 // Threaded from the server's single accepted-image list, which also drives the
 // file picker's accept attribute, so the two can never disagree. An unwired
 // list falls back to the same defaults as the SDK's acceptedImageTypes - an
@@ -6955,6 +6955,9 @@ document.addEventListener(
   "keydown",
   (event) => {
     if (!isModeToggleHotkeyEvent(event)) return;
+    // In the rich composer the same keys are italic (#3784); the mode stays a click away.
+    const target = /** @type {Element | null} */ (event.target);
+    if (typeof target?.closest === "function" && target.closest(".composer-prose")) return;
     event.preventDefault();
     toggleAnnotationMode();
   },

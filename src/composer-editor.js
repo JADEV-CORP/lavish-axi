@@ -16,6 +16,21 @@ import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 
 const QUIET = "lavish-quiet";
+const CODE_INDENT = "  ";
+// Block-level Markdown at the start of a line: a heading, a list item, a quote or a code fence.
+const MARKDOWN_BLOCK = /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|```)/m;
+
+// Shift+Tab in a code block removes up to one indent from the start of the cursor's line.
+function outdentCodeLine(editor) {
+  const { $from } = editor.state.selection;
+  const before = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const line = $from.parent.textBetween(lineStart, $from.parent.content.size, "\n", "\n");
+  const spaces = line.match(/^ {1,2}/)?.[0].length || 0;
+  if (!spaces) return;
+  const from = $from.start() + lineStart;
+  editor.view.dispatch(editor.state.tr.delete(from, from + spaces));
+}
 
 /** @typedef {{ id: string, url: string, name: string }} ComposerPicture */
 /** @typedef {{ number: number, label: string }} ComposerMark */
@@ -180,6 +195,24 @@ function mountComposerEditor(textarea) {
             // A new paragraph, not a line break, so `- `, `1. ` and `## ` work on the new line too.
             () => commands.splitBlock(),
           ]),
+        // Tab stays in the composer where it means something (#3784): in a list it nests the item,
+        // and an item that cannot nest (the first one) stays put rather than losing focus; in a code
+        // block it indents. Anywhere else it moves on to the next control, as in any text box.
+        Tab: ({ editor }) => {
+          if (editor.isActive("codeBlock")) return editor.commands.insertContent(CODE_INDENT);
+          if (!editor.isActive("listItem")) return false;
+          editor.commands.sinkListItem("listItem");
+          return true;
+        },
+        "Shift-Tab": ({ editor }) => {
+          if (editor.isActive("codeBlock")) {
+            outdentCodeLine(editor);
+            return true;
+          }
+          if (!editor.isActive("listItem")) return false;
+          editor.commands.liftListItem("listItem");
+          return true;
+        },
       };
     },
   });
@@ -214,8 +247,16 @@ function mountComposerEditor(textarea) {
       // adds it); the editor only steps aside when the clipboard has nothing else to paste.
       handlePaste: (_view, event) => {
         const data = event.clipboardData;
+        const text = String(data?.getData("text/plain") || "");
         const hasPicture = Array.from(data?.files || []).some((file) => String(file.type).startsWith("image/"));
-        return hasPicture && !String(data?.getData("text/plain") || "").trim();
+        if (hasPicture) return !text.trim();
+        // Markdown pasted as plain text (an agent's answer, a terminal, an editor) becomes
+        // formatting, the way typed Markdown does. A paste that carries HTML keeps the browser's
+        // rich paste, and text pasted into a code block stays text.
+        const plainOnly = !Array.from(data?.types || []).includes("text/html");
+        if (!plainOnly || !MARKDOWN_BLOCK.test(text) || editor.isActive("codeBlock")) return false;
+        editor.commands.insertContent(text, { contentType: "markdown" });
+        return true;
       },
     },
   });

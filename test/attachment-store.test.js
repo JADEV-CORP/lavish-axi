@@ -219,8 +219,8 @@ test("removeAttachment deletes a stored file and reports absence", async () => {
 test("resolveAttachmentConfig reads LAVISH_AXI_* limits with sane fallbacks", () => {
   const defaults = resolveAttachmentConfig({});
   assert.equal(defaults.maxBytes, 10 * 1024 * 1024);
-  assert.equal(defaults.maxPerPrompt, 4);
-  assert.equal(defaults.maxPromptBytes, 25 * 1024 * 1024);
+  assert.equal(defaults.maxPerPrompt, 20);
+  assert.equal(defaults.maxPromptBytes, 100 * 1024 * 1024);
   assert.equal(defaults.ttlMs, 7 * 24 * 60 * 60 * 1000);
   // Bounded default disk quota so the sweeper caps unreferenced growth out of the box.
   assert.equal(defaults.maxDiskBytes, 512 * 1024 * 1024);
@@ -255,11 +255,11 @@ test("a fractional limit that floors below 1 falls back instead of disabling the
   // `0.5` is > 0, so a bounds-check-then-floor order accepts it and then floors it
   // to 0: uploads are disabled server-side while the SDK still advertises its own
   // default, so the client and server disagree about the cap.
-  assert.equal(resolveAttachmentConfig({ LAVISH_AXI_MAX_ATTACHMENTS_PER_PROMPT: "0.5" }).maxPerPrompt, 4);
+  assert.equal(resolveAttachmentConfig({ LAVISH_AXI_MAX_ATTACHMENTS_PER_PROMPT: "0.5" }).maxPerPrompt, 20);
   assert.equal(resolveAttachmentConfig({ LAVISH_AXI_MAX_ATTACHMENT_BYTES: "0.9" }).maxBytes, 10 * 1024 * 1024);
   assert.equal(
     resolveAttachmentConfig({ LAVISH_AXI_MAX_PROMPT_ATTACHMENT_BYTES: "0.25" }).maxPromptBytes,
-    25 * 1024 * 1024,
+    100 * 1024 * 1024,
   );
   // A fractional value that still floors to >= 1 is honored, floored.
   assert.equal(resolveAttachmentConfig({ LAVISH_AXI_MAX_ATTACHMENTS_PER_PROMPT: "2.7" }).maxPerPrompt, 2);

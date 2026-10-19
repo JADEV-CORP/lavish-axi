@@ -23,8 +23,9 @@ const ID_RE = /^[0-9a-f]{64}\.(png|jpg|webp)$/;
 const MIME_BY_EXT = { png: "image/png", jpg: "image/jpeg", webp: "image/webp" };
 
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MiB per image
-export const DEFAULT_MAX_ATTACHMENTS_PER_PROMPT = 4;
-export const DEFAULT_MAX_PROMPT_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MiB per annotation
+// 20 pictures and 100 MiB per message, the owner's choice of October 19, 2026 (#3780).
+export const DEFAULT_MAX_ATTACHMENTS_PER_PROMPT = 20;
+export const DEFAULT_MAX_PROMPT_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MiB per message
 export const DEFAULT_ATTACHMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // A bounded default disk quota: without a cap the reference-aware sweeper only
 // enforces the TTL, so a same-origin confused-deputy artifact (see chrome-client's

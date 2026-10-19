@@ -9637,6 +9637,20 @@ test("your own message has a Copy action that copies what you wrote, and its lab
   assert.doesNotMatch(chrome.element("chatLog").children.at(-1).innerHTML, /msg-copy/, "nothing to copy, no Copy");
 });
 
+test("Ctrl+I is italic in the rich composer and switches Interact/Annotate everywhere else", async () => {
+  const chrome = await createChromeHarness();
+  const inComposer = { closest: (selector) => (selector === ".composer-prose" ? {} : null) };
+  const elsewhere = { closest: () => null };
+
+  const typed = chrome.dispatchDocumentKeydown({ key: "i", ctrlKey: true, target: inComposer });
+  assert.equal(typed.defaultPrevented, false, "the editor still receives it, for italic");
+  assert.equal(chrome.element("annotation")["aria-pressed"], "true", "and the mode stays");
+
+  const toggled = chrome.dispatchDocumentKeydown({ key: "i", ctrlKey: true, target: elsewhere });
+  assert.equal(toggled.defaultPrevented, true);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false", "outside the composer it switches to Interact");
+});
+
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {
   const chrome = await createChromeHarness({ fakeClock: true });
   const stored = { role: "agent", text: "First.", html: "<p>First.</p>", at: "2026-10-07T09:00:00.000Z" };
