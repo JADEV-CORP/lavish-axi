@@ -1798,6 +1798,21 @@ body {
 .handoff-takeover:hover {
   color: var(--fg);
 }
+.presence-banner {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+.presence-banner > span:first-child,
+#nudgeStatus {
+  flex-basis: 100%;
+}
+#nudgeStatus:empty {
+  display: none;
+}
+.handoff-takeover:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .outdated-actions {
   align-items: center;
   display: flex;

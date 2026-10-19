@@ -1,3 +1,5 @@
+<!-- Copyright (c) 2026 JADEV-CORP. All rights reserved. Proprietary and confidential. -->
+
 # Jadev fork
 
 This repository is Jadev's fork of [kunchenguid/lavish-axi](https://github.com/kunchenguid/lavish-axi). It carries the
@@ -28,8 +30,45 @@ npx -y lavish-axi --version
 Both version commands must print the jadev version. `npx -y lavish-axi` uses the global install when one exists, which
 is how agents reach the fork.
 
-A running Lavish server from an older version shuts itself down the next time any session opens, because the CLI
-replaces a server whose `/health` reports a different version. Open review tabs reload onto the new server, or show a banner first when they hold an unsent draft.
+A newer Jadev CLI replaces an older Jadev server when a session opens. An older Jadev CLI adopts a newer
+Jadev server instead of restarting it. Plain upstream versions remain a separate build channel, and a forced local
+rebuild still replaces the running server. Open review tabs reload onto the replacement, or show a banner first
+when they hold an unsent draft.
+
+## Direct agent nudges
+
+Create a T3 Connect webhook task bound to the review's owning thread. Its prompt should tell the agent to poll the
+session named by `{{body.file}}` and `{{body.key}}`, within the already approved scope, without taking over another
+listener. Save the returned webhook URL in a private local file, then run:
+
+```sh
+lavish-axi bind-agent report.html --webhook-file /private/path/t3-webhook.txt
+```
+
+Reload the review tab. After the existing no-listener delay, **Nudge agent** sends the session's absolute file path
+and key to T3 Connect. It sends no artifact content or feedback text. The URL stays in the local state directory's
+`agent-bindings` folder, outside session JSON, browser markup and exports. Files request owner-only permissions;
+on Windows they inherit the state directory's ACL. Protect that directory as you protect other agent credentials.
+
+The action reports relay acceptance, not that the agent has read the feedback. Concurrent clicks share one request,
+and every attempted delivery has a 15-second cooldown because a timed-out request may already have arrived.
+An active listener or a working agent needs no nudge. **Copy nudge** stays available for delivery failures and
+other harnesses. No automatic nudge runs. T3 Connect must be reachable, and the webhook stays bound to its original
+thread. Remove the binding with `lavish-axi bind-agent report.html --clear` and delete the T3 webhook when retiring
+that integration.
+
+## Upstream 0.1.90 adaptations
+
+This base includes custom Excalidraw libraries, platform-specific link modifiers, WebKit IME confirmation guards,
+artifact annotation defaults and configurable disconnect grace. `data-lavish-annotate="off"` on the root `html`
+opens a form in Interact unless the reviewer saved Interact as their starting preference or explicitly changed
+the mode in this review. With no saved preference, each fresh artifact load supplies its own default until a
+reviewer toggles it. The top bar, composer and rail all show that one mode.
+
+`LAVISH_AXI_DISCONNECT_GRACE_MS` changes the default 10-second reconnect grace. `0` or `off` disables disconnect
+release, while the fork's polling rounds still return on their own budget. Invalid values retain the default;
+large durations clamp to the timer maximum. Library files belong in the state directory's `excalidraw-libraries`
+folder, and `lavish-axi libraries` lists their references. Libraries never download automatically.
 
 The running server checks for a newer fork version shortly after it starts and then every six hours (`src/fork-update.js`). It fetches the fork's `main` with `--depth=1 --filter=blob:none` into `update-check.git` under the state directory and reads only `package.json`, so git's own credential manager signs in and Lavish never handles a token; terminal and Git Credential Manager prompts are off, so a machine that is not signed in skips the check silently. A higher `-jadev.N` shows **Update** in every open editor's top bar, with the steps above and Copy and Dismiss (dismissed per version). `LAVISH_AXI_UPDATE_CHECK=0` turns the check off.
 

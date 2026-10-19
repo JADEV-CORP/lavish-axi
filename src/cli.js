@@ -19,7 +19,8 @@ import { fileURLToPath } from "node:url";
 import { AxiError, installSessionStartHooks, RESERVED_COMMANDS, runAxiCli } from "axi-sdk-js";
 
 import { createDesignOutput, DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "./design-reference.js";
-import { defaultForkUpdateChecker } from "./fork-update.js";
+import { compareJadevVersions, defaultForkUpdateChecker } from "./fork-update.js";
+import { bindAgentNudge } from "./agent-nudge.js";
 import { PAGE_TEMPLATE } from "./page-template.js";
 import {
   buildSelfContainedHtml,
@@ -65,6 +66,7 @@ import { isHtmlPath } from "./artifact-path.js";
 import { canonicalFile, sessionKey, SessionStore } from "./session-store.js";
 import { generateSharePassword } from "./share-password.js";
 import { initDefaultTelemetry } from "./telemetry.js";
+import { excalidrawLibrariesDir, loadExcalidrawLibraries } from "./whiteboard-library-store.js";
 
 const SHARE_VALUE_FLAGS = ["--password", "--token", "--site", "--update-key"];
 const COMMANDS = new Set([
@@ -79,6 +81,8 @@ const COMMANDS = new Set([
   "setup",
   "export",
   "share",
+  "libraries",
+  "bind-agent",
 ]);
 // SDK-reserved built-ins (e.g. `update`) must reach runAxiCli untouched; otherwise
 // the bare-arg normalization below would rewrite them into the hidden `open` command.
@@ -251,6 +255,8 @@ export async function run(argv) {
         export: exportCommand,
         share: shareCommand,
         update: updateCommand,
+        libraries: librariesCommand,
+        "bind-agent": bindAgentCommand,
       },
       getCommandHelp: (command) => getCommandHelp(command, { agent }),
     });
@@ -426,6 +432,31 @@ async function openCommand(args) {
     selfPaintWarning,
     networkWarning: response.network_warning,
   });
+}
+
+async function bindAgentCommand(args) {
+  const file = firstPositionalArg(args, ["--webhook-file"]);
+  const webhookFile = flagValue(args, "--webhook-file");
+  const clear = args.includes("--clear");
+  if (!file || (clear ? Boolean(webhookFile) : !webhookFile)) {
+    throw new AxiError("Pass an HTML file and either --webhook-file <path> or --clear", "VALIDATION_ERROR");
+  }
+  await assertHtmlFile(file);
+  const absolute = await canonicalFile(file);
+  try {
+    await bindAgentNudge(
+      path.dirname(stateFile()),
+      sessionKey(absolute),
+      clear ? null : (await readFile(webhookFile, "utf8")).trim(),
+    );
+  } catch {
+    throw new AxiError("Could not bind the agent. Use a file containing a T3 Connect webhook URL.", "VALIDATION_ERROR");
+  }
+  return {
+    session: { file: absolute, key: sessionKey(absolute) },
+    agent_nudge: clear ? "disconnected" : "T3 Code",
+    next_step: "Reload the Lavish review tab to update its Nudge agent action.",
+  };
 }
 
 // A read failure here must not break the open - the server reports unreadable artifacts
@@ -1325,6 +1356,56 @@ export async function shutdownServerOnPort(
   return { server: { status: freed ? "stopped" : "stopping", port } };
 }
 
+const LIBRARY_ITEM_LIST_LIMIT = 50;
+
+async function librariesCommand(args) {
+  const dir = excalidrawLibrariesDir(path.dirname(stateFile()));
+  const { libraries, skipped } = await loadExcalidrawLibraries(dir);
+  return createLibrariesOutput({
+    dir: collapseHomeDirectory(dir, os.homedir()),
+    libraries,
+    skipped,
+    search: flagValue(args, "--search") || "",
+    library: flagValue(args, "--library") || "",
+  });
+}
+
+/**
+ * @param {{ dir: string, libraries: { id: string, items: { ref: string, name: string }[] }[], skipped: { file: string, reason: string }[], search?: string, library?: string }} options
+ */
+export function createLibrariesOutput({ dir, libraries, skipped, search = "", library = "" }) {
+  /** @type {Record<string, any>} */
+  const output = {
+    dir,
+    libraries: libraries.map((entry) => ({ id: entry.id, items: entry.items.length })),
+  };
+  if (skipped.length > 0) {
+    output.skipped = skipped.map((entry) => ({ file: path.basename(entry.file), reason: entry.reason }));
+  }
+  if (libraries.length === 0) {
+    output.help = [
+      `Copy Excalidraw library files (.excalidrawlib, for example from https://libraries.excalidraw.com) into ${dir}; every whiteboard's library panel then lists their items`,
+    ];
+    return output;
+  }
+  const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length > 0 || library) {
+    const matches = libraries
+      .filter((entry) => !library || entry.id === library.toLowerCase())
+      .flatMap((entry) => entry.items)
+      .filter((item) => terms.every((term) => item.ref.toLowerCase().includes(term)));
+    output.items = matches.slice(0, LIBRARY_ITEM_LIST_LIMIT).map((item) => ({ ref: item.ref }));
+    if (matches.length > LIBRARY_ITEM_LIST_LIMIT) output.more_items = matches.length - LIBRARY_ITEM_LIST_LIMIT;
+  }
+  output.help = [
+    output.more_items
+      ? "Narrow the list with `lavish-axi libraries --search <text>`"
+      : "Run `lavish-axi libraries --search <text>` or `--library <id>` to list item refs",
+    "To show an item as a node icon in a whiteboard flowchart, see `whiteboard_tooling.library_icons` in `lavish-axi design`",
+  ];
+  return output;
+}
+
 async function playbookCommand(args) {
   return createPlaybookOutput(args);
 }
@@ -1968,7 +2049,7 @@ async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
     existing.network_stale === true &&
     !forceRestart &&
     typeof existing.version === "string" &&
-    existing.version === VERSION;
+    !isServerOlderThanCli(VERSION, existing.version);
   let networkRestarted = replacedForNetwork;
   let raceRestarted = false;
   let deadline = Date.now() + 5000;
@@ -2043,7 +2124,30 @@ export function shouldRestartServer(currentVersion, healthBody, forceRestart = f
   if (forceRestart && healthBody.app === "lavish-axi") return true;
   if (healthBody.network_stale === true && healthBody.app === "lavish-axi") return true;
   if (typeof healthBody.version !== "string" || healthBody.version === "") return true;
-  return healthBody.version !== currentVersion;
+  return isServerOlderThanCli(currentVersion, healthBody.version);
+}
+
+// A running server newer than this CLI is adopted, never replaced: two installed versions on one
+// machine would otherwise restart each other's server in turn. Numeric, so 0.1.9 is older than
+// 0.1.10. A version that does not parse falls back to "different means replace".
+function isServerOlderThanCli(currentVersion, runningVersion) {
+  if (runningVersion === currentVersion) return false;
+  const jadevVersion = /^\d+\.\d+\.\d+-jadev\.\d+$/;
+  if (jadevVersion.test(currentVersion) && jadevVersion.test(runningVersion)) {
+    return compareJadevVersions(runningVersion, currentVersion) < 0;
+  }
+  const current = parseReleaseVersion(currentVersion);
+  const running = parseReleaseVersion(runningVersion);
+  if (!current || !running) return true;
+  for (let index = 0; index < 3; index += 1) {
+    if (running[index] !== current[index]) return running[index] < current[index];
+  }
+  return false;
+}
+
+function parseReleaseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version));
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
 }
 
 // Which branch of `shouldRestartServer` actually fired, because that is what the other open
@@ -2052,7 +2156,11 @@ export function shouldRestartServer(currentVersion, healthBody, forceRestart = f
 export function serverReplacementReason(currentVersion, healthBody, forceRestart = false) {
   if (!shouldRestartServer(currentVersion, healthBody, forceRestart)) return "";
   const runningVersion = healthBody.version;
-  if (typeof runningVersion !== "string" || runningVersion === "" || runningVersion !== currentVersion) {
+  if (
+    typeof runningVersion !== "string" ||
+    runningVersion === "" ||
+    isServerOlderThanCli(currentVersion, runningVersion)
+  ) {
     return "upgrade";
   }
   return forceRestart ? "local-build" : "";
@@ -2071,7 +2179,7 @@ export function shouldKillProcessOnPort(currentVersion, healthBody) {
   if (!healthBody || typeof healthBody !== "object") return false;
   if (typeof healthBody.version !== "string" || healthBody.version === "") return true;
   if (healthBody.app !== "lavish-axi") return false;
-  return healthBody.version !== currentVersion;
+  return isServerOlderThanCli(currentVersion, healthBody.version);
 }
 
 async function canControlServerOnPort(baseUrl, healthBody, processMatchesLavish) {
@@ -2596,7 +2704,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish-axi - Lavish Editor AXI\n\nUsage:\n  lavish-axi\n  lavish-axi <html-file> [--no-open] [--no-gate] [--reopen]\n  lavish-axi poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish-axi reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish-axi end <html-file>\n  lavish-axi export <html-file> [--out <path>]\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n  lavish-axi stop\n  lavish-axi playbook [playbook_id]\n  lavish-axi design\n  lavish-axi setup hooks\n  lavish-axi setup plugin\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish-axi reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish-axi - Lavish Editor AXI\n\nUsage:\n  lavish-axi\n  lavish-axi <html-file> [--no-open] [--no-gate] [--reopen]\n  lavish-axi poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish-axi reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish-axi end <html-file>\n  lavish-axi export <html-file> [--out <path>]\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n  lavish-axi stop\n  lavish-axi playbook [playbook_id]\n  lavish-axi design\n  lavish-axi libraries [--search <text>] [--library <id>]\n  lavish-axi setup hooks\n  lavish-axi setup plugin\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish-axi reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -2611,6 +2719,8 @@ function createCommandHelp({ agent = "generic" } = {}) {
     playbook: `Usage: lavish-axi playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: diagram, table, comparison, plan, code, input, explanation, slides.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish-axi playbook\n  lavish-axi playbook diagram\n  lavish-axi playbook input\n`,
     update: `Usage: lavish-axi update\n\nDisabled in the Jadev fork. ${FORK_UPDATE_REFUSAL} Update by rebuilding from jadev-corp/lavish-axi; see docs/jadev-fork.md there.\n`,
     design: `Usage: lavish-axi design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
+    "bind-agent": `Usage: lavish-axi bind-agent <html-file> (--webhook-file <path> | --clear)\n\nConnect Nudge agent to this session's T3 Code thread. First create a thread-bound T3 Connect webhook using schedule_task, save its URL in a private local file, and pass that file here. Only relay.t3.codes webhooks are accepted. Clicking Nudge agent sends the session file and key to T3 Connect. The URL stays in local agent-bindings, never in the artifact or browser. Reload the review tab after binding. Use --clear to disconnect.\n`,
+    libraries: `Usage: lavish-axi libraries [--search <text>] [--library <id>]\n\nList the Excalidraw libraries (.excalidrawlib files) the user copied into ~/.lavish-axi/excalidraw-libraries, or LAVISH_AXI_STATE_DIR/excalidraw-libraries when set. Their items appear in every whiteboard's library panel. --search lists item refs whose ref contains every search word; --library lists one library's item refs. Lavish only reads this directory and never downloads libraries.\n\nExamples:\n  lavish-axi libraries\n  lavish-axi libraries --search lambda\n  lavish-axi libraries --library aws-architecture-icons\n`,
     setup: `Usage: lavish-axi setup hooks\n       lavish-axi setup plugin\n\nhooks: install or repair agent SessionStart hooks for lavish-axi ambient context in Claude Code, Codex, OpenCode, and GitHub Copilot CLI. Restart your agent session afterward to receive the context. This is the primary integration - it carries live session state.\n\nplugin: register the installed lavish-axi package as an Agent Plugin (agent-plugins.org) in VS Code, Cursor, and GitHub Copilot CLI. The installed package directory is itself the plugin root, so nothing is downloaded and no marketplace is involved. Reload each client afterward. Codex users should use \`setup hooks\` instead.\n\nBoth actions are explicit opt-in, idempotent, and repair a stale path after a reinstall.\n`,
     server: `Usage: lavish-axi server [--port 4387] [--verbose] [--also-listen <host>...]\n\nRun the local Lavish Editor server. Pass --verbose (or set LAVISH_AXI_DEBUG=1) to log session and watcher events to stderr. Detached server output is appended to ~/.lavish-axi/server.log, or LAVISH_AXI_STATE_DIR/server.log when set, for startup and crash diagnostics.\n\nBy default Lavish binds to 127.0.0.1 and, when Tailscale is running, this machine's Tailscale IPv4. Any explicit LAVISH_AXI_HOST overrides automatic Tailscale binding; wildcard values such as 0.0.0.0 or :: are restricted to loopback. An explicit non-wildcard LAVISH_AXI_HOST sets the bind address, and the server also listens on 127.0.0.1 so every local CLI finds it; --also-listen adds further concrete addresses (the CLI passes it when it replaces a server, to keep every address the old one served). An address that cannot be bound is retried in the background and reported as network_warning. Binding beyond loopback exposes an unauthenticated server that can read and serve arbitrary local files to anything that can reach it, so only do so on a trusted network. With automatic binding enabled, a successfully bound Tailscale listener uses its MagicDNS name in generated session links; otherwise LAVISH_AXI_LINK_HOST can set the link hostname. See README's Allowed hosts section for Host allowlisting and LAVISH_AXI_ALLOWED_HOSTS. LAVISH_AXI_NO_OPEN=1 (or --no-open) suppresses the local browser launch.\n`,
   };

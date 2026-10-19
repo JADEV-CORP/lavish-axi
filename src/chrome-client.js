@@ -243,6 +243,8 @@ function storedStartsInInteract() {
   }
 }
 let annotation = !storedStartsInInteract();
+let annotationOverridden = storedStartsInInteract();
+let annotationDefaultReceived = false;
 let ended = false;
 let agentPresence = "waiting";
 const layoutGateEnabled = sessionData.layoutGateEnabled !== false;
@@ -4889,6 +4891,7 @@ async function replaceArtifactFrame({ recoveryRetry = false } = {}) {
   artifactLoadRevision = revision;
   artifactLoadToken = token;
   artifactSpokeToken = "";
+  annotationDefaultReceived = false;
   inlineWhiteboardChannels.clear();
   setHandoffSuperseded(false);
   startLayoutGateCycle();
@@ -4963,11 +4966,32 @@ function postToWhiteboard(index, placement, message) {
   else postToInlineWhiteboard(index, message);
 }
 
-async function fetchMermaidSources() {
+async function fetchMermaidSourcesData() {
   const response = await fetch("/api/" + key + "/mermaid-sources");
   if (!response.ok) throw new Error("could not read the artifact's Mermaid sources");
   const data = await response.json();
-  return Array.isArray(data.sources) ? data.sources : [];
+  return {
+    sources: Array.isArray(data.sources) ? data.sources : [],
+    librariesVersion: typeof data.libraries_version === "string" ? data.libraries_version : "",
+  };
+}
+
+async function fetchMermaidSources() {
+  return (await fetchMermaidSourcesData()).sources;
+}
+
+// Fetched per init so a frame converts with the libraries its source hash was
+// computed from; a failed fetch resolves null and the frame converts without
+// libraries.
+function fetchWhiteboardLibraries() {
+  return fetch("/api/whiteboard-libraries")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) =>
+      Array.isArray(data?.libraries)
+        ? { libraries: data.libraries, version: typeof data.version === "string" ? data.version : "" }
+        : null,
+    )
+    .catch(() => null);
 }
 
 async function authenticateWhiteboardChannel(token) {
@@ -4996,11 +5020,17 @@ function whiteboardRecord(index) {
 
 async function handleWhiteboardReady(index, mode, isCurrent) {
   try {
-    const sources = await fetchMermaidSources();
+    const librariesRequest = fetchWhiteboardLibraries();
+    const { sources, librariesVersion } = await fetchMermaidSourcesData();
     const source = sources.find((item) => item.index === index);
     if (!source) throw new Error("this diagram's Mermaid source was not found in the artifact file");
     const savedResponse = await fetch("/api/" + key + "/whiteboard/" + index);
     const saved = savedResponse.ok ? (await savedResponse.json()).whiteboard : null;
+    const librariesData = await librariesRequest;
+    // A library file that changed between the two requests leaves the frame
+    // with libraries that do not match this source hash: treat that like a
+    // failed fetch, so the conversion's autosave is held.
+    const librariesMatch = Boolean(librariesData) && (!librariesVersion || librariesData.version === librariesVersion);
     const record = whiteboardRecord(index);
     record.source = String(source.source || "");
     record.sourceHash = String(source.hash || "");
@@ -5013,6 +5043,8 @@ async function handleWhiteboardReady(index, mode, isCurrent) {
       source: record.source,
       sourceHash: record.sourceHash,
       saved,
+      libraries: librariesData ? librariesData.libraries : [],
+      librariesUnavailable: !librariesMatch,
       theme: whiteboardTheme(),
     });
     return true;
@@ -5613,6 +5645,13 @@ window.addEventListener("message", (event) => {
     return;
   }
   // The artifact spoke, so it rendered and ran its SDK - there is nothing fatal to probe for.
+  if (msg.type === "lavish:annotationMode" && typeof msg.enabled === "boolean" && !annotationDefaultReceived) {
+    annotationDefaultReceived = true;
+    if (!annotationOverridden && !ended && !terminalSubmission) annotation = msg.enabled;
+    renderPointerMode();
+    // Reconcile even if frame load replayed the old mode before this report arrived.
+    postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
+  }
   if (msg.type === "lavish:queuePrompt") {
     // The artifact's ack id only travels back to the artifact, so it can show its check. It never
     // reaches the queue, the tab's storage, or the server.
@@ -5788,6 +5827,7 @@ loadFrame();
 
 function toggleAnnotationMode() {
   if (ended || terminalSubmission) return;
+  annotationOverridden = true;
   annotation = !annotation;
   renderPointerMode();
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation });
@@ -5813,6 +5853,7 @@ function renderStartMode() {
 }
 /** @param {boolean} interact */
 function setStartsInInteract(interact) {
+  annotationOverridden = true;
   try {
     if (interact) localStorage.setItem(START_MODE_STORAGE_KEY, "interact");
     else localStorage.removeItem(START_MODE_STORAGE_KEY);
@@ -5931,7 +5972,7 @@ chatAttachments.addEventListener("click", (event) => {
   if (retry) chatAttachmentController.retry(String(retry.dataset.chatAttachmentRetry || ""));
 });
 chatInput.addEventListener("keydown", (event) => {
-  if (event.isComposing) return;
+  if (event.isComposing || event.keyCode === 229) return;
   // Ctrl+Q only, never Cmd+Q, which quits the browser on a Mac before the page can object.
   if (event.ctrlKey && !event.metaKey && !event.altKey && String(event.key || "").toLowerCase() === "q") {
     event.preventDefault();
@@ -7383,6 +7424,34 @@ events.set("fork-update", (data) => setForkUpdate(data.update));
 
 // The nudge (#3782): one line to paste into the agent when it stopped polling, naming this page.
 const copyNudgeButton = /** @type {HTMLButtonElement} */ (document.getElementById("copyNudge"));
+const nudgeAgentButton = /** @type {HTMLButtonElement} */ (document.getElementById("nudgeAgent"));
+const nudgeStatus = /** @type {HTMLElement} */ (document.getElementById("nudgeStatus"));
+let nudgePending = false;
+nudgeAgentButton.hidden = sessionData.agentNudgeAvailable !== true;
+nudgeAgentButton.onclick = async () => {
+  if (nudgePending || ended || terminalSubmission) return;
+  nudgePending = true;
+  nudgeAgentButton.disabled = true;
+  nudgeAgentButton.textContent = "Nudging...";
+  nudgeStatus.textContent = "";
+  try {
+    const response = await fetch("/api/" + key + "/nudge", { method: "POST", signal: AbortSignal.timeout(12_000) });
+    const result = await response.json();
+    if (!response.ok) throw new Error("Nudge failed");
+    if (result.status === "sent") nudgeStatus.textContent = "Nudge sent to T3 Code.";
+    else if (result.status === "recently-sent")
+      nudgeStatus.textContent = "A nudge was attempted recently. Wait a moment, or use Copy nudge.";
+    else if (result.status === "listening" || result.status === "working")
+      nudgeStatus.textContent = "Your agent is already listening or working.";
+    else throw new Error("Nudge unavailable");
+  } catch {
+    nudgeStatus.textContent = "Could not confirm delivery. Use Copy nudge to contact your agent.";
+  } finally {
+    nudgePending = false;
+    nudgeAgentButton.disabled = false;
+    nudgeAgentButton.textContent = "Nudge agent";
+  }
+};
 copyNudgeButton.onclick = async () => {
   const nudge = 'Feedback is waiting in Lavish. Run: lavish-axi poll "' + filePath + '"';
   if (!(await copyText(nudge))) return;

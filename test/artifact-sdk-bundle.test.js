@@ -128,6 +128,8 @@ function bootSdk({
   // What getComputedStyle answers, per element, for tests that read the page's colours.
   /** @type {(el: any, page: { documentElement: any, body: any }) => Record<string, string>} */
   computedStyle = (/** @type {any} */ _el, /** @type {any} */ _page) => /** @type {Record<string, string>} */ ({}),
+  htmlAnnotate = null,
+  platform = "Linux",
 } = {}) {
   const posted = [];
   const documentListeners = [];
@@ -145,13 +147,14 @@ function bootSdk({
   const documentElement = createElement("html");
   const head = createElement("head");
   const body = createElement("body");
+  if (htmlAnnotate !== null) documentElement.setAttribute("data-lavish-annotate", htmlAnnotate);
   appendTo(documentElement, head);
   appendTo(documentElement, body);
   for (const element of revisionMarkElements) appendTo(body, element);
 
   const sandbox = {
     parent: { postMessage: (message) => posted.push(message) },
-    navigator: { platform: "Linux" },
+    navigator: { platform },
     CSS: { escape: (value) => String(value) },
     Element: class Element {},
     MutationObserver: class MutationObserver {
@@ -350,6 +353,62 @@ function bootSdk({
   };
 }
 
+for (const { label, attributes, enabled } of [
+  { label: "default", attributes: {}, enabled: true },
+  { label: "html off", attributes: { htmlAnnotate: "off" }, enabled: false },
+  { label: "html on", attributes: { htmlAnnotate: "on" }, enabled: true },
+  { label: "unknown html value", attributes: { htmlAnnotate: "no" }, enabled: true },
+  { label: "empty html value", attributes: { htmlAnnotate: "" }, enabled: true },
+]) {
+  test(`annotation declaration honours ${label} and reports its initial mode`, () => {
+    const sdk = bootSdk(attributes);
+    const target = appendTo(sdk.body, cell("p", "Decision board"));
+    assert.equal(sdk.click(target).defaultPrevented, enabled);
+    assert.equal(sdk.cards().length, enabled ? 1 : 0);
+    const mode = sdk.posted.find((message) => message.type === "lavish:annotationMode");
+    assert.ok(mode, "the SDK reports the initial mode to the chrome");
+    assert.equal(mode.enabled, enabled);
+    assert.equal(mode.artifact_load_token, "load-token");
+  });
+}
+
+// Applying the page's "off" default closes no card, so it must not report one gone: the chrome
+// saves every `card: null` report over the stored draft, and the frame's load event that replays
+// that draft can arrive after a slow image, later than the report.
+test("a page that declares off reports no review state at boot", () => {
+  const sdk = bootSdk({ htmlAnnotate: "off" });
+  sdk.runTimers();
+  assert.equal(
+    sdk.posted.some((message) => message.type === "lavish:reviewState"),
+    false,
+    "nothing was open, so there is no card state to retire",
+  );
+  const target = appendTo(sdk.body, cell("h1", "Headline"));
+  sdk.sendChromeMessage({
+    type: "lavish:restoreReviewState",
+    state: { card: { selector: "h1", text: "needs a shorter headline" }, fields: [] },
+  });
+  sdk.setDocumentQuery((selector) => (selector === "h1" ? target : null));
+  sdk.runTimers();
+  assert.equal(sdk.card().querySelector("textarea").value, "needs a shorter headline");
+});
+
+test("the chrome can turn annotation on and off after a page declares off", () => {
+  const sdk = bootSdk({ htmlAnnotate: "off" });
+  const target = appendTo(sdk.body, cell("p", "Decision board"));
+  assert.equal(sdk.click(target).defaultPrevented, false);
+  sdk.sendChromeMessage({ type: "lavish:setAnnotationMode", enabled: true });
+  assert.equal(sdk.click(target).defaultPrevented, true);
+  assert.equal(sdk.cards().length, 1);
+  sdk.sendChromeMessage({ type: "lavish:setAnnotationMode", enabled: false });
+  assert.equal(sdk.click(target).defaultPrevented, false);
+  // This harness retains closed cards; no new card should appear while disabled.
+  assert.equal(sdk.cards().length, 1);
+  sdk.runTimers();
+  const state = sdk.posted.filter((message) => message.type === "lavish:reviewState").at(-1);
+  assert.equal(state.state.card, null, "turning annotation off closes the active card");
+});
+
 function buildTable(sdk) {
   const table = appendTo(sdk.body, createElement("table"));
   const thead = appendTo(table, createElement("thead"));
@@ -522,6 +581,22 @@ test("Escape during IME composition leaves an empty annotation card open", () =>
   listener.handler({ key: "Escape", isComposing: true, preventDefault() {} });
 
   assert.notEqual(paragraph.style.outline, "", "a composing Escape belongs to the IME, not the card");
+});
+
+test("the Enter that confirms an IME conversion in WebKit leaves the annotation card open", () => {
+  const sdk = bootSdk();
+  const paragraph = appendTo(sdk.body, cell("p", "Just prose"));
+
+  sdk.click(paragraph);
+  const textarea = sdk.card().querySelector("textarea");
+  textarea.value = "漢字";
+  const listener = textarea.listeners.find((entry) => entry.type === "keydown");
+  let prevented = false;
+  // WebKit fires compositionend before this keydown, so only keyCode 229 marks it as the IME's.
+  listener.handler({ key: "Enter", isComposing: false, keyCode: 229, preventDefault: () => (prevented = true) });
+
+  assert.equal(prevented, false, "the IME keeps its Enter");
+  assert.notEqual(paragraph.style.outline, "", "the card stays open");
 });
 
 test("Escape leaves an annotation card with typed text open and untouched", () => {
@@ -781,9 +856,15 @@ function buildLink(sdk) {
   return { link, inner };
 }
 
-for (const modifier of ["ctrlKey", "metaKey"]) {
-  test(`${modifier}-click on a link in annotate mode follows the link instead of annotating`, () => {
-    const sdk = bootSdk();
+// The follow modifier is the platform's own: Cmd on macOS, Ctrl elsewhere. Meta on Linux/Windows
+// is the Super/Windows key, which is not a link-follow gesture there, so it annotates like a plain click.
+for (const [platform, modifier] of [
+  ["MacIntel", "metaKey"],
+  ["Linux x86_64", "ctrlKey"],
+  ["Win32", "ctrlKey"],
+]) {
+  test(`${modifier}-click on a link on ${platform} follows the link instead of annotating`, () => {
+    const sdk = bootSdk({ platform });
     const { link, inner } = buildLink(sdk);
 
     for (const target of [link, inner]) {
@@ -791,6 +872,22 @@ for (const modifier of ["ctrlKey", "metaKey"]) {
       assert.equal(event.defaultPrevented, false, "the browser's own link handling runs");
     }
     assert.equal(sdk.cards().length, 0);
+  });
+}
+
+for (const [platform, modifier] of [
+  ["Linux x86_64", "metaKey"],
+  ["Win32", "metaKey"],
+  ["MacIntel", "ctrlKey"],
+]) {
+  test(`${modifier}-click on a link on ${platform} annotates like a plain click`, () => {
+    const sdk = bootSdk({ platform });
+    const { link } = buildLink(sdk);
+
+    const event = sdk.click(link, { [modifier]: true });
+
+    assert.equal(event.defaultPrevented, true, "the SDK keeps the frame from navigating");
+    assert.match(sdk.card().innerHTML, /Annotate &lt;a&gt;/);
   });
 }
 

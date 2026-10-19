@@ -18,7 +18,7 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null, agentNudgeAvailable?: boolean }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -405,6 +405,7 @@ async function createChromeHarness({
   let clockNow = Date.now();
   const context = {
     AbortController,
+    AbortSignal,
     clearTimeout: fakeClearTimeout,
     console,
     ...(fakeClock ? { Date: { now: () => clockNow, parse: Date.parse } } : {}),
@@ -6031,6 +6032,94 @@ test("a queued Send refused because the session already ended marks the chrome r
   assert.equal(chrome.queued().length, 1);
 });
 
+for (const enabled of [true, false]) {
+  test(`the annotation switch reflects the artifact's initial mode (${enabled}) before and after frame load`, async () => {
+    for (const loadFirst of [true, false]) {
+      const chrome = await createChromeHarness();
+      if (loadFirst) chrome.frame.dispatch("load");
+      chrome.sendFrameMessage({
+        type: "lavish:annotationMode",
+        artifact_load_token: chrome.artifactLoadToken(),
+        enabled,
+      });
+      if (!loadFirst) chrome.frame.dispatch("load");
+      assert.equal(chrome.element("annotation")["aria-pressed"], String(enabled));
+      const mode = chrome.postedToFrame.filter((message) => message.type === "lavish:setAnnotationMode").at(-1);
+      assert.equal(mode.enabled, enabled);
+      chrome.element("annotation").click();
+      assert.equal(chrome.element("annotation")["aria-pressed"], String(!enabled));
+      assert.equal(chrome.postedToFrame.at(-1).enabled, !enabled);
+    }
+  });
+}
+
+test("page annotation defaults follow reloads until the reviewer uses the toolbar", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await flushPromises();
+  const report = (enabled, token = chrome.artifactLoadToken()) =>
+    chrome.sendFrameMessage({ type: "lavish:annotationMode", artifact_load_token: token, enabled });
+  report(false);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false");
+  report(true);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false", "only the first report per load applies");
+  const oldToken = chrome.artifactLoadToken();
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  await flushPromises();
+  assert.notEqual(chrome.artifactLoadToken(), oldToken);
+  report(false, oldToken);
+  report(true);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "true", "a new load reads its own default");
+  chrome.element("annotation").click();
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  await flushPromises();
+  chrome.frame.dispatch("load");
+  report(true);
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false", "a toolbar choice survives a new page default");
+  assert.equal(chrome.postedToFrame.at(-1).enabled, false);
+});
+
+test("a late initial annotation report cannot undo a toolbar choice", async () => {
+  const chrome = await createChromeHarness();
+  chrome.element("annotation").click();
+  chrome.sendFrameMessage({
+    type: "lavish:annotationMode",
+    artifact_load_token: chrome.artifactLoadToken(),
+    enabled: true,
+  });
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false");
+  assert.equal(chrome.postedToFrame.at(-1).enabled, false);
+});
+
+test("initial annotation reports reject stale tokens and non-boolean modes", async () => {
+  const chrome = await createChromeHarness();
+  const before = chrome.postedToFrame.length;
+  chrome.sendFrameMessage({ type: "lavish:annotationMode", artifact_load_token: "old-load", enabled: false });
+  chrome.sendFrameMessage({
+    type: "lavish:annotationMode",
+    artifact_load_token: chrome.artifactLoadToken(),
+    enabled: "off",
+  });
+  assert.equal(chrome.postedToFrame.length, before);
+  chrome.sendFrameMessage({
+    type: "lavish:annotationMode",
+    artifact_load_token: chrome.artifactLoadToken(),
+    enabled: false,
+  });
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false");
+});
+
+test("an ended session never enables annotation from the page default", async () => {
+  const chrome = await createChromeHarness({ sessionData: { ...defaultSessionData, initialEnded: true } });
+  chrome.sendFrameMessage({
+    type: "lavish:annotationMode",
+    artifact_load_token: chrome.artifactLoadToken(),
+    enabled: true,
+  });
+  assert.equal(chrome.postedToFrame.at(-1).enabled, false);
+});
+
 test("Cmd/Ctrl+I toggles annotation mode from the chrome document, regardless of focus", async () => {
   const chrome = await createChromeHarness();
 
@@ -8587,6 +8676,34 @@ test("clicking a queued note opens it for editing in the message box and reveals
   );
 });
 
+test("the Enter that confirms an IME conversion in WebKit does not send the chat composer", async () => {
+  const calls = [];
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  chrome.element("chatInput").value = "henkan";
+  const event = {
+    key: "Enter",
+    shiftKey: false,
+    isComposing: false,
+    keyCode: 229,
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+  };
+  chrome.element("chatInput").dispatch("keydown", event);
+  await flushPromises();
+
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(chrome.element("chatInput").value, "henkan");
+  assert.equal(chrome.queued().length, 0);
+  assert.equal(calls.filter((url) => String(url).endsWith("/prompts")).length, 0);
+});
+
 test("saving an edited queued note rewrites it in place and keeps its identity", async () => {
   const chrome = await createChromeHarness();
   queueHeadingNote(chrome);
@@ -9677,6 +9794,12 @@ test("pages open in the mode chosen in the More menu, and choosing it switches t
   const localStore = new Map([["lavish-axi:start-mode", "interact"]]);
   const chrome = await createChromeHarness({ theme: { localStore } });
   assert.equal(chrome.element("annotation")["aria-pressed"], "false", "opens in Interact");
+  chrome.sendFrameMessage({
+    type: "lavish:annotationMode",
+    artifact_load_token: chrome.artifactLoadToken(),
+    enabled: true,
+  });
+  assert.equal(chrome.element("annotation")["aria-pressed"], "false", "saved reviewer preference wins over the page");
   assert.equal(chrome.element("startInteract")["aria-checked"], "true");
 
   chrome.element("startInteract").onclick();
@@ -9686,6 +9809,41 @@ test("pages open in the mode chosen in the More menu, and choosing it switches t
 
   const fresh = await createChromeHarness({ theme: { localStore: new Map() } });
   assert.equal(fresh.element("annotation")["aria-pressed"], "true", "with nothing stored, pages open in Annotate");
+});
+
+test("Nudge agent delivers once while pending and retains the copy fallback after failure", async () => {
+  let attempts = 0;
+  /** @type {(response: { ok: boolean, json: () => Promise<{ status: string }> }) => void} */
+  let finish = () => {
+    throw new Error("No nudge request is pending");
+  };
+  const chrome = await createChromeHarness({
+    sessionData: { ...defaultSessionData, agentNudgeAvailable: true },
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/nudge")) {
+        attempts++;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  const button = chrome.element("nudgeAgent");
+  assert.equal(button.hidden, false);
+  const delivery = button.onclick();
+  await button.onclick();
+  assert.equal(attempts, 1);
+  assert.equal(button.disabled, true);
+  finish({ ok: true, json: async () => ({ status: "sent" }) });
+  await delivery;
+  assert.equal(button.disabled, false);
+  assert.equal(chrome.element("nudgeStatus").textContent, "Nudge sent to T3 Code.");
+  const retry = button.onclick();
+  finish({ ok: false, json: async () => ({ status: "failed" }) });
+  await retry;
+  assert.match(chrome.element("nudgeStatus").textContent, /Copy nudge/);
+  assert.equal(typeof chrome.element("copyNudge").onclick, "function");
 });
 
 test("in a background tab, replies, page updates and a quiet agent notify; the count clears on return", async () => {
@@ -10364,4 +10522,51 @@ test("the top bar and Peek can each be hidden completely, stay hidden, and come 
   });
   assert.equal(again.element("html").dataset.bar, "hidden", "a reload keeps the bar away");
   assert.equal(again.element("html").dataset.peek, "hidden");
+});
+
+async function whiteboardInitWithLibraries({ librariesResponse, sourcesVersion }) {
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url) => {
+      if (String(url).includes("/whiteboard-libraries")) return librariesResponse();
+      if (String(url).includes("/mermaid-sources")) {
+        return {
+          ok: true,
+          json: async () => ({
+            sources: [{ index: 0, source: "flowchart TD\n%% lavish-icon A sys/Queue\nA-->B", hash: "hash" }],
+            ...(sourcesVersion ? { libraries_version: sourcesVersion } : {}),
+          }),
+        };
+      }
+      return whiteboardFetch(String(url));
+    },
+  });
+  const inline = await initializeInlineWhiteboard(chrome);
+  const init = inline.posted.find((message) => message.type === "lavish-whiteboard:init");
+  assert.ok(init, "the whiteboard frame was initialized");
+  return init;
+}
+
+test("whiteboard init flags libraries that changed between the libraries and sources reads", async () => {
+  const libraries = [{ id: "sys", items: [] }];
+  const matching = await whiteboardInitWithLibraries({
+    librariesResponse: () => ({ ok: true, json: async () => ({ libraries, version: "v1" }) }),
+    sourcesVersion: "v1",
+  });
+  assert.equal(matching.librariesUnavailable, false);
+  assert.equal(JSON.stringify(matching.libraries), JSON.stringify(libraries));
+
+  // A library file was added or replaced after the libraries read but before
+  // the sources read: the frame would draw old items under the new hash.
+  const raced = await whiteboardInitWithLibraries({
+    librariesResponse: () => ({ ok: true, json: async () => ({ libraries, version: "v1" }) }),
+    sourcesVersion: "v2",
+  });
+  assert.equal(raced.librariesUnavailable, true);
+
+  const failed = await whiteboardInitWithLibraries({
+    librariesResponse: () => ({ ok: false, json: async () => ({}) }),
+    sourcesVersion: "v1",
+  });
+  assert.equal(failed.librariesUnavailable, true);
+  assert.equal(JSON.stringify(failed.libraries), "[]");
 });

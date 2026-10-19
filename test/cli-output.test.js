@@ -23,6 +23,7 @@ import {
   createDesignOutput,
   createExportOutput,
   createHomeOutput,
+  createLibrariesOutput,
   createOpenOutput,
   createPollOutput,
   createPlaybookOutput,
@@ -2955,6 +2956,34 @@ test("shouldRestartServer restarts when the running server reports a different v
   assert.equal(shouldRestartServer("0.1.4", { ok: true, version: "0.1.3" }), true);
 });
 
+test("shouldRestartServer adopts a server that is newer than the CLI", () => {
+  assert.equal(shouldRestartServer("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.5" }), false);
+  assert.equal(shouldRestartServer("0.1.85", { ok: true, app: "lavish-axi", version: "0.1.86" }), false);
+  assert.equal(shouldRestartServer("0.1.4", { ok: true, app: "lavish-axi", version: "1.0.0" }), false);
+});
+
+test("shouldRestartServer replaces a server whose version is not plain x.y.z", () => {
+  assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "0.1.87-beta.1" }), true);
+  assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "v0.1.88" }), true);
+  assert.equal(shouldRestartServer("0.1.87-beta.1", { ok: true, app: "lavish-axi", version: "0.1.88" }), true);
+});
+
+test("shouldRestartServer compares versions numerically, not as strings", () => {
+  assert.equal(shouldRestartServer("0.1.10", { ok: true, app: "lavish-axi", version: "0.1.9" }), true);
+  assert.equal(shouldRestartServer("0.1.9", { ok: true, app: "lavish-axi", version: "0.1.10" }), false);
+  assert.equal(shouldRestartServer("1.0.0", { ok: true, app: "lavish-axi", version: "0.9.99" }), true);
+});
+
+test("shouldRestartServer still replaces a newer server when forced or network-stale", () => {
+  const newer = { ok: true, app: "lavish-axi", version: "0.1.5" };
+  assert.equal(shouldRestartServer("0.1.4", newer, true), true);
+  assert.equal(shouldRestartServer("0.1.4", { ...newer, network_stale: true }), true);
+});
+
+test("shouldRestartServer falls back to replacing a server whose version does not parse", () => {
+  assert.equal(shouldRestartServer("0.1.4", { ok: true, app: "lavish-axi", version: "nightly" }), true);
+});
+
 test("shouldRestartServer restarts when the running server predates the version handshake", () => {
   // Pre-handshake servers (any release older than this change) return `{ ok: true }` with
   // no version field. Treat that as "older than me" and restart so users actually get the
@@ -2982,6 +3011,14 @@ test("serverReplacementReason names a local-build force apart from a real versio
   assert.equal(serverReplacementReason("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.3" }, true), "upgrade");
 });
 
+test("serverReplacementReason names nothing for a server newer than the CLI", () => {
+  assert.equal(serverReplacementReason("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.5" }), "");
+  assert.equal(
+    serverReplacementReason("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.5" }, true),
+    "local-build",
+  );
+});
+
 test("serverReplacementReason names nothing when no replacement is warranted", () => {
   assert.equal(serverReplacementReason("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.4" }), "");
   assert.equal(serverReplacementReason("0.1.4", null), "");
@@ -2998,6 +3035,11 @@ test("shouldKillProcessOnPort kills pre-handshake Lavish servers after shutdown 
 test("shouldKillProcessOnPort only kills Lavish servers with a mismatched version", () => {
   assert.equal(shouldKillProcessOnPort("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.3" }), true);
   assert.equal(shouldKillProcessOnPort("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.4" }), false);
+});
+
+test("shouldKillProcessOnPort leaves a Lavish server that is newer than the CLI", () => {
+  assert.equal(shouldKillProcessOnPort("0.1.4", { ok: true, app: "lavish-axi", version: "0.1.5" }), false);
+  assert.equal(shouldKillProcessOnPort("0.1.10", { ok: true, app: "lavish-axi", version: "0.1.9" }), true);
 });
 
 test("shutdownServerOnPort kills pre-handshake Lavish servers when shutdown does not free the port", async () => {
@@ -3594,6 +3636,17 @@ test("update is refused in the Jadev fork instead of installing the upstream npm
   }
 });
 
+test("older Jadev CLIs adopt newer fork servers without replacing them", () => {
+  const newer = { app: "lavish-axi", version: "0.1.90-jadev.12" };
+  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer), false);
+  assert.equal(shouldKillProcessOnPort("0.1.90-jadev.2", newer), false);
+  assert.equal(serverReplacementReason("0.1.90-jadev.2", newer), "");
+  assert.equal(shouldRestartServer("0.1.90-jadev.13", newer), true);
+  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer, true), true);
+  // A plain upstream server is a different build channel and must not substitute for our fork.
+  assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.91" }), true);
+});
+
 test("the fork carries a jadev prerelease version so it is never mistaken for an npm release", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+-jadev\.\d+$/);
 });
@@ -3637,4 +3690,96 @@ test("poll output explains a message about marked blocks, and only when one arri
     response: { status: "feedback", prompts: [{ ...prompts[0], target: undefined }] },
   });
   assert.doesNotMatch(plain.next_step, /target\.marks/);
+});
+
+function fixtureLibraries() {
+  const item = (library, name) => ({ ref: `${library}/${name}`, name, elements: [] });
+  return [
+    { id: "aws", items: [item("aws", "AWS Lambda"), item("aws", "Lambda Function"), item("aws", "Amazon S3")] },
+    { id: "system-design", items: [item("system-design", "Queue")] },
+  ];
+}
+
+test("libraries output tells the user where to put files when none are installed", () => {
+  const output = createLibrariesOutput({
+    dir: "/home/me/.lavish-axi/excalidraw-libraries",
+    libraries: [],
+    skipped: [],
+  });
+  assert.equal(output.dir, "/home/me/.lavish-axi/excalidraw-libraries");
+  assert.deepEqual(output.libraries, []);
+  assert.match(output.help.join("\n"), /\.excalidrawlib/);
+  assert.equal(output.items, undefined);
+});
+
+test("libraries output lists counts, skips, and points at item search", () => {
+  const output = createLibrariesOutput({
+    dir: "/x",
+    libraries: fixtureLibraries(),
+    skipped: [{ file: "/x/broken.excalidrawlib", reason: "not valid JSON" }],
+  });
+  assert.deepEqual(output.libraries, [
+    { id: "aws", items: 3 },
+    { id: "system-design", items: 1 },
+  ]);
+  assert.deepEqual(output.skipped, [{ file: "broken.excalidrawlib", reason: "not valid JSON" }]);
+  assert.equal(output.items, undefined);
+  const help = output.help.join("\n");
+  assert.match(help, /lavish-axi libraries --search <text>/);
+  assert.match(help, /lavish-axi design/);
+});
+
+test("libraries output filters item refs by search terms and library", () => {
+  const searched = createLibrariesOutput({ dir: "/x", libraries: fixtureLibraries(), skipped: [], search: "lambda" });
+  assert.deepEqual(searched.items, [{ ref: "aws/AWS Lambda" }, { ref: "aws/Lambda Function" }]);
+  const both = createLibrariesOutput({ dir: "/x", libraries: fixtureLibraries(), skipped: [], search: "aws lambda" });
+  assert.deepEqual(both.items, [{ ref: "aws/AWS Lambda" }, { ref: "aws/Lambda Function" }]);
+  const library = createLibrariesOutput({
+    dir: "/x",
+    libraries: fixtureLibraries(),
+    skipped: [],
+    library: "system-design",
+  });
+  assert.deepEqual(library.items, [{ ref: "system-design/Queue" }]);
+  const none = createLibrariesOutput({ dir: "/x", libraries: fixtureLibraries(), skipped: [], search: "kafka" });
+  assert.deepEqual(none.items, []);
+});
+
+test("libraries output bounds long item listings", () => {
+  const many = Array.from({ length: 120 }, (_, index) => ({
+    ref: `big/Icon ${index}`,
+    name: `Icon ${index}`,
+    elements: [],
+  }));
+  const output = createLibrariesOutput({
+    dir: "/x",
+    libraries: [{ id: "big", items: many }],
+    skipped: [],
+    library: "big",
+  });
+  assert.equal(output.items.length, 50);
+  assert.equal(output.more_items, 70);
+  assert.match(output.help.join("\n"), /--search/);
+});
+
+test("libraries help documents the command and the directory", () => {
+  const help = getCommandHelp("libraries");
+  assert.match(help, /lavish-axi libraries \[--search <text>\] \[--library <id>\]/);
+  assert.match(help, /excalidraw-libraries/);
+  assert.equal(normalizeArgv(["libraries"])[0], "libraries");
+});
+
+test("design output owns the library icon directive and the diagram playbook points at it", () => {
+  const icons = createDesignOutput().whiteboard_tooling.library_icons;
+  assert.match(icons.use_when, /lavish-axi libraries/);
+  assert.equal(icons.syntax, "%% lavish-icon <node-id> <library-id>/<item name>");
+  assert.match(icons.example, /^flowchart /);
+  assert.match(icons.example, /%% lavish-icon api /);
+  assert.match(icons.notes, /plain node/);
+  assert.match(icons.notes, /Added library item/);
+
+  const diagram = JSON.stringify(createPlaybookOutput(["diagram"]));
+  assert.match(diagram, /whiteboard_tooling\.library_icons/);
+  assert.doesNotMatch(diagram, /%% lavish-icon/, "the syntax has one owner surface");
+  assert.doesNotMatch(JSON.stringify(createHomeOutput({ bin: "lavish-axi", sessions: [] })), /lavish-icon|libraries/);
 });
