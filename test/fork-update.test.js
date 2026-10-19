@@ -87,7 +87,11 @@ test("the checker reports a newer version once, clears it when caught up, and st
     intervalMs: 5,
   });
   checker.start((update) => seen.push(update));
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  // Wait for both reports rather than a fixed sleep: a loaded test run can delay the 5ms ticks.
+  const deadline = Date.now() + 2000;
+  while (seen.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  // A few more ticks, so a repeated report would show up before stopping.
+  await new Promise((resolve) => setTimeout(resolve, 30));
   checker.stop();
   assert.deepEqual(seen, [{ version: "0.1.83-jadev.13", current: "0.1.83-jadev.12" }, null]);
   assert.equal(checker.current(), null);

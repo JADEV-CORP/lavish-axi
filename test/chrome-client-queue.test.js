@@ -9769,6 +9769,44 @@ test("between two poll rounds the agent still shows as listening, unless it does
   assert.equal(banner(), false, "it did not come back: not listening, with the nudge");
 });
 
+test("Ctrl+F opens the find bar; typing searches the page, Enter steps, Escape clears", async () => {
+  const chrome = await createChromeHarness();
+  const bar = chrome.element("findBar");
+  const input = chrome.element("findInput");
+  const finds = () => chrome.postedToFrame.filter((message) => message.type === "lavish:find").map((m) => ({ ...m }));
+  bar.hidden = true; // as the page serves it
+
+  const pressed = chrome.dispatchDocumentKeydown({ key: "f", ctrlKey: true });
+  assert.equal(pressed.defaultPrevented, true, "the browser's own find stays closed");
+  assert.equal(bar.hidden, false);
+  assert.equal(finds().length, 0, "an empty bar searches nothing");
+
+  input.value = "booking";
+  input.dispatch("input", {});
+  chrome.runTimers(120);
+  assert.deepEqual(finds().at(-1), { type: "lavish:find", query: "booking", direction: 0 });
+
+  chrome.sendFrameMessage({ type: "lavish:findResult", query: "book", count: 9, index: 0 });
+  assert.equal(chrome.element("findCount").textContent, "", "an answer to an older query is ignored");
+  chrome.sendFrameMessage({ type: "lavish:findResult", query: "booking", count: 5, index: 1 });
+  assert.equal(chrome.element("findCount").textContent, "2 of 5");
+
+  input.dispatch("keydown", { key: "Enter", shiftKey: false, preventDefault() {} });
+  assert.equal(finds().at(-1).direction, 1);
+  input.dispatch("keydown", { key: "Enter", shiftKey: true, preventDefault() {} });
+  assert.equal(finds().at(-1).direction, -1);
+
+  chrome.sendFrameMessage({ type: "lavish:findResult", query: "booking", count: 0, index: -1 });
+  assert.equal(chrome.element("findCount").textContent, "No results");
+
+  input.dispatch("keydown", { key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.equal(bar.hidden, true);
+  assert.deepEqual(finds().at(-1), { type: "lavish:find", query: "", direction: 0 }, "the page's marks are cleared");
+
+  chrome.sendFrameMessage({ type: "lavish:openFind" });
+  assert.equal(bar.hidden, false, "Ctrl+F pressed inside the page opens it too");
+});
+
 test("only a reply that just arrived animates in; a transcript rebuild does not replay it", async () => {
   const chrome = await createChromeHarness({ fakeClock: true });
   const stored = { role: "agent", text: "First.", html: "<p>First.</p>", at: "2026-10-07T09:00:00.000Z" };

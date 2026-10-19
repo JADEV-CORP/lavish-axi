@@ -243,6 +243,24 @@ function bootSdk({
       listener.handler(event);
       return event;
     },
+    // Every document keydown listener, as a key press anywhere in the page reaches them.
+    keydown(props) {
+      const event = {
+        key: "",
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...props,
+        defaultPrevented: false,
+        preventDefault() {
+          event.defaultPrevented = true;
+        },
+        stopPropagation() {},
+      };
+      for (const entry of documentListeners.filter((listener) => listener.type === "keydown")) entry.handler(event);
+      return event;
+    },
     // Returns the dispatched event so a test can tell whether the SDK swallowed the click.
     click(target, modifiers = {}) {
       const listener = documentListeners.find((entry) => entry.type === "click");
@@ -1063,6 +1081,19 @@ test("a page without a background keeps the transparent track, and only a plain 
   assert.equal(scrollbarStyles(bootWithPageBackground("red}body{display:none", "")).length, 1);
   const html = scrollbarStyles(bootWithPageBackground("oklch(0.145 0.008 326)", "rgb(1, 2, 3)"));
   assert.match(html[1].textContent, /background-color:oklch\(0\.145 0\.008 326\)\}$/, "html's own background wins");
+});
+
+test("Ctrl+F in the page asks the editor for its find bar, and an empty search reports nothing found", () => {
+  const sdk = bootSdk();
+  const event = sdk.keydown({ key: "f", ctrlKey: true });
+  assert.equal(event.defaultPrevented, true, "the browser's own find stays closed");
+  assert.equal(sdk.posted.at(-1).type, "lavish:openFind");
+
+  sdk.sendChromeMessage({ type: "lavish:find", query: "   ", direction: 0 });
+  const result = sdk.posted.at(-1);
+  assert.equal(result.type, "lavish:findResult");
+  assert.equal(result.count, 0);
+  assert.equal(result.index, -1);
 });
 
 test("every artifact gets the editor's themed scrollbar, at zero specificity so its own styles win", () => {

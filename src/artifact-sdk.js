@@ -1,6 +1,7 @@
-/* global CSS, Element, MutationObserver, ResizeObserver, XMLSerializer, document, getComputedStyle, parent, window */
+/* global CSS, Element, Highlight, MutationObserver, NodeFilter, ResizeObserver, XMLSerializer, document, getComputedStyle, parent, window */
 
 import { readArtifactRevisions } from "./artifact-revisions.js";
+import { findTextMatches, findTextNodeIndex, isFindHotkeyEvent } from "./find-in-page.js";
 import * as mermaidHelpers from "./mermaid-node.js";
 import { tableCellTarget } from "./table-cell.js";
 
@@ -2811,6 +2812,10 @@ export function createArtifactSdk(
     }
     if (msg.type === "lavish:restoreReviewState") restoreReviewState(msg.state);
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
+    if (msg.type === "lavish:find") {
+      const direction = msg.direction === 1 || msg.direction === -1 ? msg.direction : 0;
+      runFind(typeof msg.query === "string" ? msg.query : "", direction);
+    }
     if (msg.type === "lavish:zoomPicture" && Number.isSafeInteger(msg.index)) {
       const image = zoomPictureList()[msg.index];
       if (image) requestImageZoom(image, zoomPictureSource(image));
@@ -3271,6 +3276,126 @@ export function createArtifactSdk(
     },
     true,
   );
+
+  // ---- Find in the page (#3789). The editor owns the find bar; Ctrl+F pressed in the page opens it
+  // there. A search reads the page's visible text, marks every match with the CSS Custom Highlight
+  // API, which changes nothing in the page's DOM, gives the current match a stronger colour, scrolls
+  // it into view and reports "n of m" back. Without that API the current match is selected instead.
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (!isFindHotkeyEvent(event)) return;
+      event.preventDefault();
+      postArtifactMessage("lavish:openFind");
+    },
+    true,
+  );
+
+  const FIND_LIMIT = 1000;
+  /** @type {{ query: string, ranges: Range[], index: number }} */
+  let findState = { query: "", ranges: [], index: -1 };
+  let findStyle = null;
+
+  function visibleTextNodes() {
+    if (!document.body) return [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || !node.nodeValue) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("script, style, noscript, template, textarea, [data-lavish-ui]")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (typeof parent.checkVisibility === "function" && !parent.checkVisibility({ visibilityProperty: true })) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const nodes = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+    return nodes;
+  }
+
+  // Every match as a Range; matches may span inline elements (<b>foo</b>bar), since the visible text
+  // is searched as one string.
+  function findRanges(query) {
+    const nodes = visibleTextNodes();
+    const starts = [];
+    let length = 0;
+    for (const node of nodes) {
+      starts.push(length);
+      length += node.nodeValue.length;
+    }
+    const text = nodes.map((node) => node.nodeValue).join("");
+    return findTextMatches(text, query, FIND_LIMIT).map(([start, end]) => {
+      const first = findTextNodeIndex(starts, start);
+      const last = findTextNodeIndex(starts, end - 1);
+      const range = document.createRange();
+      range.setStart(nodes[first], start - starts[first]);
+      range.setEnd(nodes[last], end - starts[last]);
+      return range;
+    });
+  }
+
+  function paintFind() {
+    const current = findState.ranges[findState.index] || null;
+    const registry = typeof CSS !== "undefined" ? CSS.highlights : null;
+    if (!registry || typeof Highlight !== "function") {
+      const selection = window.getSelection?.();
+      selection?.removeAllRanges();
+      if (current) selection?.addRange(current.cloneRange());
+      return;
+    }
+    if (!findState.ranges.length) {
+      registry.delete("lavish-find");
+      registry.delete("lavish-find-current");
+      return;
+    }
+    if (!findStyle) {
+      findStyle = document.createElement("style");
+      findStyle.setAttribute("data-lavish-ui", "find");
+      findStyle.textContent =
+        "::highlight(lavish-find){background-color:rgb(255 213 0 / 45%);color:inherit}" +
+        "::highlight(lavish-find-current){background-color:rgb(255 150 0);color:rgb(0 0 0)}";
+      (document.head || document.documentElement).appendChild(findStyle);
+    }
+    registry.set("lavish-find", new Highlight(...findState.ranges.filter((range) => range !== current)));
+    registry.set("lavish-find-current", new Highlight(current));
+  }
+
+  function revealFindMatch(range) {
+    range.startContainer.parentElement?.scrollIntoView({ block: "center", inline: "nearest" });
+    // A long paragraph can be taller than the window: bring the match itself to the middle.
+    const rect = range.getBoundingClientRect();
+    if (rect.top < 0 || rect.bottom > window.innerHeight) {
+      window.scrollBy(0, rect.top - window.innerHeight / 2);
+    }
+  }
+
+  /** @param {string} query @param {number} direction 0 to search afresh, 1 next, -1 previous */
+  function runFind(query, direction) {
+    const text = String(query || "").slice(0, 200);
+    if (!text.trim()) {
+      findState = { query: "", ranges: [], index: -1 };
+    } else if (direction === 0 || text !== findState.query) {
+      const ranges = findRanges(text);
+      // A new search starts at the first match on screen or below it, not back at the top.
+      const onward = ranges.findIndex((range) => range.getBoundingClientRect().bottom >= 0);
+      findState = { query: text, ranges, index: ranges.length ? Math.max(0, onward) : -1 };
+    } else if (findState.ranges.length) {
+      const count = findState.ranges.length;
+      findState.index = (findState.index + direction + count) % count;
+    }
+    paintFind();
+    const current = findState.ranges[findState.index];
+    if (current) revealFindMatch(current);
+    postArtifactMessage("lavish:findResult", {
+      query: findState.query,
+      count: findState.ranges.length,
+      index: findState.index,
+      capped: findState.ranges.length >= FIND_LIMIT,
+    });
+  }
 
   // Report scroll position to the chrome so it can be restored across hot reloads.
   // The iframe is sandboxed without same-origin, so the chrome can't read scrollY directly.

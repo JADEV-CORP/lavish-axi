@@ -5653,6 +5653,8 @@ window.addEventListener("message", (event) => {
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
   if (msg.type === "lavish:toggleCommandPalette") togglePalette();
   if (msg.type === "lavish:zoomImage") openImageZoomFromFrame(msg);
+  if (msg.type === "lavish:openFind") openFind();
+  if (msg.type === "lavish:findResult") renderFindResult(msg);
   if (msg.type === "lavish:maximizeVideo") openVideoViewer(msg);
   if (msg.type === "lavish:editQueuedAnchor") editQueuedAnchor(String(msg.selector || ""));
 });
@@ -6675,6 +6677,7 @@ function paletteCommands() {
   const commands = [
     { label: annotation ? "Switch to explore mode" : "Switch to annotate mode", control: annotationSwitch },
     { label: "Write a message", run: focusComposer },
+    { label: "Find in the page", run: openFind },
     { label: barHidden ? "Show the top bar" : "Hide the top bar", run: () => setBarHidden(!barHidden) },
     {
       label: peekHidden ? "Show Peek" : "Hide Peek",
@@ -7007,7 +7010,93 @@ document.addEventListener(
   },
   true,
 );
+// ---- Find in the page (#3789). Ctrl+F (Cmd+F) anywhere in the editor or the page opens this bar;
+// the page's SDK does the searching and answers with the count. Enter and Shift+Enter (or F3 and
+// Shift+F3) step through the matches, Escape closes the bar and clears the marks. ----
+const findBar = /** @type {HTMLDivElement} */ (document.getElementById("findBar"));
+const findInput = /** @type {HTMLInputElement} */ (document.getElementById("findInput"));
+const findCount = /** @type {HTMLSpanElement} */ (document.getElementById("findCount"));
+const findPrevButton = /** @type {HTMLButtonElement} */ (document.getElementById("findPrev"));
+const findNextButton = /** @type {HTMLButtonElement} */ (document.getElementById("findNext"));
+/** @type {ReturnType<typeof setTimeout> | 0} */
+let findTyping = 0;
+
+// The same keys as isFindHotkeyEvent in src/find-in-page.js; this file is served raw and cannot import it.
+function isFindKeys(event) {
+  if (!event || event.altKey || event.shiftKey) return false;
+  return Boolean(event.ctrlKey || event.metaKey) && String(event.key || "").toLowerCase() === "f";
+}
+
+/** @param {number} direction 0 for a fresh search, 1 next, -1 previous */
+function askFind(direction) {
+  clearTimeout(findTyping);
+  findTyping = 0;
+  postToFrame({ type: "lavish:find", query: findInput.value, direction });
+}
+
+function openFind() {
+  findBar.hidden = false;
+  findInput.focus();
+  findInput.select?.();
+  if (findInput.value.trim()) askFind(0);
+}
+
+function closeFind() {
+  if (findBar.hidden) return;
+  findBar.hidden = true;
+  clearTimeout(findTyping);
+  findCount.textContent = "";
+  postToFrame({ type: "lavish:find", query: "", direction: 0 });
+}
+
+/** @param {any} result */
+function renderFindResult(result) {
+  if (findBar.hidden || String(result.query || "") !== findInput.value.slice(0, 200)) return;
+  const count = Number.isSafeInteger(result.count) && result.count > 0 ? result.count : 0;
+  const index = Number.isSafeInteger(result.index) ? result.index : -1;
+  findCount.textContent = !findInput.value.trim()
+    ? ""
+    : count
+      ? index + 1 + " of " + count + (result.capped === true ? "+" : "")
+      : "No results";
+  findPrevButton.disabled = count < 2;
+  findNextButton.disabled = count < 2;
+}
+
+findInput.addEventListener("input", () => {
+  clearTimeout(findTyping);
+  findTyping = setTimeout(() => askFind(0), 120);
+});
+findInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    askFind(event.shiftKey ? -1 : 1);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation?.();
+    closeFind();
+  }
+});
+findPrevButton.onclick = () => askFind(-1);
+findNextButton.onclick = () => askFind(1);
+/** @type {HTMLButtonElement} */ (document.getElementById("findClose")).onclick = closeFind;
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (isFindKeys(event)) {
+      event.preventDefault();
+      openFind();
+    } else if (event.key === "F3" && !findBar.hidden) {
+      event.preventDefault();
+      askFind(event.shiftKey ? -1 : 1);
+    }
+  },
+  true,
+);
+
 frame.addEventListener("load", () => {
+  // A reloaded page is searched again, so the marks and the count follow the new version.
+  if (!findBar.hidden && findInput.value.trim()) askFind(0);
   if (artifactSpokeToken !== artifactLoadToken) armArtifactAvailabilityProbe(artifactLoadToken);
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
   postThemeToFrame();

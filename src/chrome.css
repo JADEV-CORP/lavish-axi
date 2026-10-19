@@ -1144,10 +1144,76 @@ body {
   grid-template-columns: minmax(0, 1fr) var(--panel-w);
 }
 .frame {
+  position: relative;
   min-width: 0;
   min-height: 0;
   background: #fff;
   overflow: hidden;
+}
+/* Find in the page (#3789): a small bar over the artifact's top-right corner, clear of its scrollbar. */
+.find-bar {
+  position: absolute;
+  top: 10px;
+  right: 22px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-tooltip);
+  color: var(--fg);
+  font-family: var(--font-sans);
+}
+.find-bar[hidden] {
+  display: none;
+}
+.find-input {
+  width: 200px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.find-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.find-count {
+  min-width: 64px;
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+  text-align: center;
+  white-space: nowrap;
+}
+.find-step {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.find-step:hover:not(:disabled) {
+  background: var(--muted);
+  color: var(--fg);
+}
+.find-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.find-step svg {
+  width: 15px;
+  height: 15px;
 }
 .panel {
   width: var(--panel-w);
