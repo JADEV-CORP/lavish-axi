@@ -9929,6 +9929,42 @@ test("a binding removed after the page loaded retires Nudge agent and hands focu
   );
 });
 
+test("the notice asks again whether the review is linked each time the agent stops listening", async () => {
+  let linked = true;
+  const checks = [];
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/nudge") && !init?.method) {
+        checks.push(url);
+        return { ok: true, json: async () => ({ available: linked }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  const live = (data) => chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify(data) });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const button = chrome.element("nudgeAgent");
+  assert.equal(button.hidden, true, "the page loaded before the agent linked");
+
+  live({ state: "listening" });
+  live({ state: "waiting" });
+  await settle();
+  assert.equal(checks.length, 1);
+  assert.equal(button.hidden, false, "a link made after the page loaded is offered");
+  assert.match(chrome.element("presenceCopy").textContent, /Nudge it to resume/);
+
+  live({ state: "waiting" });
+  await settle();
+  assert.equal(checks.length, 1, "an already open notice does not ask again");
+
+  linked = false;
+  live({ state: "listening" });
+  live({ state: "waiting" });
+  await settle();
+  assert.equal(button.hidden, true, "a released link stops being offered");
+  assert.doesNotMatch(chrome.element("presenceCopy").textContent, /Nudge/);
+});
+
 test("without a nudge binding, Copy nudge is the notice's one action and the copy does not offer a nudge", async () => {
   const chrome = await createChromeHarness();
   assert.equal(chrome.element("nudgeAgent").hidden, true);

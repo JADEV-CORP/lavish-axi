@@ -1204,3 +1204,38 @@ test("every artifact gets the editor's themed scrollbar, at zero specificity so 
   assert.match(style.textContent, /@supports \(-moz-appearance:none\)\{:where\(\*\)\{scrollbar-width:thin;/);
   assert.doesNotMatch(style.textContent, /(^|\})(html|body|\*)[{:]/, "no rule with real specificity");
 });
+
+test("the served SDK bundle sends a prompt's context data as TOON", () => {
+  const sdk = bootSdk();
+  const paragraph = appendTo(sdk.body, cell("p", "D20"));
+
+  sdk.api.queuePrompt("D20 several parkings: Build routes per parking now, before the PR", {
+    element: paragraph,
+    tag: "choice",
+    data: {
+      question: "D20",
+      answer: "Build routes per parking now, before the PR",
+      note: "",
+      items: [
+        { id: "R-03", disposition: "must-address" },
+        { id: "R-08", disposition: "nice, later" },
+      ],
+    },
+  });
+
+  assert.equal(
+    sdk.posted.at(-1).prompt.prompt,
+    [
+      "D20 several parkings: Build routes per parking now, before the PR",
+      "",
+      "Context data:",
+      "question: D20",
+      // A comma is the delimiter, so this value is quoted.
+      'answer: "Build routes per parking now, before the PR"',
+      'note: ""',
+      "items[2]{id,disposition}:",
+      "  R-03,must-address",
+      '  R-08,"nice, later"',
+    ].join("\n"),
+  );
+});

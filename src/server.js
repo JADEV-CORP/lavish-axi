@@ -42,6 +42,7 @@ import { createAgentNudger } from "./agent-nudge.js";
 import * as findInPage from "./find-in-page.js";
 import * as mermaidNode from "./mermaid-node.js";
 import * as tableCellHelpers from "./table-cell.js";
+import * as toonEncode from "./toon-encode.js";
 import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
 import { createExcalidrawLibraryCache, excalidrawLibrariesDir } from "./whiteboard-library-store.js";
 import { parseLibraryIconDirectives } from "./whiteboard-libraries.js";
@@ -459,6 +460,13 @@ export async function serve({
   });
   events.on("layout-warnings", (key, warnings) => broadcastLiveEvent("layout-warnings", key, { warnings }));
   events.on("ended", (key, endedBy) => broadcastLiveEvent("ended", key, { ended_by: endedBy || null }));
+  // Every end path emits "ended", so an ended review never keeps its agent link (#3834). A crash
+  // before this runs is caught by the startup sweep below.
+  events.on("ended", (key) => {
+    agentNudger
+      .release?.(key)
+      .catch((error) => writeLog(`[lavish] agent link release failed: ${error?.message || error}`));
+  });
 
   function hasLiveEventClient(key) {
     for (const clientKey of liveEventClients.values()) {
@@ -1209,6 +1217,23 @@ export async function serve({
   // reaches the agent as the user's own instructions. The session key is derived
   // from the artifact path, not a secret, so knowing it must not be enough -
   // only this server's own chrome may queue prompts.
+  // The chrome asks again whenever its agent stops listening, so a link made or removed after the
+  // page loaded shows without a reload. Only a boolean leaves the server.
+  app.get("/api/:key/nudge", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin nudge check rejected" });
+        return;
+      }
+      const session = await store.findByKey(req.params.key);
+      res.json({
+        available: Boolean(session) && session.status !== "ended" && (await agentNudger.available(req.params.key)),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/:key/nudge", async (req, res, next) => {
     try {
       if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
@@ -1554,8 +1579,9 @@ export async function serve({
       const key = sessionKey(file);
       const session = await store.endSession(key, "agent");
       clearFeedbackDelivery(key, activePolls, deliveredFeedback, events);
+      const released = (await agentNudger.release?.(key))?.released ?? null;
       events.emit("ended", key, session?.ended_by);
-      res.json({ status: "ended" });
+      res.json({ status: "ended", ...(released ? { agent_link_released: released } : {}) });
       await shutdownIfNoLiveSessions();
     } catch (error) {
       next(error);
@@ -2535,10 +2561,23 @@ export async function serve({
   // Arm the idle timer for a server that is spawned but never opens a session.
   refreshIdleTimer();
 
+  // Links whose review ended while no server was running are released here.
+  const agentLinksSwept = (async () => {
+    try {
+      await agentNudger.sweep?.(async (key) => {
+        const session = await store.findByKey(key);
+        return Boolean(session) && session.status !== "ended";
+      });
+    } catch (error) {
+      writeLog(`[lavish] agent link sweep failed: ${/** @type {Error} */ (error)?.message || error}`);
+    }
+  })();
+
   return {
     port: publicPort,
     hosts: boundHosts,
     addresses: httpServers.map((server) => server.address()),
+    agentLinksSwept,
     close: async () => {
       shutdown("", "", "close() called");
       await done;
@@ -3542,6 +3581,7 @@ export function createSdkJs(
   const tableHelperSource = serializeModuleHelpers(tableCellHelpers);
   const revisionHelperSource = serializeModuleHelpers(artifactRevisions);
   const findHelperSource = serializeModuleHelpers(findInPage);
+  const toonHelperSource = serializeModuleHelpers(toonEncode);
   const revisionNumber = Number(artifactRevision);
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : 0;
   const loadToken = String(artifactLoadToken || "").slice(0, 200);
@@ -3581,6 +3621,7 @@ const mermaidHelpers={ ${mermaidHelperSource.names.join(", ")} };
 ${tableHelperSource.declarations}
 ${revisionHelperSource.declarations}
 ${findHelperSource.declarations}
+${toonHelperSource.declarations}
 (${createArtifactSdk.toString()})(deriveQueueKey, isNativeInteractiveControl, mermaidHelpers, artifactRevision, artifactLoadToken, key, ${JSON.stringify(sdkOptions)});
 })();`;
 }

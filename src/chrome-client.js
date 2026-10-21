@@ -1566,8 +1566,11 @@ function setAgentPresence(state) {
   updateSendState();
   renderSheetSummary();
   refreshUnseenReceipts();
+  const bannerWasHidden = presenceBanner?.hidden;
   if (presenceBanner) presenceBanner.hidden = ended || agentPresence !== "waiting";
   if (presenceBanner?.hidden) setNudgeStatus("", "");
+  // The agent may have linked or released its T3 Code thread since this page loaded (#3834).
+  else if (bannerWasHidden) Promise.resolve().then(refreshNudgeAvailability);
 
   // A supervisor-owned process-only listener is busy on the agent's behalf. It must not make the
   // composer look like an idle captain turn while the owning agent is offline.
@@ -7555,6 +7558,21 @@ function setNudgeAvailable(available) {
 }
 setNudgeAvailable(sessionData.agentNudgeAvailable === true);
 
+/** Asks the server whether this review is linked now. A failed check keeps what the page shows. */
+async function refreshNudgeAvailability() {
+  try {
+    const response = await fetch("/api/" + key + "/nudge", { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return;
+    const { available } = await response.json();
+    if (nudgePending || available === !nudgeAgentButton.hidden) return;
+    const hadFocus = document.activeElement === nudgeAgentButton;
+    setNudgeAvailable(available === true);
+    if (hadFocus && !available) copyNudgeButton.focus();
+  } catch {
+    // Offline or restarting: the next time the notice opens asks again.
+  }
+}
+
 /** @param {"" | "pending" | "success" | "info" | "error"} tone @param {string} text */
 function setNudgeStatus(tone, text) {
   if (!nudgeStatus || !nudgeStatusText) return;
@@ -7570,7 +7588,7 @@ nudgeAgentButton.onclick = async () => {
   nudgeAgentButton.setAttribute("aria-busy", "true");
   setNudgeStatus("pending", "Sending to T3 Code…");
   try {
-    const response = await fetch("/api/" + key + "/nudge", { method: "POST", signal: AbortSignal.timeout(12_000) });
+    const response = await fetch("/api/" + key + "/nudge", { method: "POST", signal: AbortSignal.timeout(40_000) });
     const result = await response.json();
     if (response.status === 409 && result.status === "unavailable") {
       // The binding was cleared after this page loaded. Retire the button and keep focus on an action.
