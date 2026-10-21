@@ -1,5 +1,35 @@
 /* Shell chrome for the whiteboard frame. Bundled into dist/whiteboard/whiteboard.css
-   together with Excalidraw's own stylesheet by scripts/build.js. */
+   together with Excalidraw's own stylesheet by scripts/build.js.
+
+   The palette (#3795) is the chrome's: applyPalette in whiteboard-frame.js injects the shadcn
+   tokens from src/theme-presets.js and the reviewer's preset, and each token holds its light and
+   dark value in light-dark(), so the body's color-scheme picks the side. Controls follow the
+   chrome's square Lyra shapes (--radius-* are 0), Inter type and button recipes in src/chrome.css,
+   and Excalidraw's own toolbars, menus and dialogs are squared to match below. */
+
+/* Inter, vendored like the chrome's: esbuild copies these next to whiteboard.css, which the
+   /whiteboard-assets route serves with the CORS header the opaque-origin frame needs. */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-ext-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 html,
 body {
@@ -8,20 +38,22 @@ body {
 }
 
 body {
-  font-family:
-    Geist,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
-  background: #fffbf3;
-  color: #17130a;
+  color-scheme: light;
+  --wb-font: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Status colours sit outside the presets; these match src/chrome.css. */
+  --wb-success: light-dark(oklch(0.55 0.13 150), oklch(0.72 0.15 150));
+  --wb-amber-surface: light-dark(oklch(0.96 0.05 85), oklch(0.27 0.04 80));
+  --wb-amber-border: light-dark(oklch(0.82 0.1 80), oklch(0.47 0.08 80));
+  --wb-scrim: light-dark(oklch(0.145 0.008 326 / 35%), oklch(0.1 0.01 326 / 72%));
+  font-family: var(--wb-font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  background: var(--background, Canvas);
+  color: var(--foreground, CanvasText);
 }
 
 body[data-lavish-whiteboard-theme="dark"] {
-  background: #0f1115;
-  color: #f7f3ea;
+  color-scheme: dark;
 }
 
 #wbShell {
@@ -34,82 +66,141 @@ body[data-lavish-whiteboard-theme="dark"] {
 #wbHeader {
   display: flex;
   align-items: center;
-  gap: 10px;
-  /* Right padding reserves room for the chrome overlay's close control,
-     which floats above this header from outside the iframe. */
-  padding: 8px 52px 8px 12px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.35);
+  gap: 8px;
+  box-sizing: border-box;
+  /* 48px centres the controls on the chrome overlay's close button. Right padding reserves room
+     for that button, which floats above this header from outside the iframe. */
+  min-height: 48px;
+  padding: 0 52px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--background);
   flex: none;
 }
 
 #wbTitle {
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 #wbNote {
   flex: 1;
   min-width: 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(128, 128, 128, 0.45);
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 0;
+  border: 1px solid var(--input);
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
 }
 
-#wbHeader button {
+#wbNote::placeholder {
+  color: var(--muted-foreground);
+}
+
+#wbNote:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+/* The chrome's .button: Queue feedback is the frame's one filled action. */
+#wbHeader button,
+#wbLinkConfirmOpen,
+.wb-link-confirm-actions button {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  box-sizing: border-box;
   border: 0;
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-weight: 700;
-  font-size: 13px;
+  border-radius: 0;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  background: #f4c95d;
-  color: #17130a;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  transition:
+    background-color 120ms ease-out,
+    opacity 120ms ease-out;
 }
 
-#wbHeader button:hover {
-  background: #ffd877;
+#wbHeader button:hover:not(:disabled),
+#wbLinkConfirmOpen:hover {
+  background: var(--primary-hover);
 }
 
 #wbHeader button:disabled {
-  opacity: 0.6;
-  cursor: default;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+#wbHeader button:focus-visible,
+.wb-link-confirm-actions button:focus-visible,
+.wb-banner button:focus-visible,
+.wb-activate:focus-visible .wb-activate-label {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Secondary actions take the chrome's outline recipe. */
+#wbHeader #wbFullscreen,
+#wbLinkConfirmCancel {
+  border: 1px solid var(--input);
+  background: transparent;
+  color: inherit;
+}
+
+#wbHeader #wbFullscreen:hover:not(:disabled),
+#wbLinkConfirmCancel:hover {
+  background: var(--muted);
 }
 
 .wb-banner {
   flex: none;
   padding: 8px 12px;
-  font-size: 13px;
-  background: rgba(96, 165, 250, 0.16);
-  border-bottom: 1px solid rgba(96, 165, 250, 0.4);
+  font-size: 12px;
+  line-height: 1.4;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .wb-banner-warn {
-  background: rgba(244, 201, 93, 0.18);
-  border-bottom-color: rgba(244, 201, 93, 0.55);
+  background: var(--wb-amber-surface);
+  border-bottom-color: var(--wb-amber-border);
 }
 
 .wb-banner button {
   margin-left: 8px;
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 6px;
+  height: 24px;
+  border: 1px solid var(--input);
+  border-radius: 0;
   background: transparent;
   color: inherit;
+  font: inherit;
   font-size: 12px;
-  padding: 4px 8px;
+  font-weight: 600;
+  padding: 0 8px;
   cursor: pointer;
+}
+
+.wb-banner button:hover {
+  background: var(--muted);
 }
 
 .wb-status {
   flex: none;
   padding: 8px 12px;
-  font-size: 13px;
-  background: rgba(52, 211, 153, 0.14);
-  border-bottom: 1px solid rgba(52, 211, 153, 0.4);
+  font-size: 12px;
+  line-height: 1.4;
+  background: color-mix(in oklch, var(--wb-success) 12%, var(--background));
+  border-bottom: 1px solid color-mix(in oklch, var(--wb-success) 35%, transparent);
 }
 
 #wbEditor {
@@ -124,7 +215,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgba(23, 19, 10, 0.42);
+  background: var(--wb-scrim);
 }
 
 .wb-link-confirm[hidden] {
@@ -134,21 +225,26 @@ body[data-lavish-whiteboard-theme="dark"] {
 .wb-link-confirm-card {
   width: min(100%, 440px);
   box-sizing: border-box;
-  padding: 18px;
-  border: 1px solid rgba(128, 128, 128, 0.45);
-  border-radius: 12px;
-  background: #fffbf3;
-  box-shadow: 0 16px 42px rgba(23, 19, 10, 0.26);
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  background: var(--popover);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
 }
 
 .wb-link-confirm-title {
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .wb-link-confirm-copy,
 .wb-link-confirm-url {
-  margin: 9px 0 0;
-  font-size: 13px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.wb-link-confirm-copy {
+  color: var(--muted-foreground);
 }
 
 .wb-link-confirm-url {
@@ -156,65 +252,22 @@ body[data-lavish-whiteboard-theme="dark"] {
   overflow: auto;
   overflow-wrap: anywhere;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(128, 128, 128, 0.12);
-  font-family: inherit;
+  border: 1px solid var(--border-color);
+  background: var(--background);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .wb-link-confirm-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   margin-top: 16px;
-}
-
-.wb-link-confirm-actions button {
-  border: 1px solid rgba(128, 128, 128, 0.5);
-  border-radius: 8px;
-  padding: 8px 12px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.wb-link-confirm-actions button:hover {
-  background: rgba(128, 128, 128, 0.15);
-}
-
-#wbLinkConfirmOpen {
-  border-color: transparent;
-  background: #f4c95d;
-  color: #17130a;
-}
-
-#wbLinkConfirmOpen:hover {
-  background: #ffd877;
-}
-
-body[data-lavish-whiteboard-theme="dark"] .wb-link-confirm-card {
-  background: #1a1d23;
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.45);
 }
 
 /* Inline placement: no chrome close control floats over the header, so drop
    the reserved right padding; the fullscreen action takes that corner. */
 body[data-lavish-whiteboard-mode="inline"] #wbHeader {
   padding-right: 12px;
-}
-
-#wbFullscreen {
-  background: transparent;
-  border: 1px solid rgba(128, 128, 128, 0.45);
-  color: inherit;
-  font-weight: 600;
-}
-
-body[data-lavish-whiteboard-theme="dark"] #wbFullscreen:hover,
-#wbFullscreen:hover {
-  background: rgba(128, 128, 128, 0.15);
 }
 
 /* Click-catcher that keeps an inline whiteboard in view mode until the user
@@ -231,19 +284,144 @@ body[data-lavish-whiteboard-theme="dark"] #wbFullscreen:hover,
   background: transparent;
 }
 
+.wb-activate:focus-visible {
+  outline: none;
+}
+
 .wb-activate-label {
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 500;
   padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(23, 19, 10, 0.72);
-  color: #f4c95d;
-  border: 1px solid rgba(244, 201, 93, 0.55);
-  opacity: 0.85;
+  background: var(--popover);
+  color: var(--foreground);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  opacity: 0.9;
+  transition: opacity 120ms ease-out;
 }
 
 .wb-activate:hover .wb-activate-label,
 .wb-activate:focus-visible .wb-activate-label {
   opacity: 1;
+}
+
+/* Excalidraw's accent (its customizing-styles guide: --color-primary* on .excalidraw and
+   .excalidraw.theme--dark). Its light theme fills with the accent under white text, so it takes
+   --primary. Its dark theme pairs a light accent with dark text, so it takes --accent-text, the
+   chrome's rose for dark surfaces. Its UI font becomes Inter; canvas fonts are untouched. */
+body .excalidraw,
+body .excalidraw.theme--light {
+  --ui-font: var(--wb-font);
+  --color-primary: var(--primary);
+  --color-primary-darker: var(--primary-hover);
+  --color-primary-darkest: color-mix(in oklch, var(--primary) 80%, black);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-light: color-mix(in oklch, var(--primary) 14%, var(--background));
+  --color-primary-light-darker: color-mix(in oklch, var(--primary) 24%, var(--background));
+  --color-brand-hover: var(--primary-hover);
+  --color-brand-active: color-mix(in oklch, var(--primary) 80%, black);
+  --color-surface-primary-container: color-mix(in oklch, var(--primary) 14%, var(--background));
+  --color-on-primary-container: var(--accent-text-hover);
+}
+
+body .excalidraw.theme--dark {
+  --color-primary: var(--accent-text);
+  --color-primary-darker: var(--accent-text-hover);
+  --color-primary-darkest: var(--accent-text-hover);
+  --color-primary-hover: var(--accent-text-hover);
+  --color-primary-light: color-mix(in oklch, var(--accent-text) 22%, var(--background));
+  --color-primary-light-darker: color-mix(in oklch, var(--accent-text) 32%, var(--background));
+  --color-brand-hover: var(--accent-text-hover);
+  --color-brand-active: var(--accent-text-hover);
+  --color-surface-primary-container: color-mix(in oklch, var(--primary) 55%, var(--background));
+  --color-on-primary-container: color-mix(in oklch, var(--accent-text) 35%, white);
+}
+
+/* Lyra is square, so Excalidraw's UI chrome is too. Its two radius tokens cover the toolbar,
+   islands, menus, sidebar and buttons; the rules after them catch the controls it rounds with
+   literal values. Avatars, the collaborator count and slider thumbs stay round, as identity
+   marks and handles rather than corners. The canvas draws in <canvas>, so shapes, round
+   corners on elements and selection handles are untouched. */
+body .excalidraw {
+  --border-radius-md: 0;
+  --border-radius-lg: 0;
+}
+
+body .excalidraw .color-picker__button,
+body .excalidraw .color-picker__button--large {
+  --radius: 0;
+}
+
+body .excalidraw .excalidraw-eye-dropper-preview,
+body .excalidraw .excalidraw-eye-dropper-trigger,
+body .excalidraw .color-picker,
+body .excalidraw .color-picker-content--default,
+body .excalidraw .color-picker-swatch,
+body .excalidraw .color-picker-transparent,
+body .excalidraw .color-picker__input-label,
+body .excalidraw .picker,
+body .excalidraw .picker-content,
+body .excalidraw .range-input,
+body .excalidraw-tooltip,
+body .excalidraw .Checkbox .Checkbox-box,
+body .excalidraw .library-unit__checkbox .Checkbox-box,
+body .excalidraw .Modal__content,
+body .excalidraw .single-library-item-status,
+body .excalidraw .single-library-item--remove svg,
+body .excalidraw .library-actions-counter,
+body .excalidraw .ExcTextField__input,
+body .excalidraw .command-palette-dialog .shortcut .shortcut-key,
+body .excalidraw .context-menu,
+body .excalidraw .RadioGroup,
+body .excalidraw .RadioGroup__choice,
+body .excalidraw .RadioGroup__choice input,
+body .excalidraw .Switch,
+body .excalidraw .Switch::before,
+body .excalidraw .Switch input,
+body .excalidraw .ImageExportModal__preview__canvas,
+body .excalidraw .ExcButton,
+body .excalidraw .PasteChartDialog .ChartPreview,
+body .excalidraw .Card .Card-icon,
+body .excalidraw button.ExportDialog-imageExportButton,
+body .excalidraw .default-sidebar .sidebar-triggers,
+body .excalidraw .OverwriteConfirm__Description,
+body .excalidraw .OverwriteConfirm__Description__icon,
+body .excalidraw .ttd-dialog-submit-shortcut__key,
+body .excalidraw .ElementLinkDialog,
+body .excalidraw .Toast,
+body .excalidraw .follow-mode__badge,
+body .excalidraw .follow-mode__disconnect-btn,
+body .excalidraw .dropdown-select,
+body .excalidraw input[type="text"],
+body .excalidraw textarea:not(.excalidraw-wysiwyg),
+body .excalidraw ::-webkit-scrollbar-thumb,
+body .excalidraw__embeddable-container .excalidraw__embeddable-hint {
+  border-radius: 0;
+}
+
+/* Filled controls match the header's Queue feedback in both themes: the chrome's primary fill
+   under its own foreground, rather than Excalidraw's pale dark-theme pill. */
+body .excalidraw .library-menu-browse-button,
+body .excalidraw.theme--dark .library-menu-browse-button,
+body .excalidraw .sidebar-tab-trigger[data-state="active"],
+body .excalidraw .ExcButton--color-primary.ExcButton--variant-filled,
+body .excalidraw .Dialog__action-button--primary {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* Library section headings read as headings, in the foreground colour like the chrome's, rather
+   than in the accent Excalidraw gives them. */
+body .excalidraw .library-menu-items-container__header,
+body .excalidraw .library-menu-items__no-items__label {
+  color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #wbHeader button,
+  #wbLinkConfirmOpen,
+  .wb-link-confirm-actions button,
+  .wb-activate-label {
+    transition: none;
+  }
 }

@@ -1798,6 +1798,135 @@ body {
 .handoff-takeover:hover {
   color: var(--fg);
 }
+/* The agent nudge notice (#3795): shadcn's alert shape, a title, one line of copy, the actions,
+   then the last attempt's outcome. Nudge agent leads as the outline button and Copy nudge
+   follows as a ghost, so Send stays the composer's only filled control. */
+.nudge-notice {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+.nudge-notice p {
+  margin: 0;
+}
+.nudge-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+  font-size: var(--text-xs);
+  font-weight: var(--w-semi);
+  line-height: var(--lh-xs);
+}
+.nudge-title > svg {
+  flex: 0 0 auto;
+  color: var(--fg-faint);
+}
+.nudge-copy {
+  color: var(--fg-dim);
+  font-weight: var(--w-regular);
+}
+.nudge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.nudge-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nudge-actions .button > svg,
+.nudge-actions .t-icon-swap svg {
+  flex: 0 0 auto;
+  display: block;
+}
+.button.button-outline {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+}
+.button.button-outline:hover:not(:disabled) {
+  background: var(--muted);
+}
+#nudgeAgent > svg {
+  color: var(--accent-text);
+}
+#nudgeAgent[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.55;
+}
+#nudgeAgent[aria-busy="true"]:hover {
+  background: transparent;
+}
+#copyNudge[data-copied="true"] .t-icon[data-icon="b"] {
+  color: var(--success);
+}
+.nudge-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--fg-muted);
+  transition:
+    opacity var(--text-swap-dur) var(--text-swap-ease),
+    translate var(--text-swap-dur) var(--text-swap-ease);
+}
+@starting-style {
+  .nudge-status {
+    opacity: 0;
+    translate: 0 calc(var(--text-swap-translate-y) / -2);
+  }
+}
+.nudge-status[data-tone=""] {
+  display: none;
+}
+.nudge-status-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.nudge-status-icon > span {
+  grid-area: 1 / 1;
+  display: none;
+}
+.nudge-status-icon svg {
+  display: block;
+}
+.nudge-status[data-tone="pending"] [data-icon="pending"],
+.nudge-status[data-tone="success"] [data-icon="success"],
+.nudge-status[data-tone="info"] [data-icon="info"],
+.nudge-status[data-tone="error"] [data-icon="error"] {
+  display: block;
+}
+.nudge-status[data-tone="pending"] [data-icon="pending"] svg {
+  animation: spin 0.8s linear infinite;
+}
+.nudge-status[data-tone="success"] .nudge-status-icon {
+  color: var(--success);
+}
+.nudge-status[data-tone="info"] .nudge-status-icon {
+  color: var(--fg-faint);
+}
+.nudge-status[data-tone="error"] {
+  color: var(--fg);
+}
+.nudge-status[data-tone="error"] .nudge-status-icon {
+  color: var(--danger);
+}
+@media (max-width: 860px) {
+  .nudge-actions .button {
+    height: 32px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nudge-status {
+    transition: none;
+  }
+  .nudge-status[data-tone="pending"] [data-icon="pending"] svg {
+    animation: none;
+  }
+}
 .outdated-actions {
   align-items: center;
   display: flex;
@@ -3004,7 +3133,7 @@ body.layout-gate-active iframe#artifact {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--fg-faint);
   cursor: pointer;
@@ -3070,6 +3199,18 @@ body.layout-gate-active iframe#artifact {
   padding-left: 35px;
   font-size: var(--text-xs);
   color: var(--accent-text);
+}
+/* Why desktop notifications can or cannot appear here (#3795), under the Notifications item and
+   above its one action, aligned with the item text. */
+.menu-note {
+  margin: 0;
+  padding: 0 10px 6px 35px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  line-height: var(--lh-xs);
+}
+.menu-note[hidden] {
+  display: none;
 }
 
 /* ---- Scrollbars: square like Lyra, a mauve thumb that turns rose while dragged ---- */

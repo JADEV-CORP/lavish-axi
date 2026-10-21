@@ -21,6 +21,8 @@ import {
   CHROME_LAYOUT_GATE_MAX_HOLD_MS,
   agentDisplay,
   createChromeHtml,
+  loopbackSessionUrl,
+  reviewIdentity,
   createSdkJs,
   defaultComposerBundleFile,
   displayPathParts,
@@ -33,11 +35,68 @@ import {
   readAttachmentUploadBody,
   resolveArtifactAsset,
   resolveDesignAssetPath,
+  resolveBrowserDisconnectGraceMs,
   resolveIdleTimeoutMs,
   resolveWatchTarget,
   serve,
 } from "../src/server.js";
 import { canonicalFile, sessionKey, SessionStore } from "../src/session-store.js";
+import { bindAgentNudge, createAgentNudger } from "../src/agent-nudge.js";
+
+test("agent nudge requires chrome provenance and keeps its binding private", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-nudge-http-"));
+  let calls = 0;
+  const artifact = path.join(dir, "review.html");
+  await writeFile(artifact, "<!doctype html><html><body>Review</body></html>");
+  const nudger = createAgentNudger(dir, {
+    request: async () => {
+      calls++;
+      return new Response(null, { status: 202 });
+    },
+  });
+  const server = await serve({
+    port: 0,
+    host: "127.0.0.1",
+    hosts: ["127.0.0.1"],
+    stateFile: path.join(dir, "state.json"),
+    agentNudger: nudger,
+  });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const opened = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    });
+    const session = await opened.json();
+    const key = session.key;
+    await bindAgentNudge(dir, key, "https://relay.t3.codes/v1/hooks/test/thread/credential");
+    const chrome = await (await fetch(`${base}/session/${key}`)).text();
+    assert.match(chrome, /"agentNudgeAvailable":true/);
+    assert.doesNotMatch(chrome, /relay\.t3|credential/);
+    for (const headers of [{}, { origin: "https://evil.example" }, { origin: "null" }]) {
+      assert.equal((await fetch(`${base}/api/${key}/nudge`, { method: "POST", headers })).status, 403);
+    }
+    assert.equal(calls, 0);
+    const response = await fetch(`${base}/api/${key}/nudge`, { method: "POST", headers: { origin: base } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).status, "sent");
+    assert.equal(calls, 1);
+    const other = path.join(dir, "other.html");
+    await writeFile(other, "<!doctype html><html><body>Other review</body></html>");
+    await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: other }),
+    });
+    await fetch(`${base}/api/${key}/end`, { method: "POST", headers: { origin: base } });
+    assert.equal((await fetch(`${base}/api/${key}/nudge`, { method: "POST", headers: { origin: base } })).status, 409);
+    assert.equal(calls, 1);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 async function chromeClientSource() {
   return readFile(new URL("../src/chrome-client.js", import.meta.url), "utf8");
@@ -1172,9 +1231,12 @@ test("chrome shows a waiting banner when no agent has attached", async () => {
   const js = await chromeClientSource();
   const css = await chromeCssSource();
 
-  assert.match(html, /id="presenceBanner"/);
-  assert.match(html, /Your agent is not listening/);
-  assert.match(html, /<button class="handoff-takeover" id="copyNudge" type="button">Copy nudge<\/button>/);
+  assert.match(html, /id="presenceBanner" role="region" aria-labelledby="presenceTitle"/);
+  assert.match(html, /<span>Your agent is not listening<\/span>/);
+  assert.match(html, /<button class="button button-outline" id="nudgeAgent" type="button" hidden aria-busy="false"/);
+  assert.match(html, /id="copyNudge" type="button" data-copied="false">/);
+  assert.match(html, /<span id="copyNudgeLabel">Copy nudge<\/span>/);
+  assert.match(html, /id="nudgeStatus" role="status" aria-live="polite" data-tone=""/);
   assert.match(js, /presenceBanner\.hidden = ended \|\| agentPresence !== "waiting"/);
   assert.match(css, /\.presence-banner\{/);
 });
@@ -4546,6 +4608,20 @@ test("resolveIdleTimeoutMs defaults, parses, and only explicit opt-outs disable"
   assert.equal(resolveIdleTimeoutMs({ LAVISH_AXI_IDLE_TIMEOUT_MS: "-1" }), 30 * 60_000);
   assert.equal(resolveIdleTimeoutMs({ LAVISH_AXI_IDLE_TIMEOUT_MS: "30000ms" }), 30 * 60_000);
   assert.equal(resolveIdleTimeoutMs({ LAVISH_AXI_IDLE_TIMEOUT_MS: "later" }), 30 * 60_000);
+  // Node's setTimeout ceiling is 2^31-1 ms; larger delays fire after 1ms instead.
+  assert.equal(resolveIdleTimeoutMs({ LAVISH_AXI_IDLE_TIMEOUT_MS: "3000000000" }), 2 ** 31 - 1);
+});
+
+test("resolveBrowserDisconnectGraceMs defaults, parses, and only explicit opt-outs disable", () => {
+  assert.equal(resolveBrowserDisconnectGraceMs({}), 10_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "" }), 10_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: " 120000 " }), 120_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "0" }), null);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "OFF" }), null);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "-1" }), 10_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "30000ms" }), 10_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "later" }), 10_000);
+  assert.equal(resolveBrowserDisconnectGraceMs({ LAVISH_AXI_DISCONNECT_GRACE_MS: "3000000000" }), 2 ** 31 - 1);
 });
 
 async function expectDoneWithin(server, ms) {
@@ -5054,6 +5130,73 @@ test("closing the last review WebSocket releases an active poll without ending t
       (response) => response.json(),
     );
     assert.deepEqual(stillOpen, { status: "waiting" });
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("LAVISH_AXI_DISCONNECT_GRACE_MS sets the reconnect grace a served poll waits out", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({
+    env: { ...process.env, LAVISH_AXI_DISCONNECT_GRACE_MS: "20" },
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    version: "9.9.9-test",
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const opened = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((response) => response.json());
+    const browser = await startPresenceStream(base, opened.key);
+    assert.equal(await browser.next(), "waiting");
+    // A poll that outlives the 20ms grace but not the 10s default proves the env value was used.
+    const poll = fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=1000`).then((response) =>
+      response.json(),
+    );
+    assert.equal(await browser.next(), "listening");
+    await browser.close();
+    assert.deepEqual(await poll, { status: "browser_disconnected" });
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("LAVISH_AXI_DISCONNECT_GRACE_MS=off keeps an active poll waiting after the last review disconnects", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({
+    env: { ...process.env, LAVISH_AXI_DISCONNECT_GRACE_MS: "off" },
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    version: "9.9.9-test",
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const opened = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((response) => response.json());
+    const browser = await startPresenceStream(base, opened.key);
+    assert.equal(await browser.next(), "waiting");
+    const poll = fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=150`).then((response) =>
+      response.json(),
+    );
+    assert.equal(await browser.next(), "listening");
+    await browser.close();
+    assert.deepEqual(await poll, { status: "waiting" }, "with the grace off only the poll's own timeout ends it");
+    const next = await fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((response) =>
+      response.json(),
+    );
+    assert.deepEqual(next, { status: "waiting" }, "no stale browser_disconnected may be left for a later poll");
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });
@@ -6621,6 +6764,41 @@ function restoreEnv(name, value) {
     process.env[name] = value;
   }
 }
+
+test("a review is named by its artifact title, else a short folder and file, never the full path", () => {
+  assert.deepEqual(reviewIdentity("/home/someone/billing-flow/review.html", "Billing flow review"), {
+    label: "Billing flow review",
+    context: "billing-flow/review.html",
+  });
+  assert.deepEqual(reviewIdentity("/home/someone/onboarding/review.html", "  "), {
+    label: "onboarding/review.html",
+    context: "onboarding/review.html",
+  });
+  const chrome = createChromeHtml(
+    { key: "abc", file: "/home/someone/onboarding/review.html" },
+    { reviewLabel: "onboarding/review.html", reviewContext: "onboarding/review.html" },
+  );
+  assert.match(chrome, /"reviewLabel":"onboarding\/review.html"/);
+  assert.match(chrome, /<span id="notifyAllowLabel">Allow desktop notifications<\/span>/);
+  assert.match(chrome, /<p class="menu-note" id="notifyNote" role="status" hidden><\/p>/);
+});
+
+test("only a browser on this machine is offered the loopback address for desktop notifications", () => {
+  const request = (hostname, remoteAddress, localAddress = "100.64.0.7") => ({
+    hostname,
+    socket: { remoteAddress, localAddress, localPort: 4387 },
+  });
+  assert.equal(
+    loopbackSessionUrl(request("box.tail.ts.net", "100.64.0.7"), "abc"),
+    "http://127.0.0.1:4387/session/abc",
+    "this machine reached its own Tailscale address",
+  );
+  assert.equal(loopbackSessionUrl(request("box.tail.ts.net", "100.64.0.9"), "abc"), "", "a phone on the tailnet");
+  assert.equal(loopbackSessionUrl(request("127.0.0.1", "127.0.0.1", "127.0.0.1"), "abc"), "", "already secure");
+  assert.equal(loopbackSessionUrl(request("localhost", "::1", "::1"), "abc"), "");
+  assert.equal(loopbackSessionUrl(request("[::1]", "::1", "::1"), "abc"), "", "a bracketed IPv6 loopback host");
+  assert.equal(loopbackSessionUrl({}, "abc"), "");
+});
 
 test("chrome falls back to a default favicon and title when none are provided", () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });

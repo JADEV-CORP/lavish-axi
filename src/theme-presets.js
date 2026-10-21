@@ -138,6 +138,18 @@ export function themePresetCss() {
     .join("\n");
 }
 
+// The whiteboard frame's palette (#3795): Lavish's tokens on :root and the other presets under the
+// same :root[data-preset] selectors the chrome uses, so its header and Excalidraw's accent follow the
+// reviewer's preset. The frame sets the attribute from whiteboardPresetId.
+export function whiteboardThemeCss() {
+  return `:root {\n${themePresetDeclarations(LAVISH)}\n}\n${themePresetCss()}`;
+}
+
+// A known non-default preset id, or "" for Lavish and anything else a message carries.
+export function whiteboardPresetId(value) {
+  return typeof value === "string" && value !== LAVISH.id && THEME_PRESET_IDS.includes(value) ? value : "";
+}
+
 // A preset as the DaisyUI colors of an artifact on `data-theme="lavish-auto"`: each one a light and a
 // dark value, taken from the chrome token on that side. Lavish itself returns null, since the
 // artifact's inline theme already holds its palette.

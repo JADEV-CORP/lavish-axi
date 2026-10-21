@@ -441,6 +441,7 @@ function mentionMenu() {
       place();
     },
     onKeyDown({ event }) {
+      if (event.isComposing || event.keyCode === 229) return false;
       if (!current) return false;
       const count = current.items.length;
       const handled = () => {

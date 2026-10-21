@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.90](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.89...lavish-axi-v0.1.90) (2026-10-18)
+
+
+### Features
+
+* **server:** make the browser-disconnect grace configurable ([#433](https://github.com/kunchenguid/lavish-axi/issues/433)) ([1ea519f](https://github.com/kunchenguid/lavish-axi/commit/1ea519f41b2b6c039f9b2410216503f9e64038f5))
+
+## [0.1.89](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.88...lavish-axi-v0.1.89) (2026-10-15)
+
+
+### Bug Fixes
+
+* ignore the enter that confirms an ime conversion ([#424](https://github.com/kunchenguid/lavish-axi/issues/424)) ([9bdc01e](https://github.com/kunchenguid/lavish-axi/commit/9bdc01e2e124fa7e2f7dbe71e2027fdfa9a1538c))
+
+## [0.1.88](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.87...lavish-axi-v0.1.88) (2026-10-13)
+
+
+### Bug Fixes
+
+* **sdk:** follow links on Cmd-click only on macOS, Ctrl-click elsewhere ([#422](https://github.com/kunchenguid/lavish-axi/issues/422)) ([7cc7a4d](https://github.com/kunchenguid/lavish-axi/commit/7cc7a4d91f0ac160a6ab42db90f2120c977afd01))
+
+## [0.1.87](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.86...lavish-axi-v0.1.87) (2026-10-12)
+
+
+### Bug Fixes
+
+* **cli:** adopt a running server that is newer than the CLI ([#416](https://github.com/kunchenguid/lavish-axi/issues/416)) ([da556d8](https://github.com/kunchenguid/lavish-axi/commit/da556d8ef2f4a0e37650f5a7763bcd8f2278a7ce))
+
+## [0.1.86](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.85...lavish-axi-v0.1.86) (2026-10-10)
+
+
+### Features
+
+* **sdk:** let artifacts declare their initial annotation mode ([#413](https://github.com/kunchenguid/lavish-axi/issues/413)) ([fac7c00](https://github.com/kunchenguid/lavish-axi/commit/fac7c000c4dd1cb7316fcb89dc23ed7cc1d73907))
+
+## [0.1.85](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.84...lavish-axi-v0.1.85) (2026-10-09)
+
+
+### Features
+
+* **whiteboard:** load user Excalidraw libraries and render library icon nodes ([#410](https://github.com/kunchenguid/lavish-axi/issues/410)) ([57d9a2b](https://github.com/kunchenguid/lavish-axi/commit/57d9a2bc8cdfcfda0f21bde5a5b615965999dbd5))
+
+## [0.1.84](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.83...lavish-axi-v0.1.84) (2026-10-07)
+
+
+### Bug Fixes
+
+* **server:** constrain sessions and assets to HTML artifact trees ([#406](https://github.com/kunchenguid/lavish-axi/issues/406)) ([ca8ca78](https://github.com/kunchenguid/lavish-axi/commit/ca8ca78f88ab5ef6a86cadda731af3f4425c9296))
+
 ## [0.1.83](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.82...lavish-axi-v0.1.83) (2026-10-06)
 
 

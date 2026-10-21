@@ -38,10 +38,13 @@ import {
   serializeLayoutWarnings,
 } from "./layout-warnings.js";
 import * as artifactRevisions from "./artifact-revisions.js";
+import { createAgentNudger } from "./agent-nudge.js";
 import * as findInPage from "./find-in-page.js";
 import * as mermaidNode from "./mermaid-node.js";
 import * as tableCellHelpers from "./table-cell.js";
-import { extractMermaidSources, mermaidSourceHash } from "./mermaid-source.js";
+import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
+import { createExcalidrawLibraryCache, excalidrawLibrariesDir } from "./whiteboard-library-store.js";
+import { parseLibraryIconDirectives } from "./whiteboard-libraries.js";
 import { THEME_PRESET_IDS, themePresetCss, themePresetSummaries } from "./theme-presets.js";
 import {
   isValidDiagramIndex,
@@ -144,7 +147,7 @@ const WEBSOCKET_CLOSE_GRACE_MS = 250;
 // suppresses idle shutdown and makes presence wrong. Reaped on the next heartbeat after one
 // unanswered ping.
 const LIVE_EVENT_HEARTBEAT_MS = 30_000;
-const BROWSER_DISCONNECT_GRACE_MS = 10_000;
+const DEFAULT_BROWSER_DISCONNECT_GRACE_MS = 10_000;
 // An escaped popup can navigate to an artifact-owned HTML or SVG asset on the
 // server origin. Keep every artifact response sandboxed at the response layer
 // so active documents stay opaque-origin even when they are top-level.
@@ -296,7 +299,22 @@ export function resolveIdleTimeoutMs(env = process.env) {
   if (raw === "0" || raw.toLowerCase() === "off") return null;
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_IDLE_TIMEOUT_MS;
-  return value;
+  return Math.min(value, 2147483647);
+}
+
+// How long an active poll waits for a review page to reconnect after the last one drops before it
+// returns browser_disconnected. A phone that locks or backgrounds the tab drops its socket, so the
+// 10s default can be too short there. Set LAVISH_AXI_DISCONNECT_GRACE_MS to a custom millisecond
+// budget, or to 0/off so a disconnect never releases the poll (only feedback, an end, or its own
+// timeout does). Both resolvers clamp to 2147483647 ms, setTimeout's maximum; a larger delay would
+// overflow and fire after about 1 ms.
+export function resolveBrowserDisconnectGraceMs(env = process.env) {
+  const raw = env.LAVISH_AXI_DISCONNECT_GRACE_MS?.trim();
+  if (raw === undefined || raw === "") return DEFAULT_BROWSER_DISCONNECT_GRACE_MS;
+  if (raw === "0" || raw.toLowerCase() === "off") return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_BROWSER_DISCONNECT_GRACE_MS;
+  return Math.min(value, 2147483647);
 }
 
 /**
@@ -311,7 +329,7 @@ export async function serve({
   log = null,
   pollHeartbeatMs = 15_000,
   liveEventHeartbeatMs = LIVE_EVENT_HEARTBEAT_MS,
-  browserDisconnectGraceMs = BROWSER_DISCONNECT_GRACE_MS,
+  browserDisconnectGraceMs = resolveBrowserDisconnectGraceMs(env),
   idleTimeoutMs = resolveIdleTimeoutMs(),
   host = bindHost(env),
   hosts,
@@ -322,6 +340,7 @@ export async function serve({
   extraListenHosts = [],
   bindRecoveryDelaysMs = BIND_RECOVERY_DELAYS_MS,
   whiteboardAssetsDir = defaultWhiteboardAssetsDir(),
+  agentNudger = createAgentNudger(path.dirname(stateFile)),
   // The newer-fork-version checker (src/fork-update.js). The `server` command passes one; servers
   // started without it, tests included, never check.
   /** @type {ReturnType<typeof import("./fork-update.js").createForkUpdateChecker> | null} */
@@ -457,6 +476,7 @@ export async function serve({
 
   function scheduleBrowserDisconnect(key) {
     clearBrowserDisconnectTimer(key);
+    if (browserDisconnectGraceMs === null) return;
     if (shuttingDown || hasLiveEventClient(key) || !activePolls.has(key)) return;
     const timer = setTimeout(() => {
       browserDisconnectTimers.delete(key);
@@ -664,6 +684,8 @@ export async function serve({
   }
   // Whiteboard sidecar files live next to state.json, keyed by session + diagram.
   const whiteboardStateRoot = path.dirname(stateFile);
+  const loadExcalidrawLibraries = createExcalidrawLibraryCache();
+  const libraryDir = excalidrawLibrariesDir(whiteboardStateRoot);
 
   // DNS-rebinding guard. isSameOriginRequest (used on /share and the whiteboard
   // write routes) stops classic cross-origin CSRF but NOT DNS rebinding: a page
@@ -1187,6 +1209,33 @@ export async function serve({
   // reaches the agent as the user's own instructions. The session key is derived
   // from the artifact path, not a secret, so knowing it must not be enough -
   // only this server's own chrome may queue prompts.
+  app.post("/api/:key/nudge", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin nudge rejected" });
+        return;
+      }
+      const session = await store.findByKey(req.params.key);
+      if (!session) {
+        res.status(404).json({ error: "session not found" });
+        return;
+      }
+      if (session.status === "ended") {
+        res.status(409).json({ status: "ended" });
+        return;
+      }
+      const presence = computePresence(session.key, activePolls, deliveredFeedback);
+      if (presence !== "waiting") {
+        res.json({ status: presence });
+        return;
+      }
+      const result = await agentNudger.send(session);
+      res.status(result.status === "failed" ? 502 : result.status === "unavailable" ? 409 : 200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/:key/prompts", async (req, res, next) => {
     try {
       if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
@@ -1525,6 +1574,7 @@ export async function serve({
       await watchSession(session, watchers, events, logEvent, reloadDebounceMs);
       const artifactHtml = await readFile(session.file, "utf8").catch(() => "");
       const { faviconTag, title } = extractArtifactHead(artifactHtml);
+      const review = reviewIdentity(session.file, title);
       // Nothing legitimately frames the review chrome - it is the top-level
       // page, and shares/exports ship standalone HTML rather than embedding it.
       // Refusing to be framed denies an attacker page both a window handle to
@@ -1538,7 +1588,10 @@ export async function serve({
         createChromeHtml(session, {
           layoutGateEnabled: shouldEnableLayoutGate(req.query || {}),
           faviconTag,
-          title: title ? `${title} · Lavish` : "Lavish Editor",
+          title: `${review.label} · Lavish`,
+          reviewLabel: review.label,
+          reviewContext: review.context,
+          loopbackUrl: loopbackSessionUrl(req, session.key),
           artifactRevision: chromeLoad.artifact_revision,
           artifactLoadToken: chromeLoad.artifact_load_token,
           artifactLoadSequence: chromeLoad.artifact_load_sequence,
@@ -1547,6 +1600,7 @@ export async function serve({
           attachmentMaxCount: attachmentConfig.maxPerPrompt,
           agentId: agentIds.get(session.key) || "",
           forkUpdate: forkUpdates?.current() || null,
+          agentNudgeAvailable: await agentNudger.available(session.key),
         }),
       );
     } catch (error) {
@@ -1824,12 +1878,35 @@ export async function serve({
       }
       if (refuseNonHtmlArtifact(session, res)) return;
       const html = await readFile(session.file, "utf8").catch(() => "");
-      const sources = extractMermaidSources(html).map(({ index, source }) => ({
+      const extracted = extractMermaidSources(html);
+      const usesLibraries = extracted.some(({ source }) => parseLibraryIconDirectives(source).length > 0);
+      const snapshot = usesLibraries ? await loadExcalidrawLibraries(libraryDir) : null;
+      const libraries = snapshot ? snapshot.libraries : [];
+      const sources = extracted.map(({ index, source }) => ({
         index,
         source,
-        hash: mermaidSourceHash(source),
+        hash: whiteboardSourceHash(source, libraries),
       }));
-      res.json({ sources });
+      // The chrome compares this with /api/whiteboard-libraries' version: a
+      // library file that changed between the two requests means the frame's
+      // libraries do not match these hashes.
+      res.json(snapshot ? { sources, libraries_version: snapshot.version } : { sources });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // User-supplied Excalidraw libraries for every whiteboard's library panel and
+  // for `%% lavish-icon` nodes. Read-only: Lavish never writes that directory.
+  app.get("/api/whiteboard-libraries", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin whiteboard library request rejected" });
+        return;
+      }
+      const { libraries, version } = await loadExcalidrawLibraries(libraryDir);
+      res.setHeader("cache-control", "no-store");
+      res.json({ libraries: libraries.map(({ id, items }) => ({ id, items })), version });
     } catch (error) {
       next(error);
     }
@@ -3079,6 +3156,22 @@ const chromeIcons = {
     '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
     15,
   ),
+  // Lucide unplug, send, loader-circle, circle-check, info and circle-alert for the agent nudge notice (#3795).
+  unplug: chromeIcon(
+    '<path d="m19 5 3-3"/><path d="m2 22 3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z"/>',
+    14,
+  ),
+  send: chromeIcon(
+    '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+    13,
+  ),
+  loader: chromeIcon('<path d="M21 12a9 9 0 1 1-6.219-8.56"/>', 13),
+  circleCheck: chromeIcon('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>', 13),
+  info: chromeIcon('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>', 13),
+  circleAlert: chromeIcon(
+    '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+    13,
+  ),
 };
 
 // The Lavish mark: an L in a square speech bubble. Colours come from CSS so it follows the theme.
@@ -3251,12 +3344,38 @@ if(c)c.textContent=outcome==="no-answer"?"Lavish did not answer the check, so th
 }
 })();`;
 
+// Which review a tab or notification belongs to (#3795): the artifact's own <title>, else a short
+// folder/file label. Never the full path, which would leave this machine in a desktop notification.
+export function reviewIdentity(file, artifactTitle = "") {
+  const folder = path.basename(path.dirname(String(file || "")));
+  const name = path.basename(String(file || ""));
+  const context = folder ? `${folder}/${name}` : name;
+  return { label: String(artifactTitle || "").trim() || context, context };
+}
+
+// Desktop notifications need a secure context, and plain http on a Tailscale or LAN name is not one.
+// A browser on this machine that opened such a name can reach the same session on loopback, which is,
+// so the chrome offers that link. Another device gets "" because loopback would not be this server.
+export function loopbackSessionUrl(req, key) {
+  const socket = req?.socket;
+  const strip = (/** @type {unknown} */ address) => String(address || "").replace(/^::ffff:/, "");
+  const remote = strip(socket?.remoteAddress);
+  const sameMachine =
+    Boolean(remote) && (remote === strip(socket?.localAddress) || remote === LOOPBACK_HOST || remote === "::1");
+  const host = String(req?.hostname || "").replace(/^\[|\]$/g, "");
+  if (!sameMachine || !socket?.localPort || host === LOOPBACK_HOST || host === "localhost" || host === "::1") return "";
+  return `http://${LOOPBACK_HOST}:${socket.localPort}/session/${encodeURIComponent(key)}`;
+}
+
 export function createChromeHtml(
   session,
   {
     layoutGateEnabled = true,
     faviconTag = LAVISH_DEFAULT_FAVICON,
     title = "Lavish Editor",
+    reviewLabel = "",
+    reviewContext = "",
+    loopbackUrl = "",
     artifactRevision = 0,
     artifactLoadToken = "",
     artifactLoadSequence = 0,
@@ -3265,6 +3384,7 @@ export function createChromeHtml(
     attachmentMaxCount = 0,
     attachmentAcceptedMime = ACCEPTED_IMAGE_MIME,
     agentId = "",
+    agentNudgeAvailable = false,
     /** @type {{ version: string, current: string } | null} */
     forkUpdate = null,
   } = {},
@@ -3281,6 +3401,10 @@ export function createChromeHtml(
     initialEndedBy: session.ended_by || null,
     themePresets: themePresetSummaries(),
     initialAgent: agent,
+    agentNudgeAvailable,
+    reviewLabel,
+    reviewContext,
+    loopbackUrl,
     initialChat: serializeChat(session.chat || []),
     initialChatAckIds: serializeChatAckIds(session.chat_ack_ids),
     initialChatRevision:
@@ -3323,8 +3447,8 @@ ${faviconTag}
 <body class="${bodyClass}">
 <button class="edge-reveal edge-reveal-top" id="barReveal" type="button" aria-label="Show the top bar"><span class="edge-reveal-pill">Show the top bar</span></button>
 <button class="edge-reveal edge-reveal-bottom" id="peekReveal" type="button" aria-label="Show Peek"><span class="edge-reveal-pill">Show Peek</span></button>
-<div class="bar"><div class="brand"><span class="brand-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><span class="brand-mark">Lavish</span></div><span class="bar-rule" aria-hidden="true"></span><button class="bar-path" id="copyPathBar" type="button" title="Copy path · ${escapeHtml(session.file)}" aria-label="Copy the artifact path"><span class="bar-path-dir">${escapeHtml(path.basename(path.dirname(session.file)))} /</span><span class="bar-path-file">${escapeHtml(path.basename(session.file))}</span>${chromeIcons.copy}</button><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count t-digit-group" id="warningsCount">0</span></button><div class="menu warnings-drawer t-dropdown" data-origin="top-right" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer">${chromeIcons.history}<span class="revisions-button-text" id="revisionsLatest">Revisions</span><span class="revisions-count t-digit-group" id="revisionsCount">0</span></button><div class="menu revisions-drawer t-dropdown" data-origin="top-right" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"></span><span class="agent-status-text t-text-swap" id="agentStatusText">Agent not listening</span></span><div class="pointer-mode" role="group" aria-label="Pointer mode"><button class="pointer-option" id="modeInteract" type="button" aria-pressed="false" title="${escapeHtml(modeToggleHint)}">${chromeIcons.pointer}<span>Interact</span></button><button class="pointer-option annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}">${chromeIcons.crosshair}<span>Annotate</span></button></div><div class="layout-switch" role="group" aria-label="Conversation layout"><button class="layout-option" id="layoutLeft" type="button" aria-pressed="false" aria-label="Conversation on the left" title="Conversation on the left">${chromeIcons.panelLeft}</button><button class="layout-option" id="layoutRight" type="button" aria-pressed="false" aria-label="Conversation on the right" title="Conversation on the right">${chromeIcons.panelRight}</button><button class="layout-option" id="layoutRail" type="button" aria-pressed="false" aria-label="Collapse the conversation to a rail" title="Collapse the conversation to a rail">${chromeIcons.panelRail}</button><button class="layout-option" id="layoutPeek" type="button" aria-pressed="false" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme"><span class="t-icon-swap" id="themeIconSwap" data-state="a"><span class="theme-icon t-icon" data-icon="a">${chromeIcons.moon}</span><span class="theme-icon t-icon" data-icon="b">${chromeIcons.sun}</span></span></button><div class="update-wrap" id="updateWrap" hidden><button class="update-button" id="updateButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="updatePopover">${chromeIcons.update}<span>Update</span></button><div class="menu update-popover t-dropdown" data-origin="top-right" id="updatePopover" role="dialog" aria-labelledby="updateTitle" hidden><p class="update-title" id="updateTitle">A newer Lavish is available</p><p class="update-copy" id="updateCopy"></p><pre class="update-steps" id="updateSteps"></pre><div class="update-actions"><button class="button button-ghost" id="updateDismiss" type="button">Dismiss</button><button class="button" id="updateCopySteps" type="button">Copy the steps</button></div></div></div><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu t-dropdown" data-origin="top-right" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button><button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button><div class="menu-rule"></div><button class="menu-item" id="hideBar" type="button">${chromeIcons.panelTopClose}<span>Hide the top bar</span></button><button class="menu-item" id="openThemes" type="button">${chromeIcons.palette}<span>Theme presets</span></button><button class="menu-item" id="followSystemTheme" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.monitor}<span>Follow system theme</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="startInteract" type="button" role="menuitemcheckbox" aria-checked="false">${chromeIcons.pointer}<span>Open pages in Interact</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="notifyToggle" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.bell}<span>Notifications</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item menu-subitem" id="notifyAllow" type="button" hidden><span>Allow desktop notifications</span></button><button class="menu-item" id="openPalette" type="button">${chromeIcons.command}<span>Command palette</span><kbd class="menu-kbd">Ctrl K</kbd></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
-<div class="layout" id="layout"><div class="frame"><div class="find-bar" id="findBar" role="search" aria-label="Find in the page" hidden><input class="find-input" id="findInput" type="text" placeholder="Find in page" aria-label="Find in page" autocomplete="off" spellcheck="false"><span class="find-count" id="findCount" aria-live="polite"></span><button class="find-step" id="findPrev" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)">${chromeIcons.chevronUp}</button><button class="find-step" id="findNext" type="button" aria-label="Next match" title="Next match (Enter)">${chromeIcons.chevronDown}</button><button class="find-step" id="findClose" type="button" aria-label="Close find" title="Close (Esc)">${chromeIcons.close}</button></div><iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" allow="fullscreen" data-artifact-src="/artifact/${session.key}/index.html"></iframe></div><div class="panel-scrim" id="panelScrim"></div><aside class="panel" id="panel"><div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><span class="panel-grip" aria-hidden="true">${chromeIcons.gripVertical}</span></div><div class="panel-rail" id="panelRail"><button class="rail-button" id="railOpen" type="button" aria-label="Open the conversation" title="Open the conversation">${chromeIcons.chat}<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="railUnreadCount">1</span></span></button><button class="rail-button" id="railAnnotate" type="button" aria-pressed="true" aria-label="Annotate" title="Annotate (A)">${chromeIcons.crosshair}</button><button class="rail-button" id="railPeek" type="button" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><div class="panel-head" id="panelHead"><span class="panel-handle" aria-hidden="true"></span><div class="panel-head-row"><span class="panel-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><h2>Conversation</h2><span class="panel-agent" id="panelAgent"${agent ? "" : " hidden"}>${agent ? escapeHtml(agent.name) : ""}</span><span class="panel-summary" id="panelSummary" role="status" aria-live="polite"></span><button class="panel-see-through" id="panelSeeThrough" type="button" aria-label="Hold to see the artifact through the panel" title="Hold to see the artifact through the panel">${chromeIcons.eye}</button><button class="panel-toggle" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" aria-label="Show conversation"><span class="t-icon-swap" id="panelToggleIcon" data-state="a"><span class="t-icon" data-icon="a">${chromeIcons.chevronUp}</span><span class="t-icon" data-icon="b">${chromeIcons.chevronDown}</span></span><span class="t-badge panel-queued" id="panelQueued" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="panelQueuedCount">0</span></span></button><span class="panel-head-tools"><button class="panel-tool panel-tool-side" id="panelSwapSide" type="button" aria-label="Move to the other side" title="Move to the other side">${chromeIcons.arrowLeftRight}</button><button class="panel-tool panel-tool-rail" id="panelToRail" type="button" aria-label="Collapse to a rail" title="Collapse to a rail">${chromeIcons.panelLeftClose}</button><button class="panel-tool panel-tool-hide" id="peekHide" type="button" aria-label="Hide Peek" title="Hide Peek">${chromeIcons.eyeOff}</button><button class="panel-tool panel-tool-back" id="peekToSidebar" type="button" aria-label="Back to the sidebar" title="Back to the sidebar">${chromeIcons.panelLeft}</button></span></div></div><div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"></div><button class="scroll-latest t-dropdown" data-origin="bottom-center" id="scrollLatest" type="button" aria-label="Scroll to the latest message" title="Scroll to the latest message" hidden>${chromeIcons.chevronDown}</button></div><div class="composer" id="chatComposer"><div class="presence-banner handoff-banner" id="handoffBanner" hidden><span>This review is open in another Lavish tab.</span><button class="handoff-takeover" id="handoffTakeover" type="button">Take over here</button></div><div class="presence-banner handoff-banner" id="outdatedBanner" hidden><span id="outdatedText">The Lavish server this page was connected to is no longer running. Reloading will work once it is running again.</span><span class="outdated-actions"><button class="handoff-takeover" id="outdatedReload" type="button">Check and reload</button><button class="handoff-takeover" id="outdatedDismiss" type="button">Dismiss</button></span></div><div class="presence-banner handoff-banner" id="presenceBanner" hidden><span>Your agent is not listening. Your messages wait until it polls again; the nudge tells it how.</span><button class="handoff-takeover" id="copyNudge" type="button">Copy nudge</button></div><div class="chat-suggestions" id="chatSuggestions" role="group" aria-label="Suggested replies" hidden></div><div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first.</div><div class="queue" id="queuePanel" hidden><button class="queue-head" id="queueToggle" type="button" aria-expanded="true" aria-controls="queuedLog"><span class="queue-title">Queued</span><span class="queue-count t-digit-group" id="queueCount">0</span><span class="queue-chevron" aria-hidden="true">${chromeIcons.chevronDown}</span></button><ul class="queue-list" id="queuedLog"></ul></div><div class="edit-bar" id="editBar" hidden><span id="editBarText">Editing a queued note</span><button class="edit-bar-cancel" id="editCancel" type="button">Cancel</button></div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden></div><div class="chat-attachments" id="chatAttachments"></div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"></textarea><div class="chat-attachment-toolbar"><button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">${chromeIcons.paperclip}</button><button class="chat-annotate" id="composerAnnotate" type="button" aria-pressed="true" title="Annotate (A)">${chromeIcons.crosshair}<span>Annotate</span></button><input id="chatAttachInput" type="file" accept="${escapeHtml(acceptedMime.join(","))}" multiple hidden><span class="chat-attachment-notice" id="chatAttachmentNotice" role="status"></span></div><div class="actions" id="sendActions"><button class="button button-ghost" id="queueLater" type="button" title="Queue for later (Ctrl+Q)">Queue</button><div class="send-split" id="sendSplit"><button class="button send-main" id="send">${chromeIcons.arrowUp}<span class="t-text-swap" id="sendLabel">Send</span></button><button class="button send-more" id="sendMore" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sendMenu" aria-label="More send options" title="More send options">${chromeIcons.chevronDown}</button><div class="menu send-menu t-dropdown" data-origin="bottom-right" id="sendMenu" role="menu" hidden><button class="menu-item danger" id="sendAndEnd" type="button" role="menuitem">${chromeIcons.exit}<span>Send and end session</span></button></div></div></div></div><div class="composer-hints" aria-hidden="true"><span><kbd>Enter</kbd> send</span><span><kbd>Shift Enter</kbd> new line</span><span><kbd>Ctrl Q</kbd> queue</span><span><kbd>Ctrl K</kbd> commands</span></div></div></aside></div>
+<div class="bar"><div class="brand"><span class="brand-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><span class="brand-mark">Lavish</span></div><span class="bar-rule" aria-hidden="true"></span><button class="bar-path" id="copyPathBar" type="button" title="Copy path · ${escapeHtml(session.file)}" aria-label="Copy the artifact path"><span class="bar-path-dir">${escapeHtml(path.basename(path.dirname(session.file)))} /</span><span class="bar-path-file">${escapeHtml(path.basename(session.file))}</span>${chromeIcons.copy}</button><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count t-digit-group" id="warningsCount">0</span></button><div class="menu warnings-drawer t-dropdown" data-origin="top-right" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer">${chromeIcons.history}<span class="revisions-button-text" id="revisionsLatest">Revisions</span><span class="revisions-count t-digit-group" id="revisionsCount">0</span></button><div class="menu revisions-drawer t-dropdown" data-origin="top-right" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"></span><span class="agent-status-text t-text-swap" id="agentStatusText">Agent not listening</span></span><div class="pointer-mode" role="group" aria-label="Pointer mode"><button class="pointer-option" id="modeInteract" type="button" aria-pressed="false" title="${escapeHtml(modeToggleHint)}">${chromeIcons.pointer}<span>Interact</span></button><button class="pointer-option annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}">${chromeIcons.crosshair}<span>Annotate</span></button></div><div class="layout-switch" role="group" aria-label="Conversation layout"><button class="layout-option" id="layoutLeft" type="button" aria-pressed="false" aria-label="Conversation on the left" title="Conversation on the left">${chromeIcons.panelLeft}</button><button class="layout-option" id="layoutRight" type="button" aria-pressed="false" aria-label="Conversation on the right" title="Conversation on the right">${chromeIcons.panelRight}</button><button class="layout-option" id="layoutRail" type="button" aria-pressed="false" aria-label="Collapse the conversation to a rail" title="Collapse the conversation to a rail">${chromeIcons.panelRail}</button><button class="layout-option" id="layoutPeek" type="button" aria-pressed="false" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme"><span class="t-icon-swap" id="themeIconSwap" data-state="a"><span class="theme-icon t-icon" data-icon="a">${chromeIcons.moon}</span><span class="theme-icon t-icon" data-icon="b">${chromeIcons.sun}</span></span></button><div class="update-wrap" id="updateWrap" hidden><button class="update-button" id="updateButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="updatePopover">${chromeIcons.update}<span>Update</span></button><div class="menu update-popover t-dropdown" data-origin="top-right" id="updatePopover" role="dialog" aria-labelledby="updateTitle" hidden><p class="update-title" id="updateTitle">A newer Lavish is available</p><p class="update-copy" id="updateCopy"></p><pre class="update-steps" id="updateSteps"></pre><div class="update-actions"><button class="button button-ghost" id="updateDismiss" type="button">Dismiss</button><button class="button" id="updateCopySteps" type="button">Copy the steps</button></div></div></div><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu t-dropdown" data-origin="top-right" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button><button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button><div class="menu-rule"></div><button class="menu-item" id="hideBar" type="button">${chromeIcons.panelTopClose}<span>Hide the top bar</span></button><button class="menu-item" id="openThemes" type="button">${chromeIcons.palette}<span>Theme presets</span></button><button class="menu-item" id="followSystemTheme" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.monitor}<span>Follow system theme</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="startInteract" type="button" role="menuitemcheckbox" aria-checked="false">${chromeIcons.pointer}<span>Open pages in Interact</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="notifyToggle" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.bell}<span>Notifications</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><p class="menu-note" id="notifyNote" role="status" hidden></p><button class="menu-item menu-subitem" id="notifyAllow" type="button" hidden><span id="notifyAllowLabel">Allow desktop notifications</span></button><button class="menu-item" id="openPalette" type="button">${chromeIcons.command}<span>Command palette</span><kbd class="menu-kbd">Ctrl K</kbd></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
+<div class="layout" id="layout"><div class="frame"><div class="find-bar" id="findBar" role="search" aria-label="Find in the page" hidden><input class="find-input" id="findInput" type="text" placeholder="Find in page" aria-label="Find in page" autocomplete="off" spellcheck="false"><span class="find-count" id="findCount" aria-live="polite"></span><button class="find-step" id="findPrev" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)">${chromeIcons.chevronUp}</button><button class="find-step" id="findNext" type="button" aria-label="Next match" title="Next match (Enter)">${chromeIcons.chevronDown}</button><button class="find-step" id="findClose" type="button" aria-label="Close find" title="Close (Esc)">${chromeIcons.close}</button></div><iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" allow="fullscreen" data-artifact-src="/artifact/${session.key}/index.html"></iframe></div><div class="panel-scrim" id="panelScrim"></div><aside class="panel" id="panel"><div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><span class="panel-grip" aria-hidden="true">${chromeIcons.gripVertical}</span></div><div class="panel-rail" id="panelRail"><button class="rail-button" id="railOpen" type="button" aria-label="Open the conversation" title="Open the conversation">${chromeIcons.chat}<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="railUnreadCount">1</span></span></button><button class="rail-button" id="railAnnotate" type="button" aria-pressed="true" aria-label="Annotate" title="Annotate (A)">${chromeIcons.crosshair}</button><button class="rail-button" id="railPeek" type="button" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><div class="panel-head" id="panelHead"><span class="panel-handle" aria-hidden="true"></span><div class="panel-head-row"><span class="panel-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><h2>Conversation</h2><span class="panel-agent" id="panelAgent"${agent ? "" : " hidden"}>${agent ? escapeHtml(agent.name) : ""}</span><span class="panel-summary" id="panelSummary" role="status" aria-live="polite"></span><button class="panel-see-through" id="panelSeeThrough" type="button" aria-label="Hold to see the artifact through the panel" title="Hold to see the artifact through the panel">${chromeIcons.eye}</button><button class="panel-toggle" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" aria-label="Show conversation"><span class="t-icon-swap" id="panelToggleIcon" data-state="a"><span class="t-icon" data-icon="a">${chromeIcons.chevronUp}</span><span class="t-icon" data-icon="b">${chromeIcons.chevronDown}</span></span><span class="t-badge panel-queued" id="panelQueued" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="panelQueuedCount">0</span></span></button><span class="panel-head-tools"><button class="panel-tool panel-tool-side" id="panelSwapSide" type="button" aria-label="Move to the other side" title="Move to the other side">${chromeIcons.arrowLeftRight}</button><button class="panel-tool panel-tool-rail" id="panelToRail" type="button" aria-label="Collapse to a rail" title="Collapse to a rail">${chromeIcons.panelLeftClose}</button><button class="panel-tool panel-tool-hide" id="peekHide" type="button" aria-label="Hide Peek" title="Hide Peek">${chromeIcons.eyeOff}</button><button class="panel-tool panel-tool-back" id="peekToSidebar" type="button" aria-label="Back to the sidebar" title="Back to the sidebar">${chromeIcons.panelLeft}</button></span></div></div><div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"></div><button class="scroll-latest t-dropdown" data-origin="bottom-center" id="scrollLatest" type="button" aria-label="Scroll to the latest message" title="Scroll to the latest message" hidden>${chromeIcons.chevronDown}</button></div><div class="composer" id="chatComposer"><div class="presence-banner handoff-banner" id="handoffBanner" hidden><span>This review is open in another Lavish tab.</span><button class="handoff-takeover" id="handoffTakeover" type="button">Take over here</button></div><div class="presence-banner handoff-banner" id="outdatedBanner" hidden><span id="outdatedText">The Lavish server this page was connected to is no longer running. Reloading will work once it is running again.</span><span class="outdated-actions"><button class="handoff-takeover" id="outdatedReload" type="button">Check and reload</button><button class="handoff-takeover" id="outdatedDismiss" type="button">Dismiss</button></span></div><div class="presence-banner nudge-notice" id="presenceBanner" role="region" aria-labelledby="presenceTitle" aria-describedby="presenceCopy" hidden><p class="nudge-title" id="presenceTitle">${chromeIcons.unplug}<span>Your agent is not listening</span></p><p class="nudge-copy" id="presenceCopy">Feedback waits until it polls again. Copy a message to paste into your agent.</p><div class="nudge-actions"><button class="button button-outline" id="nudgeAgent" type="button" hidden aria-busy="false" title="Send this session's file path and key to its T3 Code thread">${chromeIcons.send}<span>Nudge agent</span></button><button class="button button-outline" id="copyNudge" type="button" data-copied="false"><span class="t-icon-swap" id="copyNudgeIcon" data-state="a" aria-hidden="true"><span class="t-icon" data-icon="a">${chromeIcons.copy}</span><span class="t-icon" data-icon="b">${chromeIcons.check}</span></span><span id="copyNudgeLabel">Copy nudge</span></button></div><p class="nudge-status" id="nudgeStatus" role="status" aria-live="polite" data-tone=""><span class="nudge-status-icon" aria-hidden="true"><span data-icon="pending">${chromeIcons.loader}</span><span data-icon="success">${chromeIcons.circleCheck}</span><span data-icon="info">${chromeIcons.info}</span><span data-icon="error">${chromeIcons.circleAlert}</span></span><span id="nudgeStatusText"></span></p></div><div class="chat-suggestions" id="chatSuggestions" role="group" aria-label="Suggested replies" hidden></div><div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first.</div><div class="queue" id="queuePanel" hidden><button class="queue-head" id="queueToggle" type="button" aria-expanded="true" aria-controls="queuedLog"><span class="queue-title">Queued</span><span class="queue-count t-digit-group" id="queueCount">0</span><span class="queue-chevron" aria-hidden="true">${chromeIcons.chevronDown}</span></button><ul class="queue-list" id="queuedLog"></ul></div><div class="edit-bar" id="editBar" hidden><span id="editBarText">Editing a queued note</span><button class="edit-bar-cancel" id="editCancel" type="button">Cancel</button></div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden></div><div class="chat-attachments" id="chatAttachments"></div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"></textarea><div class="chat-attachment-toolbar"><button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">${chromeIcons.paperclip}</button><button class="chat-annotate" id="composerAnnotate" type="button" aria-pressed="true" title="Annotate (A)">${chromeIcons.crosshair}<span>Annotate</span></button><input id="chatAttachInput" type="file" accept="${escapeHtml(acceptedMime.join(","))}" multiple hidden><span class="chat-attachment-notice" id="chatAttachmentNotice" role="status"></span></div><div class="actions" id="sendActions"><button class="button button-ghost" id="queueLater" type="button" title="Queue for later (Ctrl+Q)">Queue</button><div class="send-split" id="sendSplit"><button class="button send-main" id="send">${chromeIcons.arrowUp}<span class="t-text-swap" id="sendLabel">Send</span></button><button class="button send-more" id="sendMore" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sendMenu" aria-label="More send options" title="More send options">${chromeIcons.chevronDown}</button><div class="menu send-menu t-dropdown" data-origin="bottom-right" id="sendMenu" role="menu" hidden><button class="menu-item danger" id="sendAndEnd" type="button" role="menuitem">${chromeIcons.exit}<span>Send and end session</span></button></div></div></div></div><div class="composer-hints" aria-hidden="true"><span><kbd>Enter</kbd> send</span><span><kbd>Shift Enter</kbd> new line</span><span><kbd>Ctrl Q</kbd> queue</span><span><kbd>Ctrl K</kbd> commands</span></div></div></aside></div>
 <div class="image-zoom" id="imageZoom" role="dialog" aria-modal="true" aria-labelledby="imageZoomCaption" hidden><div class="image-zoom-overlay" aria-hidden="true"></div><div class="image-zoom-stage" id="imageZoomStage"><img class="image-zoom-img" id="imageZoomImg" alt="" draggable="false"></div><p class="image-zoom-caption" id="imageZoomCaption">Image preview</p><button class="image-zoom-step image-zoom-prev" id="imageZoomPrev" type="button" aria-label="Previous picture" title="Previous picture (Left arrow)" hidden>${chromeIcons.chevronLeft}</button><button class="image-zoom-step image-zoom-next" id="imageZoomNext" type="button" aria-label="Next picture" title="Next picture (Right arrow)" hidden>${chromeIcons.chevronRight}</button><button class="image-zoom-close" id="imageZoomClose" type="button" aria-label="Close preview" title="Close (Esc)">${chromeIcons.close}</button><div class="image-zoom-bar" role="toolbar" aria-label="Zoom"><output class="image-zoom-position" id="imageZoomPosition" aria-live="polite" hidden></output><span class="image-zoom-sep image-zoom-position-sep" id="imageZoomPositionSep" aria-hidden="true" hidden></span><button class="image-zoom-tool" id="imageZoomOut" type="button" aria-label="Zoom out" title="Zoom out (-)">${chromeIcons.zoomOut}</button><output class="image-zoom-level" id="imageZoomLevel" aria-live="polite">100%</output><button class="image-zoom-tool" id="imageZoomIn" type="button" aria-label="Zoom in" title="Zoom in (+)">${chromeIcons.zoomIn}</button><span class="image-zoom-sep" aria-hidden="true"></span><button class="image-zoom-tool image-zoom-text" id="imageZoomFit" type="button" title="Fit to screen (0)">Fit</button><button class="image-zoom-tool image-zoom-text" id="imageZoomActual" type="button" title="Actual size (1)">1:1</button></div></div>
 <div class="image-zoom video-viewer" id="videoViewer" role="dialog" aria-modal="true" aria-labelledby="videoViewerCaption" hidden><div class="image-zoom-overlay" aria-hidden="true"></div><div class="video-viewer-stage" id="videoViewerStage"><video class="video-viewer-video" id="videoViewerVideo" controls playsinline preload="metadata"></video></div><p class="image-zoom-caption" id="videoViewerCaption">Video</p><button class="image-zoom-close" id="videoViewerClose" type="button" aria-label="Close video" title="Close (Esc)">${chromeIcons.close}</button><div class="image-zoom-bar" role="toolbar" aria-label="Video"><button class="image-zoom-tool image-zoom-text video-viewer-fullscreen" id="videoViewerFullscreen" type="button" title="Full screen (F)">${chromeIcons.fullscreen}<span>Full screen</span></button></div></div>
 <div class="palette-overlay" id="paletteDialog" role="dialog" aria-modal="true" aria-label="Command palette" hidden><div class="palette t-modal" id="palette"><div class="palette-search">${chromeIcons.search}<input id="paletteInput" type="text" role="combobox" aria-expanded="true" aria-controls="paletteList" aria-autocomplete="list" aria-label="Search commands" placeholder="Type a command" autocomplete="off" spellcheck="false"></div><ul class="palette-list" id="paletteList" role="listbox" aria-label="Commands"></ul></div></div>
