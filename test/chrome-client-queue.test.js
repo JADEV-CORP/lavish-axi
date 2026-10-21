@@ -18,7 +18,7 @@ const servedChromeIds = new Set(
   ),
 );
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null, agentNudgeAvailable?: boolean }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null, agentNudgeAvailable?: boolean, reviewLabel?: string, reviewContext?: string, loopbackUrl?: string }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -103,8 +103,9 @@ async function createChromeHarness({
   /** @type {Record<string, (...args: any[]) => void> | null} */
   composer = null,
   // Opt-in background tab: the page is hidden, has a title, and the browser has a Notification API
-  // granting `permission`; created notifications collect in `notifications`.
-  /** @type {{ permission: string } | null} */
+  // granting `permission`; created notifications collect in `notifications`. `secure: false` models a
+  // plain-http page on a non-loopback host, which browsers refuse notification permission.
+  /** @type {{ permission: string, secure?: boolean } | null} */
   background = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
@@ -123,6 +124,8 @@ async function createChromeHarness({
   const beginRequests = [];
   const artifactBeginRequests = [];
   const focusLog = [];
+  /** @type {string[]} */
+  const locationAssigns = [];
   const clipboardWrites = [];
   let activeElement = null;
   let nextTimerId = 1;
@@ -413,6 +416,9 @@ async function createChromeHarness({
     location: {
       protocol: "http:",
       host: "lavish.test",
+      assign(url) {
+        locationAssigns.push(String(url));
+      },
       reload() {
         reloadCount += 1;
       },
@@ -474,6 +480,13 @@ async function createChromeHarness({
       addEventListener(type, handler, capture) {
         if (!documentListeners.has(type)) documentListeners.set(type, []);
         documentListeners.get(type).push({ handler, capture: Boolean(capture) });
+      },
+      // The page's one icon link, as a browser finds it.
+      querySelector(selector) {
+        if (selector !== 'link[rel~="icon"]') return null;
+        const icon = element("favicon");
+        if (!icon.href) icon.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+        return icon;
       },
       createElement(tag) {
         const el = element(`${tag}-${elements.size}`);
@@ -546,20 +559,27 @@ async function createChromeHarness({
   }
 
   if (composer) Object.assign(element("chatInput"), composer);
-  /** @type {{ title: string, body: string, tag: string }[]} */
+  /** @type {{ title: string, body: string, tag: string, note: any }[]} */
   const notifications = [];
+  let windowFocusCount = 0;
   if (background) {
     const backgroundContext = /** @type {any} */ (context);
     backgroundContext.document.visibilityState = "hidden";
     backgroundContext.document.title = "page.html · Lavish";
     backgroundContext.document.hasFocus = () => backgroundContext.document.visibilityState === "visible";
+    backgroundContext.window.isSecureContext = background.secure !== false;
     backgroundContext.window.Notification = class {
       static permission = background.permission;
       static requestPermission = async () => background.permission;
       constructor(title, options) {
-        notifications.push({ title, body: options.body, tag: options.tag });
+        notifications.push({ title, body: options.body, tag: options.tag, note: this });
       }
-      close() {}
+      close() {
+        this.closed = true;
+      }
+    };
+    backgroundContext.window.focus = () => {
+      windowFocusCount += 1;
     };
   }
   vm.runInNewContext(source, context, { filename: "chrome-client.js" });
@@ -652,6 +672,8 @@ async function createChromeHarness({
       for (const handler of handlers) handler({ source: whiteboard.source, data });
     },
     notifications,
+    locationAssigns,
+    windowFocusCount: () => windowFocusCount,
     document: /** @type {any} */ (context).document,
     dispatchDocumentKeydown(eventProps) {
       const handlers = documentListeners.get("keydown") || [];
@@ -6381,6 +6403,18 @@ test("a window outside the artifact frame cannot open a whiteboard channel or qu
   assert.deepEqual(chrome.queued(), []);
 });
 
+test("a whiteboard opens with the reviewer's theme preset so its controls share the chrome's accent", async () => {
+  const localStore = new Map([["lavish-axi:theme-preset", "ocean"]]);
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url) => whiteboardFetch(url),
+    sessionData: { ...defaultSessionData, themePresets: themePresetSummaries() },
+    theme: { localStore },
+  });
+  const inline = await initializeInlineWhiteboard(chrome);
+  assert.equal(inline.posted.at(-1).type, "lavish-whiteboard:init");
+  assert.equal(inline.posted.at(-1).preset, "ocean");
+});
+
 test("whiteboard fullscreen waits for the authenticated inline frame to flush", async () => {
   const chrome = await createChromeHarness({ fetchImpl: async (url) => whiteboardFetch(url) });
   const inline = await initializeInlineWhiteboard(chrome);
@@ -9830,20 +9864,54 @@ test("Nudge agent delivers once while pending and retains the copy fallback afte
     },
   });
   const button = chrome.element("nudgeAgent");
+  const status = chrome.element("nudgeStatus");
+  const statusText = chrome.element("nudgeStatusText");
   assert.equal(button.hidden, false);
+  assert.equal(button.classList.contains("button-outline"), true, "Nudge agent leads");
+  assert.equal(chrome.element("copyNudge").classList.contains("button-ghost"), true, "Copy nudge is the fallback");
+  assert.match(chrome.element("presenceCopy").textContent, /Nudge it/);
   const delivery = button.onclick();
   await button.onclick();
   assert.equal(attempts, 1);
-  assert.equal(button.disabled, true);
+  assert.equal(button["aria-disabled"], "true", "locked without disabled, so keyboard focus stays");
+  assert.notEqual(button.disabled, true);
+  assert.equal(button["aria-busy"], "true");
+  assert.equal(status.dataset.tone, "pending");
+  assert.equal(statusText.textContent, "Sending to T3 Code…");
   finish({ ok: true, json: async () => ({ status: "sent" }) });
   await delivery;
-  assert.equal(button.disabled, false);
-  assert.equal(chrome.element("nudgeStatus").textContent, "Nudge sent to T3 Code.");
+  assert.equal(button["aria-disabled"], "false");
+  assert.equal(button["aria-busy"], "false");
+  assert.equal(status.dataset.tone, "success");
+  assert.equal(statusText.textContent, "T3 Code accepted the nudge. This notice closes once your agent polls.");
   const retry = button.onclick();
   finish({ ok: false, json: async () => ({ status: "failed" }) });
   await retry;
-  assert.match(chrome.element("nudgeStatus").textContent, /Copy nudge/);
-  assert.equal(typeof chrome.element("copyNudge").onclick, "function");
+  assert.equal(status.dataset.tone, "error");
+  assert.match(statusText.textContent, /Copy nudge/);
+
+  const live = (data) => chrome.eventSource().listeners.get("agent-presence")({ data: JSON.stringify(data) });
+  live({ state: "listening" });
+  live({ state: "waiting" });
+  assert.equal(status.dataset.tone, "", "a returning notice starts without the last attempt's outcome");
+  assert.equal(statusText.textContent, "");
+
+  await chrome.element("copyNudge").onclick();
+  assert.match(chrome.clipboardWrites.at(-1), /^Feedback is waiting in Lavish\. Run: lavish-axi poll "/);
+  assert.equal(chrome.element("copyNudgeLabel").textContent, "Copied");
+  assert.equal(chrome.element("copyNudge").dataset.copied, "true");
+  chrome.runTimers(1500);
+  assert.equal(chrome.element("copyNudgeLabel").textContent, "Copy nudge");
+  assert.equal(chrome.element("copyNudge").dataset.copied, "false");
+});
+
+test("without a nudge binding, Copy nudge is the notice's one action and the copy does not offer a nudge", async () => {
+  const chrome = await createChromeHarness();
+  assert.equal(chrome.element("nudgeAgent").hidden, true);
+  assert.equal(chrome.element("copyNudge").classList.contains("button-outline"), true);
+  assert.equal(chrome.element("copyNudge").classList.contains("button-ghost"), false);
+  assert.doesNotMatch(chrome.element("presenceCopy").textContent, /Nudge/);
+  assert.match(chrome.element("presenceCopy").textContent, /Copy a message/);
 });
 
 test("in a background tab, replies, page updates and a quiet agent notify; the count clears on return", async () => {
@@ -9878,6 +9946,110 @@ test("in a background tab, replies, page updates and a quiet agent notify; the c
   live("agent-reply", { text: "Again.", html: "<p>Again.</p>" });
   assert.equal(chrome.document.title, "page.html · Lavish", "turned off, nothing changes");
   assert.equal(chrome.notifications.length, 3);
+});
+
+test("notifications name their review, so two review.html tabs are told apart without a full path", async () => {
+  const live = (chrome, name, data) => chrome.eventSource().listeners.get(name)({ data: JSON.stringify(data) });
+  const billing = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      key: "billing",
+      file: "C:\\Users\\someone\\work\\billing-flow\\review.html",
+      reviewLabel: "Billing flow review",
+      reviewContext: "billing-flow/review.html",
+    },
+    background: { permission: "granted" },
+  });
+  const untitled = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      key: "onboarding",
+      file: "/home/someone/onboarding/review.html",
+      reviewLabel: "onboarding/review.html",
+      reviewContext: "onboarding/review.html",
+    },
+    background: { permission: "granted" },
+  });
+  live(billing, "reload", {});
+  live(untitled, "reload", {});
+  const [a] = billing.notifications;
+  const [b] = untitled.notifications;
+  assert.equal(a.title, "Billing flow review · Lavish");
+  assert.equal(a.body, "The page was updated.\nbilling-flow/review.html");
+  assert.equal(b.title, "onboarding/review.html · Lavish");
+  assert.equal(b.body, "The page was updated.", "an untitled review's title already is its context");
+  assert.notEqual(a.title, b.title);
+  for (const note of [a, b]) assert.doesNotMatch(note.title + note.body, /Users|someone|home/, "no full path");
+  assert.equal(a.tag, "lavish-billing");
+
+  a.note.onclick();
+  assert.equal(billing.windowFocusCount(), 1, "a click still brings this tab forward");
+  assert.equal(a.note.closed, true);
+});
+
+test("without desktop permission the tab still marks itself: a count in the title and a badged icon until seen", async () => {
+  const chrome = await createChromeHarness({ background: { permission: "default" } });
+  const icon = chrome.document.querySelector('link[rel~="icon"]');
+  const original = icon.href;
+  chrome.eventSource().listeners.get("reload")({ data: "{}" });
+  assert.equal(chrome.notifications.length, 0, "no permission, no desktop notification");
+  assert.equal(chrome.document.title, "(1) page.html · Lavish");
+  assert.notEqual(icon.href, original);
+  assert.match(icon.href, /^data:image\/svg\+xml,/);
+  assert.match(decodeURIComponent(icon.href), /<circle/);
+  chrome.document.visibilityState = "visible";
+  chrome.dispatchDocumentEvent("visibilitychange", {});
+  assert.equal(chrome.document.title, "page.html · Lavish");
+  assert.equal(icon.href, original, "seen, the icon is the review's own again");
+});
+
+test("the notification controls say why no desktop notification can appear, and how to fix it", async () => {
+  const note = (chrome) => chrome.element("notifyNote");
+  const action = (chrome) => chrome.element("notifyAllow");
+  const label = (chrome) => chrome.element("notifyAllowLabel").textContent;
+
+  const insecure = await createChromeHarness({
+    sessionData: { ...defaultSessionData, loopbackUrl: "http://127.0.0.1:4387/session/abc" },
+    background: { permission: "denied", secure: false },
+  });
+  assert.equal(note(insecure).hidden, false);
+  assert.match(note(insecure).textContent, /need a secure address/);
+  assert.equal(action(insecure).hidden, false);
+  assert.equal(label(insecure), "Open at 127.0.0.1");
+  action(insecure).onclick();
+  assert.deepEqual(insecure.locationAssigns, ["http://127.0.0.1:4387/session/abc"]);
+
+  const remote = await createChromeHarness({ background: { permission: "denied", secure: false } });
+  assert.match(note(remote).textContent, /computer running Lavish/);
+  assert.equal(action(remote).hidden, true, "another device has no loopback to offer");
+
+  const blocked = await createChromeHarness({ background: { permission: "denied" } });
+  assert.match(note(blocked).textContent, /site settings/);
+  assert.equal(action(blocked).hidden, true);
+
+  const ask = await createChromeHarness({ background: { permission: "default" } });
+  assert.equal(label(ask), "Allow desktop notifications");
+  assert.match(note(ask).textContent, /chime and the tab marker/);
+
+  const granted = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      reviewLabel: "Billing flow review",
+      reviewContext: "billing-flow/review.html",
+    },
+    background: { permission: "granted" },
+  });
+  assert.equal(label(granted), "Send a test notification");
+  assert.match(note(granted).textContent, /Do not disturb/);
+  action(granted).onclick();
+  assert.equal(granted.notifications.at(-1).title, "Billing flow review · Lavish");
+
+  const unsupported = await createChromeHarness();
+  assert.match(note(unsupported).textContent, /no desktop notifications/);
+
+  insecure.element("notifyToggle").onclick();
+  assert.equal(note(insecure).hidden, true, "turned off, nothing to explain");
+  assert.equal(action(insecure).hidden, true);
 });
 
 test("a newer Jadev version shows Update in the top bar with its steps, until dismissed for that version", async () => {

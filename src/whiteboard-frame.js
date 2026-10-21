@@ -47,6 +47,7 @@ import {
   WHITEBOARD_TEXT_METRICS_VERSION,
 } from "./whiteboard-core.js";
 import { findLibraryItem, parseLibraryIconDirectives, toExcalidrawLibraryItems } from "./whiteboard-libraries.js";
+import { whiteboardPresetId, whiteboardThemeCss } from "./theme-presets.js";
 
 const SAVE_DEBOUNCE_MS = 800;
 const MERMAID_FONT_SIZE = 16;
@@ -111,6 +112,16 @@ function setBanner(id, text) {
   if (!banner) return;
   banner.textContent = text;
   banner.hidden = !text;
+}
+
+// The chrome's palette and the reviewer's preset (#3795): the header, banners and Excalidraw's
+// accent take the same tokens as the editor around this frame.
+function applyPalette(preset) {
+  const style = document.createElement("style");
+  style.textContent = whiteboardThemeCss();
+  document.head.append(style);
+  const id = whiteboardPresetId(preset);
+  if (id) document.documentElement.dataset.preset = id;
 }
 
 function buildShell(theme, mode) {
@@ -718,6 +729,7 @@ function main() {
     if (msg.type === "lavish-whiteboard:init" && !initialized && typeof msg.channelId === "string" && msg.channelId) {
       initialized = true;
       state.channelId = msg.channelId;
+      applyPalette(msg.preset);
       buildShell(msg.theme === "dark" ? "dark" : "light", msg.mode === "inline" ? "inline" : "overlay");
       handleInit(msg);
     }

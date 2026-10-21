@@ -91,7 +91,8 @@ pnpm run check
 
 Resolve conflicts in favour of upstream behaviour unless the fork deliberately changed it; the fork's changes are in
 `src/chrome.css`, `src/chrome-client.js`, `src/server.js` (chrome markup), `src/artifact-sdk.js` (pins, outlines,
-palette hotkey), `src/design-reference.js`, and their tests. Bump the version to `<tag>-jadev.1`, open a PR into
+palette hotkey), `src/design-reference.js`, `src/whiteboard-frame.css` (the whiteboard header and Excalidraw
+accent on the chrome palette and preset), and their tests. Bump the version to `<tag>-jadev.1`, open a PR into
 `main`, and reinstall from the new tarball once it merges.
 
 ## Hidden files are not served

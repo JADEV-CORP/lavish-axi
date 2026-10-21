@@ -21,6 +21,8 @@ import {
   CHROME_LAYOUT_GATE_MAX_HOLD_MS,
   agentDisplay,
   createChromeHtml,
+  loopbackSessionUrl,
+  reviewIdentity,
   createSdkJs,
   defaultComposerBundleFile,
   displayPathParts,
@@ -1229,9 +1231,12 @@ test("chrome shows a waiting banner when no agent has attached", async () => {
   const js = await chromeClientSource();
   const css = await chromeCssSource();
 
-  assert.match(html, /id="presenceBanner"/);
-  assert.match(html, /Your agent is not listening/);
-  assert.match(html, /<button class="handoff-takeover" id="copyNudge" type="button">Copy nudge<\/button>/);
+  assert.match(html, /id="presenceBanner" role="region" aria-labelledby="presenceTitle"/);
+  assert.match(html, /<span>Your agent is not listening<\/span>/);
+  assert.match(html, /<button class="button button-outline" id="nudgeAgent" type="button" hidden aria-busy="false"/);
+  assert.match(html, /id="copyNudge" type="button" data-copied="false">/);
+  assert.match(html, /<span id="copyNudgeLabel">Copy nudge<\/span>/);
+  assert.match(html, /id="nudgeStatus" role="status" aria-live="polite" data-tone=""/);
   assert.match(js, /presenceBanner\.hidden = ended \|\| agentPresence !== "waiting"/);
   assert.match(css, /\.presence-banner\{/);
 });
@@ -6759,6 +6764,41 @@ function restoreEnv(name, value) {
     process.env[name] = value;
   }
 }
+
+test("a review is named by its artifact title, else a short folder and file, never the full path", () => {
+  assert.deepEqual(reviewIdentity("/home/someone/billing-flow/review.html", "Billing flow review"), {
+    label: "Billing flow review",
+    context: "billing-flow/review.html",
+  });
+  assert.deepEqual(reviewIdentity("/home/someone/onboarding/review.html", "  "), {
+    label: "onboarding/review.html",
+    context: "onboarding/review.html",
+  });
+  const chrome = createChromeHtml(
+    { key: "abc", file: "/home/someone/onboarding/review.html" },
+    { reviewLabel: "onboarding/review.html", reviewContext: "onboarding/review.html" },
+  );
+  assert.match(chrome, /"reviewLabel":"onboarding\/review.html"/);
+  assert.match(chrome, /<span id="notifyAllowLabel">Allow desktop notifications<\/span>/);
+  assert.match(chrome, /<p class="menu-note" id="notifyNote" role="status" hidden><\/p>/);
+});
+
+test("only a browser on this machine is offered the loopback address for desktop notifications", () => {
+  const request = (hostname, remoteAddress, localAddress = "100.64.0.7") => ({
+    hostname,
+    socket: { remoteAddress, localAddress, localPort: 4387 },
+  });
+  assert.equal(
+    loopbackSessionUrl(request("box.tail.ts.net", "100.64.0.7"), "abc"),
+    "http://127.0.0.1:4387/session/abc",
+    "this machine reached its own Tailscale address",
+  );
+  assert.equal(loopbackSessionUrl(request("box.tail.ts.net", "100.64.0.9"), "abc"), "", "a phone on the tailnet");
+  assert.equal(loopbackSessionUrl(request("127.0.0.1", "127.0.0.1", "127.0.0.1"), "abc"), "", "already secure");
+  assert.equal(loopbackSessionUrl(request("localhost", "::1", "::1"), "abc"), "");
+  assert.equal(loopbackSessionUrl(request("[::1]", "::1", "::1"), "abc"), "", "a bracketed IPv6 loopback host");
+  assert.equal(loopbackSessionUrl({}, "abc"), "");
+});
 
 test("chrome falls back to a default favicon and title when none are provided", () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });

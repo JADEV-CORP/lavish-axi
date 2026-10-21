@@ -180,6 +180,8 @@ const copyPathButton = /** @type {HTMLButtonElement} */ (document.getElementById
 const copyHint = /** @type {HTMLSpanElement} */ (document.getElementById("copyHint"));
 const copyHintText = /** @type {HTMLSpanElement} */ (document.getElementById("copyHintText"));
 const presenceBanner = /** @type {HTMLDivElement} */ (document.getElementById("presenceBanner"));
+const nudgeStatus = /** @type {HTMLElement} */ (document.getElementById("nudgeStatus"));
+const nudgeStatusText = /** @type {HTMLElement} */ (document.getElementById("nudgeStatusText"));
 const agentStatus = /** @type {HTMLSpanElement} */ (document.getElementById("agentStatus"));
 const agentStatusText = /** @type {HTMLSpanElement} */ (document.getElementById("agentStatusText"));
 const chatSuggestions = /** @type {HTMLDivElement} */ (document.getElementById("chatSuggestions"));
@@ -1565,6 +1567,7 @@ function setAgentPresence(state) {
   renderSheetSummary();
   refreshUnseenReceipts();
   if (presenceBanner) presenceBanner.hidden = ended || agentPresence !== "waiting";
+  if (presenceBanner?.hidden) setNudgeStatus("", "");
 
   // A supervisor-owned process-only listener is busy on the agent's behalf. It must not make the
   // composer look like an idle captain turn while the owning agent is offline.
@@ -5046,6 +5049,8 @@ async function handleWhiteboardReady(index, mode, isCurrent) {
       libraries: librariesData ? librariesData.libraries : [],
       librariesUnavailable: !librariesMatch,
       theme: whiteboardTheme(),
+      // The frame tints its header and Excalidraw's accent with this preset (#3795).
+      preset: storedPresetChoice(),
     });
     return true;
   } catch (error) {
@@ -7204,6 +7209,16 @@ const NOTIFY_STORAGE_KEY = "lavish-axi:notifications";
 const AGENT_QUIET_NOTIFY_MS = 30_000;
 const notifyItem = /** @type {HTMLButtonElement} */ (document.getElementById("notifyToggle"));
 const notifyAllowItem = /** @type {HTMLButtonElement} */ (document.getElementById("notifyAllow"));
+const notifyAllowLabel = /** @type {HTMLElement} */ (document.getElementById("notifyAllowLabel"));
+const notifyNote = /** @type {HTMLElement} */ (document.getElementById("notifyNote"));
+// Which review this tab is (#3795): the artifact's title, else a short folder/file label from the
+// server, so two tabs on review.html are told apart without a full path leaving this machine.
+const reviewLabel =
+  typeof sessionData.reviewLabel === "string" && sessionData.reviewLabel
+    ? sessionData.reviewLabel
+    : filePath.split(/[\\/]/).pop() || "Lavish";
+const reviewContext = typeof sessionData.reviewContext === "string" ? sessionData.reviewContext : "";
+const loopbackUrl = typeof sessionData.loopbackUrl === "string" ? sessionData.loopbackUrl : "";
 let sessionNotifyOff = false;
 
 function notificationsOn() {
@@ -7222,14 +7237,65 @@ function desktopPermission() {
   return DesktopNotification ? DesktopNotification.permission : "unsupported";
 }
 
+// Browsers refuse notification permission outright on plain http that is not loopback, such as a
+// Tailscale name, and report it as "denied". Tell that apart from a block the reviewer can lift.
+/** @returns {NotificationPermission | "unsupported" | "insecure"} */
+function desktopState() {
+  if (!DesktopNotification) return "unsupported";
+  if (window.isSecureContext === false) return "insecure";
+  return desktopPermission();
+}
+
+// What the menu says under Notifications, and the one action that moves it forward.
+/** @returns {{ note: string, action: "" | "allow" | "loopback" | "test", label: string }} */
+function notifySettingCopy() {
+  const kept = "The chime and the tab marker still work.";
+  switch (desktopState()) {
+    case "unsupported":
+      return { note: "This browser has no desktop notifications. " + kept, action: "", label: "" };
+    case "insecure":
+      return loopbackUrl
+        ? {
+            note: "Desktop notifications need a secure address, and this tab is on plain http. Open this review at 127.0.0.1, then allow them there.",
+            action: "loopback",
+            label: "Open at 127.0.0.1",
+          }
+        : {
+            note:
+              "Desktop notifications need a secure address, and this tab is on plain http. Open the review on the computer running Lavish to allow them. " +
+              kept,
+            action: "",
+            label: "",
+          };
+    case "denied":
+      return {
+        note: "This browser blocks notifications for this site. Allow them in the site settings beside the address bar, then reload.",
+        action: "",
+        label: "",
+      };
+    case "granted":
+      return {
+        note: "If no banner appears, check your system's notification settings for this browser, and Do not disturb.",
+        action: "test",
+        label: "Send a test notification",
+      };
+    default:
+      return {
+        note: "Until you allow them, a background tab gets only the chime and the tab marker.",
+        action: "allow",
+        label: "Allow desktop notifications",
+      };
+  }
+}
+
 function renderNotifySetting() {
   const on = notificationsOn();
+  const copy = notifySettingCopy();
   notifyItem.setAttribute("aria-checked", String(on));
-  notifyAllowItem.hidden = !on || desktopPermission() !== "default";
-  notifyItem.title =
-    on && desktopPermission() === "denied"
-      ? "This browser blocks desktop notifications for Lavish; the tab count and the chime still work."
-      : "";
+  notifyAllowItem.hidden = !on || !copy.action;
+  if (copy.label) notifyAllowLabel.textContent = copy.label;
+  notifyNote.hidden = !on;
+  notifyNote.textContent = on ? copy.note : "";
 }
 
 /** @param {boolean} on */
@@ -7245,19 +7311,55 @@ function setNotificationsOn(on) {
 }
 
 notifyItem.onclick = () => setNotificationsOn(!notificationsOn());
-// The browser asks only after a click, so permission is requested from this menu item.
+// The browser asks only after a click, so permission is requested from this menu item. The same item
+// opens the loopback address when this one cannot have notifications, and sends a test once allowed.
 notifyAllowItem.onclick = () => {
-  if (desktopPermission() !== "default") return;
-  Promise.resolve(DesktopNotification?.requestPermission()).then(renderNotifySetting, renderNotifySetting);
+  const { action } = notifySettingCopy();
+  if (action === "loopback") location.assign(loopbackUrl);
+  else if (action === "test") showDesktopNotification("Notifications from this review look like this.");
+  else if (action === "allow")
+    Promise.resolve(DesktopNotification?.requestPermission()).then(renderNotifySetting, renderNotifySetting);
 };
 renderNotifySetting();
+// A site setting changed from the address bar shows up the next time this page has focus.
+window.addEventListener("focus", renderNotifySetting);
 
 let unseenCount = 0;
 const titleWithoutCount = () => document.title.replace(/^\(\d+\) /, "");
+// The tab marker (#3795): while something is unseen, the tab's icon carries the accent dot, so the
+// tab that chimed stands out among other Lavish tabs without flashing or desktop permission.
+/** @type {HTMLLinkElement | null} */
+const faviconLink = typeof document.querySelector === "function" ? document.querySelector('link[rel~="icon"]') : null;
+let faviconHref = "";
+/** @param {boolean} marked */
+function markFavicon(marked) {
+  if (!faviconLink) return;
+  if (!marked) {
+    if (faviconHref) faviconLink.href = faviconHref;
+    faviconHref = "";
+    return;
+  }
+  if (!faviconHref) faviconHref = faviconLink.href;
+  const accent = currentPreset()?.orb.light.primary || "oklch(0.514 0.222 16.935)";
+  // The review's own icon stays underneath when it is a data: icon an SVG image can embed.
+  const base = /^data:/.test(faviconHref)
+    ? '<image href="' + escapeHtml(faviconHref) + '" width="32" height="32"/>'
+    : '<rect width="32" height="32" fill="#c70036"/>';
+  faviconLink.href =
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+        base +
+        '<circle cx="25" cy="7" r="7" fill="#fff"/><circle cx="25" cy="7" r="5" style="fill:' +
+        accent +
+        '"/></svg>',
+    );
+}
 function clearUnseen() {
   if (!unseenCount) return;
   unseenCount = 0;
   document.title = titleWithoutCount();
+  markFavicon(false);
 }
 function pageInBackground() {
   return document.visibilityState === "hidden" || (typeof document.hasFocus === "function" && !document.hasFocus());
@@ -7308,17 +7410,14 @@ function playChime() {
   }
 }
 
-const notifyPageName = filePath.split(/[\\/]/).pop() || "Lavish";
+// Titled by the review, with its folder/file context under the message when the title is the
+// artifact's own, so the reviewer can tell which tab spoke. Clicking brings this tab forward.
 /** @param {string} body */
-function notify(body) {
-  if (!notificationsOn() || ended || !pageInBackground()) return;
-  unseenCount += 1;
-  document.title = "(" + unseenCount + ") " + titleWithoutCount();
-  playChime();
-  if (desktopPermission() !== "granted") return;
+function showDesktopNotification(body) {
+  if (desktopState() !== "granted") return;
   try {
-    const note = new /** @type {typeof Notification} */ (DesktopNotification)(notifyPageName + " · Lavish", {
-      body,
+    const note = new /** @type {typeof Notification} */ (DesktopNotification)(reviewLabel + " · Lavish", {
+      body: reviewContext && reviewContext !== reviewLabel ? body + "\n" + reviewContext : body,
       tag: "lavish-" + key,
       silent: true,
     });
@@ -7327,8 +7426,18 @@ function notify(body) {
       note.close();
     };
   } catch {
-    // A browser that refuses the notification keeps the tab count and the chime.
+    // A browser that refuses the notification keeps the tab count, the marker and the chime.
   }
+}
+
+/** @param {string} body */
+function notify(body) {
+  if (!notificationsOn() || ended || !pageInBackground()) return;
+  unseenCount += 1;
+  document.title = "(" + unseenCount + ") " + titleWithoutCount();
+  markFavicon(true);
+  playChime();
+  showDesktopNotification(body);
 }
 
 /** @param {string} text */
@@ -7423,41 +7532,70 @@ setForkUpdate(sessionData.forkUpdate);
 events.set("fork-update", (data) => setForkUpdate(data.update));
 
 // The nudge (#3782): one line to paste into the agent when it stopped polling, naming this page.
+// A session bound to a T3 Code thread (#3795) also gets Nudge agent, which leads; Copy nudge then
+// becomes the quieter fallback. The status line reports the last attempt with a tone the CSS keys
+// its icon and colour from, and clears whenever the notice hides.
 const copyNudgeButton = /** @type {HTMLButtonElement} */ (document.getElementById("copyNudge"));
+const copyNudgeLabel = /** @type {HTMLElement} */ (document.getElementById("copyNudgeLabel"));
+const copyNudgeIcon = /** @type {HTMLElement} */ (document.getElementById("copyNudgeIcon"));
 const nudgeAgentButton = /** @type {HTMLButtonElement} */ (document.getElementById("nudgeAgent"));
-const nudgeStatus = /** @type {HTMLElement} */ (document.getElementById("nudgeStatus"));
+const presenceCopy = /** @type {HTMLElement} */ (document.getElementById("presenceCopy"));
+const nudgeAvailable = sessionData.agentNudgeAvailable === true;
 let nudgePending = false;
-nudgeAgentButton.hidden = sessionData.agentNudgeAvailable !== true;
+/** @type {ReturnType<typeof setTimeout> | undefined} */
+let copyNudgeTimer;
+nudgeAgentButton.hidden = !nudgeAvailable;
+copyNudgeButton.classList.toggle("button-outline", !nudgeAvailable);
+copyNudgeButton.classList.toggle("button-ghost", nudgeAvailable);
+nudgeAgentButton.classList.add("button-outline");
+presenceCopy.textContent = nudgeAvailable
+  ? "Feedback waits until it polls again. Nudge it to resume, or copy a message to paste into your agent."
+  : "Feedback waits until it polls again. Copy a message to paste into your agent.";
+
+/** @param {"" | "pending" | "success" | "info" | "error"} tone @param {string} text */
+function setNudgeStatus(tone, text) {
+  if (!nudgeStatus || !nudgeStatusText) return;
+  nudgeStatus.dataset.tone = tone;
+  nudgeStatusText.textContent = text;
+}
+
 nudgeAgentButton.onclick = async () => {
   if (nudgePending || ended || terminalSubmission) return;
   nudgePending = true;
-  nudgeAgentButton.disabled = true;
-  nudgeAgentButton.textContent = "Nudging...";
-  nudgeStatus.textContent = "";
+  // aria-disabled rather than disabled: a disabled button drops keyboard focus mid-request.
+  nudgeAgentButton.setAttribute("aria-disabled", "true");
+  nudgeAgentButton.setAttribute("aria-busy", "true");
+  setNudgeStatus("pending", "Sending to T3 Code…");
   try {
     const response = await fetch("/api/" + key + "/nudge", { method: "POST", signal: AbortSignal.timeout(12_000) });
     const result = await response.json();
     if (!response.ok) throw new Error("Nudge failed");
-    if (result.status === "sent") nudgeStatus.textContent = "Nudge sent to T3 Code.";
+    if (result.status === "sent")
+      setNudgeStatus("success", "T3 Code accepted the nudge. This notice closes once your agent polls.");
     else if (result.status === "recently-sent")
-      nudgeStatus.textContent = "A nudge was attempted recently. Wait a moment, or use Copy nudge.";
+      setNudgeStatus("info", "A nudge went out moments ago. Give your agent a moment, or use Copy nudge.");
     else if (result.status === "listening" || result.status === "working")
-      nudgeStatus.textContent = "Your agent is already listening or working.";
+      setNudgeStatus("info", "Your agent is already listening or working.");
     else throw new Error("Nudge unavailable");
   } catch {
-    nudgeStatus.textContent = "Could not confirm delivery. Use Copy nudge to contact your agent.";
+    setNudgeStatus("error", "Could not confirm delivery. Use Copy nudge to reach your agent.");
   } finally {
     nudgePending = false;
-    nudgeAgentButton.disabled = false;
-    nudgeAgentButton.textContent = "Nudge agent";
+    nudgeAgentButton.setAttribute("aria-disabled", "false");
+    nudgeAgentButton.setAttribute("aria-busy", "false");
   }
 };
 copyNudgeButton.onclick = async () => {
   const nudge = 'Feedback is waiting in Lavish. Run: lavish-axi poll "' + filePath + '"';
   if (!(await copyText(nudge))) return;
-  copyNudgeButton.textContent = "Copied";
-  setTimeout(() => {
-    copyNudgeButton.textContent = "Copy nudge";
+  copyNudgeLabel.textContent = "Copied";
+  copyNudgeButton.dataset.copied = "true";
+  copyNudgeIcon.dataset.state = "b";
+  clearTimeout(copyNudgeTimer);
+  copyNudgeTimer = setTimeout(() => {
+    copyNudgeLabel.textContent = "Copy nudge";
+    copyNudgeButton.dataset.copied = "false";
+    copyNudgeIcon.dataset.state = "a";
   }, 1500);
 };
 
