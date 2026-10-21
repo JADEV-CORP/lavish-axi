@@ -103,27 +103,86 @@ test("whiteboard confirms sanitized links inside the frame", async () => {
   assert.match(css, /data-lavish-whiteboard-theme="dark"/);
 });
 
-test("whiteboard controls keep Excalidraw's rounded corners inside the square chrome", async () => {
+test("whiteboard UI is square like the chrome while round marks stay round", async () => {
   const frameCss = await readFile(new URL("../src/whiteboard-frame.css", import.meta.url), "utf8");
   const chromeCss = await readFile(new URL("../src/chrome.css", import.meta.url), "utf8");
   const excalidrawCss = await readFile(
     new URL("../node_modules/@excalidraw/excalidraw/dist/prod/index.css", import.meta.url),
     "utf8",
   );
+  const frameRules = cssRules(frameCss);
 
-  // The frame mirrors Excalidraw's own radius tokens, so a version bump that changes them shows here.
-  const md = excalidrawCss.match(/--border-radius-md: ?([^;}]+)/)?.[1].trim();
-  const lg = excalidrawCss.match(/--border-radius-lg: ?([^;}]+)/)?.[1].trim();
-  assert.equal(Number.parseFloat(frameCss.match(/--wb-radius-md: ([^;]+);/)?.[1] ?? ""), Number.parseFloat(md ?? ""));
-  assert.equal(Number.parseFloat(frameCss.match(/--wb-radius-lg: ([^;]+);/)?.[1] ?? ""), Number.parseFloat(lg ?? ""));
-  assert.doesNotMatch(frameCss, /border-radius: 0;/);
-  assert.match(frameCss, /\.wb-link-confirm-card \{[^}]*border-radius: var\(--wb-radius-lg\)/);
+  // The frame's own controls and every override it adds are square.
+  for (const rule of frameRules) {
+    const radius = radiusOf(rule);
+    if (radius !== undefined) assert.equal(radius, "0", `${rule.selectors.join(", ")} rounds its corners`);
+  }
 
-  // The fullscreen shell and its close control round to match; the chrome's own tokens stay square.
-  assert.match(chromeCss, /\.whiteboard-shell \{[^}]*border-radius: var\(--whiteboard-radius-lg\)/);
-  assert.match(chromeCss, /\.whiteboard-close \{[^}]*border-radius: var\(--whiteboard-radius-md\)/);
-  assert.match(chromeCss, /--radius-md: 0;/);
+  // Excalidraw's radius tokens are zeroed, which squares every rule built on them.
+  assert.match(ruleBody(frameRules, "body .excalidraw"), /--border-radius-md: 0;/);
+  assert.match(ruleBody(frameRules, "body .excalidraw"), /--border-radius-lg: 0;/);
+  assert.match(ruleBody(frameRules, "body .excalidraw .color-picker__button"), /--radius: 0;/);
+
+  // An Excalidraw rule that rounds with a literal needs a square override, so an upgrade that adds a
+  // rounded control fails here. Circles (avatars, the collaborator count, slider thumbs) stay round,
+  // and an embed's own corner follows the element's roundness on the canvas.
+  const squared = new Set(frameRules.filter((rule) => radiusOf(rule) === "0").flatMap((rule) => rule.selectors));
+  const missing = [];
+  for (const rule of cssRules(excalidrawCss)) {
+    const radius = radiusOf(rule)?.replace(/\s*!important$/, "");
+    if (!radius || /^(0|50%|100%)$/.test(radius)) continue;
+    if (/var\(--(border-radius-(md|lg)|radius|embeddable-radius)\)/.test(radius)) continue;
+    for (const selector of rule.selectors) {
+      if (!squared.has(normalizeSelector(`body ${selector}`))) missing.push(`${selector} (${radius})`);
+    }
+  }
+  assert.deepEqual(missing, []);
+
+  // The inline embed's frame is square too.
+  const sdk = await readFile(new URL("../src/artifact-sdk.js", import.meta.url), "utf8");
+  assert.match(sdk, /setAttribute\("data-lavish-ui", "whiteboard-inline"\)[\s\S]*?border-radius:0;/);
+
+  // The fullscreen shell and its close control take the chrome's own radius tokens, which are 0.
+  const chromeRules = cssRules(chromeCss);
+  for (const selector of [".whiteboard-shell", ".whiteboard-close"]) {
+    const token = radiusOf({ body: ruleBody(chromeRules, selector) })?.match(/^var\((--radius-[a-z]+)\)$/)?.[1];
+    assert.ok(token, `${selector} takes a chrome radius token`);
+    assert.match(chromeCss, new RegExp(`${token}: 0;`));
+  }
 });
+
+/** @param {string} css */
+function cssRules(css) {
+  return [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selectors: match[1].split(",").map(normalizeSelector),
+    body: match[2],
+  }));
+}
+
+/**
+ * @param {{ selectors: string[], body: string }[]} rules  Every rule naming the selector contributes.
+ * @param {string} selector
+ */
+function ruleBody(rules, selector) {
+  return rules
+    .filter((rule) => rule.selectors.includes(selector))
+    .map((rule) => rule.body)
+    .join("");
+}
+
+/** @param {{ body: string }} rule */
+function radiusOf(rule) {
+  return rule.body.match(/border-radius:\s*([^;]+)/)?.[1].trim();
+}
+
+/**
+ * Excalidraw's minified CSS writes `:before` and unquoted attribute values; the frame writes
+ * `::before` and quotes them.
+ * @param {string} selector
+ */
+function normalizeSelector(selector) {
+  return selector.replace(/::/g, ":").replace(/["']/g, "").replace(/\s+/g, " ").trim();
+}
 
 test("whiteboard channel tokens are signed, session bound, and short lived", () => {
   const secret = Buffer.from("whiteboard-test-secret");

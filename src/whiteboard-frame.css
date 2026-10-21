@@ -4,8 +4,8 @@
    The palette (#3795) is the chrome's: applyPalette in whiteboard-frame.js injects the shadcn
    tokens from src/theme-presets.js and the reviewer's preset, and each token holds its light and
    dark value in light-dark(), so the body's color-scheme picks the side. Controls follow the
-   chrome's Inter type and button recipes in src/chrome.css, with Excalidraw's rounded corners
-   rather than the chrome's square Lyra ones, so the header matches the editor's toolbar. */
+   chrome's square Lyra shapes (--radius-* are 0), Inter type and button recipes in src/chrome.css,
+   and Excalidraw's own toolbars, menus and dialogs are squared to match below. */
 
 /* Inter, vendored like the chrome's: esbuild copies these next to whiteboard.css, which the
    /whiteboard-assets route serves with the CORS header the opaque-origin frame needs. */
@@ -45,10 +45,6 @@ body {
   --wb-amber-surface: light-dark(oklch(0.96 0.05 85), oklch(0.27 0.04 80));
   --wb-amber-border: light-dark(oklch(0.82 0.1 80), oklch(0.47 0.08 80));
   --wb-scrim: light-dark(oklch(0.145 0.008 326 / 35%), oklch(0.1 0.01 326 / 72%));
-  /* Excalidraw's --border-radius-md and -lg, which it scopes to .excalidraw. The frame's own
-     controls take md and its cards take lg. */
-  --wb-radius-md: 0.375rem;
-  --wb-radius-lg: 0.5rem;
   font-family: var(--wb-font);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
@@ -93,7 +89,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   height: 28px;
   box-sizing: border-box;
   padding: 0 10px;
-  border-radius: var(--wb-radius-md);
+  border-radius: 0;
   border: 1px solid var(--input);
   background: transparent;
   color: inherit;
@@ -121,7 +117,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   height: 28px;
   box-sizing: border-box;
   border: 0;
-  border-radius: var(--wb-radius-md);
+  border-radius: 0;
   padding: 0 12px;
   font: inherit;
   font-size: 12px;
@@ -184,7 +180,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   margin-left: 8px;
   height: 24px;
   border: 1px solid var(--input);
-  border-radius: var(--wb-radius-md);
+  border-radius: 0;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -231,7 +227,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   box-sizing: border-box;
   padding: 16px;
   border: 1px solid var(--border-color);
-  border-radius: var(--wb-radius-lg);
+  border-radius: 0;
   background: var(--popover);
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
 }
@@ -257,7 +253,6 @@ body[data-lavish-whiteboard-theme="dark"] {
   overflow-wrap: anywhere;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--wb-radius-md);
   background: var(--background);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -300,7 +295,6 @@ body[data-lavish-whiteboard-mode="inline"] #wbHeader {
   background: var(--popover);
   color: var(--foreground);
   border: 1px solid var(--border-color);
-  border-radius: var(--wb-radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   opacity: 0.9;
   transition: opacity 120ms ease-out;
@@ -341,6 +335,68 @@ body .excalidraw.theme--dark {
   --color-brand-active: var(--accent-text-hover);
   --color-surface-primary-container: color-mix(in oklch, var(--primary) 55%, var(--background));
   --color-on-primary-container: color-mix(in oklch, var(--accent-text) 35%, white);
+}
+
+/* Lyra is square, so Excalidraw's UI chrome is too. Its two radius tokens cover the toolbar,
+   islands, menus, sidebar and buttons; the rules after them catch the controls it rounds with
+   literal values. Avatars, the collaborator count and slider thumbs stay round, as identity
+   marks and handles rather than corners. The canvas draws in <canvas>, so shapes, round
+   corners on elements and selection handles are untouched. */
+body .excalidraw {
+  --border-radius-md: 0;
+  --border-radius-lg: 0;
+}
+
+body .excalidraw .color-picker__button,
+body .excalidraw .color-picker__button--large {
+  --radius: 0;
+}
+
+body .excalidraw .excalidraw-eye-dropper-preview,
+body .excalidraw .excalidraw-eye-dropper-trigger,
+body .excalidraw .color-picker,
+body .excalidraw .color-picker-content--default,
+body .excalidraw .color-picker-swatch,
+body .excalidraw .color-picker-transparent,
+body .excalidraw .color-picker__input-label,
+body .excalidraw .picker,
+body .excalidraw .picker-content,
+body .excalidraw .range-input,
+body .excalidraw-tooltip,
+body .excalidraw .Checkbox .Checkbox-box,
+body .excalidraw .library-unit__checkbox .Checkbox-box,
+body .excalidraw .Modal__content,
+body .excalidraw .single-library-item-status,
+body .excalidraw .single-library-item--remove svg,
+body .excalidraw .library-actions-counter,
+body .excalidraw .ExcTextField__input,
+body .excalidraw .command-palette-dialog .shortcut .shortcut-key,
+body .excalidraw .context-menu,
+body .excalidraw .RadioGroup,
+body .excalidraw .RadioGroup__choice,
+body .excalidraw .RadioGroup__choice input,
+body .excalidraw .Switch,
+body .excalidraw .Switch::before,
+body .excalidraw .Switch input,
+body .excalidraw .ImageExportModal__preview__canvas,
+body .excalidraw .ExcButton,
+body .excalidraw .PasteChartDialog .ChartPreview,
+body .excalidraw .Card .Card-icon,
+body .excalidraw button.ExportDialog-imageExportButton,
+body .excalidraw .default-sidebar .sidebar-triggers,
+body .excalidraw .OverwriteConfirm__Description,
+body .excalidraw .OverwriteConfirm__Description__icon,
+body .excalidraw .ttd-dialog-submit-shortcut__key,
+body .excalidraw .ElementLinkDialog,
+body .excalidraw .Toast,
+body .excalidraw .follow-mode__badge,
+body .excalidraw .follow-mode__disconnect-btn,
+body .excalidraw .dropdown-select,
+body .excalidraw input[type="text"],
+body .excalidraw textarea:not(.excalidraw-wysiwyg),
+body .excalidraw ::-webkit-scrollbar-thumb,
+body .excalidraw__embeddable-container .excalidraw__embeddable-hint {
+  border-radius: 0;
 }
 
 /* Filled controls match the header's Queue feedback in both themes: the chrome's primary fill

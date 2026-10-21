@@ -1037,7 +1037,7 @@ export function createArtifactSdk(
     iframe.src = whiteboardFrameSrc({ index, diagramId: svg.id || "" });
     iframe.style.cssText =
       `display:block;width:100%;height:${whiteboardEmbedHeightPx(rect)}px;border:1px solid rgba(128,128,128,.35);` +
-      "border-radius:12px;background:transparent";
+      "border-radius:0;background:transparent";
     // The design snippet re-renders Mermaid inside the container on theme
     // changes, so the frame lives as a sibling: re-renders stay harmless
     // inside the hidden container instead of destroying the editor.
