@@ -103,6 +103,28 @@ test("whiteboard confirms sanitized links inside the frame", async () => {
   assert.match(css, /data-lavish-whiteboard-theme="dark"/);
 });
 
+test("whiteboard controls keep Excalidraw's rounded corners inside the square chrome", async () => {
+  const frameCss = await readFile(new URL("../src/whiteboard-frame.css", import.meta.url), "utf8");
+  const chromeCss = await readFile(new URL("../src/chrome.css", import.meta.url), "utf8");
+  const excalidrawCss = await readFile(
+    new URL("../node_modules/@excalidraw/excalidraw/dist/prod/index.css", import.meta.url),
+    "utf8",
+  );
+
+  // The frame mirrors Excalidraw's own radius tokens, so a version bump that changes them shows here.
+  const md = excalidrawCss.match(/--border-radius-md: ?([^;}]+)/)?.[1].trim();
+  const lg = excalidrawCss.match(/--border-radius-lg: ?([^;}]+)/)?.[1].trim();
+  assert.equal(Number.parseFloat(frameCss.match(/--wb-radius-md: ([^;]+);/)?.[1] ?? ""), Number.parseFloat(md ?? ""));
+  assert.equal(Number.parseFloat(frameCss.match(/--wb-radius-lg: ([^;]+);/)?.[1] ?? ""), Number.parseFloat(lg ?? ""));
+  assert.doesNotMatch(frameCss, /border-radius: 0;/);
+  assert.match(frameCss, /\.wb-link-confirm-card \{[^}]*border-radius: var\(--wb-radius-lg\)/);
+
+  // The fullscreen shell and its close control round to match; the chrome's own tokens stay square.
+  assert.match(chromeCss, /\.whiteboard-shell \{[^}]*border-radius: var\(--whiteboard-radius-lg\)/);
+  assert.match(chromeCss, /\.whiteboard-close \{[^}]*border-radius: var\(--whiteboard-radius-md\)/);
+  assert.match(chromeCss, /--radius-md: 0;/);
+});
+
 test("whiteboard channel tokens are signed, session bound, and short lived", () => {
   const secret = Buffer.from("whiteboard-test-secret");
   const now = 1_700_000_000_000;

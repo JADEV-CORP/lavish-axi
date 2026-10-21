@@ -4,7 +4,8 @@
    The palette (#3795) is the chrome's: applyPalette in whiteboard-frame.js injects the shadcn
    tokens from src/theme-presets.js and the reviewer's preset, and each token holds its light and
    dark value in light-dark(), so the body's color-scheme picks the side. Controls follow the
-   chrome's square Lyra shapes, Inter type and button recipes in src/chrome.css. */
+   chrome's Inter type and button recipes in src/chrome.css, with Excalidraw's rounded corners
+   rather than the chrome's square Lyra ones, so the header matches the editor's toolbar. */
 
 /* Inter, vendored like the chrome's: esbuild copies these next to whiteboard.css, which the
    /whiteboard-assets route serves with the CORS header the opaque-origin frame needs. */
@@ -44,6 +45,10 @@ body {
   --wb-amber-surface: light-dark(oklch(0.96 0.05 85), oklch(0.27 0.04 80));
   --wb-amber-border: light-dark(oklch(0.82 0.1 80), oklch(0.47 0.08 80));
   --wb-scrim: light-dark(oklch(0.145 0.008 326 / 35%), oklch(0.1 0.01 326 / 72%));
+  /* Excalidraw's --border-radius-md and -lg, which it scopes to .excalidraw. The frame's own
+     controls take md and its cards take lg. */
+  --wb-radius-md: 0.375rem;
+  --wb-radius-lg: 0.5rem;
   font-family: var(--wb-font);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
@@ -88,7 +93,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   height: 28px;
   box-sizing: border-box;
   padding: 0 10px;
-  border-radius: 0;
+  border-radius: var(--wb-radius-md);
   border: 1px solid var(--input);
   background: transparent;
   color: inherit;
@@ -116,7 +121,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   height: 28px;
   box-sizing: border-box;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--wb-radius-md);
   padding: 0 12px;
   font: inherit;
   font-size: 12px;
@@ -179,7 +184,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   margin-left: 8px;
   height: 24px;
   border: 1px solid var(--input);
-  border-radius: 0;
+  border-radius: var(--wb-radius-md);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -226,7 +231,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   box-sizing: border-box;
   padding: 16px;
   border: 1px solid var(--border-color);
-  border-radius: 0;
+  border-radius: var(--wb-radius-lg);
   background: var(--popover);
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
 }
@@ -252,6 +257,7 @@ body[data-lavish-whiteboard-theme="dark"] {
   overflow-wrap: anywhere;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
+  border-radius: var(--wb-radius-md);
   background: var(--background);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -294,6 +300,7 @@ body[data-lavish-whiteboard-mode="inline"] #wbHeader {
   background: var(--popover);
   color: var(--foreground);
   border: 1px solid var(--border-color);
+  border-radius: var(--wb-radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   opacity: 0.9;
   transition: opacity 120ms ease-out;
