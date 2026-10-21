@@ -1837,6 +1837,10 @@ body {
   align-items: center;
   gap: 6px;
 }
+/* The display above beats the UA [hidden] rule, which left Nudge agent showing on unbound sessions (#3834). */
+.nudge-actions .button[hidden] {
+  display: none;
+}
 .nudge-actions .button > svg,
 .nudge-actions .t-icon-swap svg {
   flex: 0 0 auto;

@@ -4,6 +4,7 @@ import { readArtifactRevisions } from "./artifact-revisions.js";
 import { findTextMatches, findTextNodeIndex, isFindHotkeyEvent } from "./find-in-page.js";
 import * as mermaidHelpers from "./mermaid-node.js";
 import { tableCellTarget } from "./table-cell.js";
+import { encodeToon } from "./toon-encode.js";
 
 export const LAVISH_INTERNAL_QUEUE_KEY = "_lavishQueueKey";
 
@@ -1410,7 +1411,8 @@ export function createArtifactSdk(
     if (options.tag) item.tag = String(options.tag);
     if (options.text) item.text = String(options.text);
     if (options.target) item.target = options.target;
-    if (options.data) item.prompt += "\n\nContext data:\n" + JSON.stringify(options.data, null, 2);
+    // TOON rather than indented JSON: the same data in fewer tokens for the agent (#3834).
+    if (options.data) item.prompt += "\n\nContext data:\n" + encodeToon(options.data);
     // Attach only the client-controllable fields (server-vetted id + display name);
     // the chrome forwards these and the server re-resolves each id (see queuePrompts).
     if (Array.isArray(options.attachments) && options.attachments.length) {

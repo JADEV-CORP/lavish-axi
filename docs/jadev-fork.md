@@ -37,25 +37,55 @@ when they hold an unsent draft.
 
 ## Direct agent nudges
 
-Create a T3 Connect webhook task bound to the review's owning thread. Its prompt should tell the agent to poll the
-session named by `{{body.file}}` and `{{body.key}}`, within the already approved scope, without taking over another
-listener. Save the returned webhook URL in a private local file, then run:
+Inside T3 Code, a review can be linked to the thread of the conversation that opened it. When the agent stops
+listening, the review's notice then offers **Nudge agent**, which runs `t3 thread send` to that thread with one line
+naming the review file and asking the agent to poll it. It sends no artifact content or feedback text, and it
+registers nothing in T3 Code, so there is no webhook to clean up. A busy thread gets the message as its next turn.
+
+The agent links its conversation once. It reads its own thread id from T3 Code's `orchestrator_capabilities`
+(`parentThreadId`) and passes it with the first review:
 
 ```sh
-lavish-axi bind-agent report.html --webhook-file /private/path/t3-webhook.txt
+lavish-axi report.html --t3-thread <thread-id>
+# or, after the review is open
+lavish-axi bind-agent report.html --t3-thread <thread-id>
 ```
 
-Reload the review tab. After the existing no-listener delay, **Nudge agent** sends the session's absolute file path
-and key to T3 Connect. It sends no artifact content or feedback text. The URL stays in the local state directory's
-`agent-bindings` folder, outside session JSON, browser markup and exports. Files request owner-only permissions;
-on Windows they inherit the state directory's ACL. Protect that directory as you protect other agent credentials.
+`lavish-axi <file>` reports `agent_link` (`linked`, `not linked` with that step, or `failed` with a reason) only when
+it runs inside T3 Code. Lavish checks the thread with `t3 thread show` first, which takes about ten seconds while
+T3's CLI starts. Every later review the same conversation opens links automatically, without asking T3 again.
+The conversation is recognised by the harness id T3 Code's Claude and Codex providers expose (`CLAUDE_CODE_SESSION_ID`,
+`CODEX_THREAD_ID`), stored only as a hash. Reuse never replaces a link another conversation made; an explicit
+`--t3-thread` does. An open tab notices a new or removed link the next time its not-listening notice opens.
 
-The action reports relay acceptance, not that the agent has read the feedback. Concurrent clicks share one request,
-and every attempted delivery has a 15-second cooldown because a timed-out request may already have arrived.
-An active listener or a working agent needs no nudge. **Copy nudge** stays available for delivery failures and
-other harnesses. No automatic nudge runs. T3 Connect must be reachable, and the webhook stays bound to its original
-thread. Remove the binding with `lavish-axi bind-agent report.html --clear` and delete the T3 webhook when retiring
-that integration.
+Ending a review, from the browser or with `lavish-axi end`, removes its link, and a server restart removes the links
+of reviews that ended while it was down. The conversation's own thread record stays so its next review still links,
+and is pruned after 30 days unused. `bind-agent --clear` removes a link by hand.
+
+Outside T3 Code nothing is linked and the notice offers **Copy nudge**, a line to paste into the agent. It stays
+available in T3 Code too, for failed deliveries. The action reports that T3 queued the message, not that the agent
+read the feedback. Concurrent clicks share one request, and every attempt has a 15-second cooldown because a timed-out
+send may still arrive. No automatic nudge runs.
+
+The older webhook link (`bind-agent --webhook-file <file>` holding a T3 Connect webhook URL from `schedule_task`) still
+works. Lavish removes its local copy when the review ends, but it cannot delete the webhook task in T3 Code: the thread
+that created it must, with `delete_scheduled_task`. Prefer `--t3-thread`.
+
+What is not automatic yet: T3 Code does not tell the processes it runs which thread they belong to, so the first
+review of each conversation needs the agent's one `--t3-thread` step. If T3 Code exported the calling thread's id to
+provider processes, Lavish could link that first review too.
+
+## Polls survive a server restart
+
+A newer CLI replacing the server, `lavish-axi stop`, or a Tailscale address change all restart the server. A poll
+waiting at that moment, often one started with `--agent-reply`, used to exit with `SERVER_ERROR`, and the agent
+stopped listening. It now prints a line on stderr and listens again on the new server, up to three times, when that
+server holds no other listener for the review. It does not post its reply a second time.
+
+## Context data is TOON
+
+`window.lavish.queuePrompt(text, { data })` appends the data to the prompt as TOON (`question: D20`,
+`items[2]{id,label}:` rows) instead of indented JSON: the same content in fewer tokens.
 
 ## Upstream 0.1.90 adaptations
 
