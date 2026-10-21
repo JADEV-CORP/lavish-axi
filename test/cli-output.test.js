@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -2939,8 +2941,14 @@ test("shouldRestartServer reuses a server running the same version", () => {
   assert.equal(shouldRestartServer("0.1.4", { ok: true, version: "0.1.4" }), false);
 });
 
-test("shouldRestartServer restarts a same-version server after a Tailscale transition", () => {
-  const health = { ok: true, app: "lavish-axi", version: "0.1.4", network_stale: true };
+test("shouldRestartServer requires evidence for a Tailscale transition", () => {
+  const health = {
+    ok: true,
+    app: "lavish-axi",
+    version: "0.1.4",
+    network_stale: true,
+    network_stale_reason: "confirmed address change",
+  };
   assert.equal(shouldRestartServer("0.1.4", health), true);
   assert.equal(serverReplacementReason("0.1.4", health), "");
 });
@@ -2977,7 +2985,10 @@ test("shouldRestartServer compares versions numerically, not as strings", () => 
 test("shouldRestartServer still replaces a newer server when forced or network-stale", () => {
   const newer = { ok: true, app: "lavish-axi", version: "0.1.5" };
   assert.equal(shouldRestartServer("0.1.4", newer, true), true);
-  assert.equal(shouldRestartServer("0.1.4", { ...newer, network_stale: true }), true);
+  assert.equal(
+    shouldRestartServer("0.1.4", { ...newer, network_stale: true, network_stale_reason: "confirmed address change" }),
+    true,
+  );
 });
 
 test("shouldRestartServer falls back to replacing a server whose version does not parse", () => {
@@ -3346,7 +3357,13 @@ test("opening an artifact names that session as the one to reload across a versi
     const code = await new Promise((resolve) => child.on("exit", resolve));
 
     assert.equal(code, 0, stderr);
-    assert.deepEqual(recorder.bodies, [{ reload_key: sessionKey(await canonicalFile(artifact)), reason: "upgrade" }]);
+    assert.deepEqual(recorder.bodies, [
+      {
+        reload_key: sessionKey(await canonicalFile(artifact)),
+        reason: "upgrade",
+        cause: `version mismatch; running=0.0.0-previous; cli=${VERSION}`,
+      },
+    ]);
   } finally {
     // The CLI replaced the recorder with a real server on that port; stop it again.
     await fetch(`${base}/shutdown`, { method: "POST" }).catch(() => {});

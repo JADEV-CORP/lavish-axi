@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { on, once } from "node:events";
@@ -1585,7 +1587,7 @@ test("server status pages use the chrome's square rose tokens without loading an
 
 test("network reconciliation coalesces concurrent checks and briefly caches the result", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-tailscale-reconcile-"));
-  let detected = null;
+  let detected = { ipv4: "127.0.0.1", magicDnsName: "old.test" };
   let detectionCalls = 0;
   const server = await serve({
     port: 0,
@@ -1600,11 +1602,7 @@ test("network reconciliation coalesces concurrent checks and briefly caches the 
     idleTimeoutMs: null,
   });
   try {
-    detected = {
-      ipv4: null,
-      magicDnsName: null,
-      warning: "Tailscale is running but MagicDNS is unavailable; there is no phone access.",
-    };
+    detected = { ipv4: "127.0.0.1", magicDnsName: "new.test" };
     const ordinary = await fetch(`http://127.0.0.1:${server.port}/health`).then((response) => response.json());
     assert.equal(ordinary.network_stale, undefined);
     const checks = await Promise.all(
@@ -1613,13 +1611,13 @@ test("network reconciliation coalesces concurrent checks and briefly caches the 
       ),
     );
     assert.ok(checks.every((body) => body.network_stale === true));
-    assert.ok(checks.every((body) => body.network_warning.includes("MagicDNS is unavailable")));
+    assert.ok(checks.every((body) => body.network_stale_reason.includes("old.test")));
     assert.equal(detectionCalls, 2);
     const cached = await fetch(`http://127.0.0.1:${server.port}/health?reconcile_network=1`).then((response) =>
       response.json(),
     );
     assert.equal(cached.network_stale, true);
-    assert.match(cached.network_warning, /MagicDNS is unavailable/);
+    assert.match(cached.network_stale_reason, /new.test/);
     assert.equal(detectionCalls, 2);
   } finally {
     await server.close();
@@ -1627,7 +1625,7 @@ test("network reconciliation coalesces concurrent checks and briefly caches the 
   }
 });
 
-test("reconciliation distinguishes incomplete Tailscale from down state", async () => {
+test("incomplete and unavailable Tailscale checks do not prove an address change", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-tailscale-incomplete-"));
   /** @type {any} */
   let detected = {
@@ -1649,8 +1647,8 @@ test("reconciliation distinguishes incomplete Tailscale from down state", async 
     const health = await fetch(`http://127.0.0.1:${server.port}/health?reconcile_network=1`).then((response) =>
       response.json(),
     );
-    assert.equal(health.network_stale, true);
-    assert.equal(health.network_warning, undefined);
+    assert.equal(health.network_stale, undefined);
+    assert.match(health.network_warning, /MagicDNS is unavailable/);
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });
@@ -4586,7 +4584,7 @@ test("a version-driven shutdown reloads only the chrome whose session it names",
     await fetch(`${base}/shutdown`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reload_key: openedKey, reason: "upgrade" }),
+      body: JSON.stringify({ reload_key: openedKey, reason: "upgrade", force: true }),
     });
 
     const openedEvents = await openedStream.finished();
@@ -4616,7 +4614,7 @@ test("a shutdown that names no session reloads nobody", async () => {
     await fetch(`${base}/shutdown`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reason: "stop" }),
+      body: JSON.stringify({ reason: "stop", force: true }),
     });
 
     for (const events of [await openedStream.finished(), await otherStream.finished()]) {
@@ -4642,7 +4640,7 @@ test("a shutdown that names no reason claims none", async () => {
     await fetch(`${base}/shutdown`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reason: "because" }),
+      body: JSON.stringify({ reason: "because", force: true }),
     });
 
     for (const events of [await openedStream.finished(), await otherStream.finished()]) {
@@ -5702,7 +5700,8 @@ test("SSE agent-presence returns to waiting when poll feedback storage fails", a
 
       await writeFile(stateFile, "not json");
       const pollResult = await poll;
-      assert.equal(pollResult.status, 500);
+      assert.equal(pollResult.status, 200);
+      await assert.rejects(() => pollResult.json(), /terminated|aborted|closed/i);
 
       assert.equal(await presence.next(), "waiting");
     } finally {

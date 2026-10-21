@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -419,6 +421,7 @@ async function openCommand(args) {
   const baseUrl = await ensureServer({
     forceRestart: shouldForceRestartForLocalBuild(process.argv[1] || ""),
     reloadKey: sessionKey(absolute),
+    force: args.includes("--force"),
   });
   const response = await postJson(`${baseUrl}/api/sessions`, { file: absolute, noGate, reopen });
   if (response.status === "user-ended") {
@@ -560,7 +563,7 @@ async function pollCommand(args) {
   const takeover = args.includes("--takeover");
   const agentReply = await resolveAgentReply(args);
   const absolute = await canonicalFile(file);
-  const baseUrl = await ensureServer();
+  const baseUrl = await ensureServer({ force: args.includes("--force") });
   const timeoutMs = flagValue(args, "--timeout-ms");
   const query = new URLSearchParams({ file: absolute });
   const roundMs = pollRoundMs();
@@ -613,6 +616,7 @@ async function pollCommand(args) {
           // Poll ownership is claimed before the response is available. Retrying a transport failure
           // can leave the first claim alive and make the retry reject itself as LISTENER_ACTIVE.
           retries: 0,
+          longPoll: true,
           onResponse: (pollResponse) => {
             if (pollResponse.headers.get(POLL_STATE_HEADER) === "listening") notifyHerdrPollReady();
           },
@@ -629,8 +633,12 @@ async function pollCommand(args) {
         if (!next) throw error;
         pollBase = next;
         query.delete("takeover");
+        const detail =
+          error.code === "SERVER_RESTARTED"
+            ? "The Lavish server restarted"
+            : "The Lavish poll connection was interrupted";
         process.stderr.write(
-          "\n[lavish-axi] The Lavish server restarted while this poll waited. Listening again on the new server; feedback stays queued.\n",
+          `\n[lavish-axi] ${detail}. Listening again on the available server; feedback stays queued.\n`,
         );
       }
     }
@@ -699,7 +707,7 @@ async function replyCommand(args) {
   }
   await assertHtmlFile(file);
   const absolute = await canonicalFile(file);
-  const baseUrl = await ensureServer();
+  const baseUrl = await ensureServer({ force: args.includes("--force") });
   await postAgentReply(`${baseUrl}/api/${sessionKey(absolute)}/agent-reply`, text, absolute);
   return createReplyOutput(absolute);
 }
@@ -861,7 +869,7 @@ async function endCommand(args) {
     throw new AxiError("HTML file path is required", "VALIDATION_ERROR", ["Run `lavish-axi end <html-file>`"]);
   }
   const absolute = await canonicalFile(file);
-  const baseUrl = await ensureServer();
+  const baseUrl = await ensureServer({ force: args.includes("--force") });
   const response = await postJson(`${baseUrl}/api/end`, { file: absolute });
   const released = response.agent_link_released;
   return {
@@ -1443,10 +1451,12 @@ export async function stopCommand(args) {
   // A server that fell back to loopback answers there rather than at the requested bind host, and
   // a `stop` that only dials the requested host reports "not-running" while leaving it running.
   // A same-port duplicate at another address is this installation's server too, so it stops as well.
-  const { baseUrl, duplicates, foreign } = await findRunningServer(port);
+  const { baseUrl, health, duplicates, foreign } = await findRunningServer(port);
   if (foreign) throw otherInstallationError(port, foreign);
-  await stopDuplicateServers(duplicates, { reason: "stop" });
-  return shutdownServerOnPort(port, { baseUrl, currentVersion: VERSION });
+  const force = args.includes("--force");
+  assertServerIdle(health, force);
+  await stopDuplicateServers(duplicates, { reason: "stop", force });
+  return shutdownServerOnPort(port, { baseUrl, currentVersion: VERSION, force });
 }
 
 export async function shutdownServerOnPort(
@@ -1454,6 +1464,7 @@ export async function shutdownServerOnPort(
   {
     baseUrl = `http://${hostForUrl(clientHost())}:${port}`,
     currentVersion = VERSION,
+    force = false,
     fetchHealth: healthFetcher = fetchHealth,
     requestShutdown: shutdownRequester = requestShutdown,
     waitForPortFree: portFreeWaiter = waitForPortFree,
@@ -1468,7 +1479,8 @@ export async function shutdownServerOnPort(
   if (!(await canControlServerOnPort(baseUrl, health, processMatchesLavish))) {
     return { server: { status: "not-lavish", port } };
   }
-  await shutdownRequester(baseUrl, { reason: "stop" });
+  assertServerIdle(health, force);
+  await shutdownRequester(baseUrl, { reason: "stop", ...(force ? { force: true } : {}) });
   let freed = await portFreeWaiter(baseUrl, 3000);
   if (!freed && shouldKillProcessOnPort(currentVersion, health)) {
     if (!killServerProcess(baseUrl)) throw unidentifiedListenerError(baseUrl);
@@ -2052,11 +2064,14 @@ function ownedDuplicates(owned, chosen) {
 
 // Duplicates are retired over their own /shutdown, never by process name or port-wide signal, so
 // nothing but an identified Lavish server of this installation is ever stopped.
-async function stopDuplicateServers(duplicates, { reloadKey = "", reason = "" } = {}) {
+async function stopDuplicateServers(duplicates, { reloadKey = "", reason = "", force = false } = {}) {
+  for (const duplicate of duplicates) assertServerIdle(duplicate.health, force);
   for (const duplicate of duplicates) {
     await requestShutdown(duplicate.baseUrl, {
       reloadKey,
       reason: reason || serverReplacementReason(VERSION, duplicate.health),
+      force,
+      cause: "retiring an owned duplicate server",
     });
     await waitForPortFree(duplicate.baseUrl, 3000);
   }
@@ -2065,9 +2080,9 @@ async function stopDuplicateServers(duplicates, { reloadKey = "", reason = "" } 
 // Keep the running server, retiring any same-port duplicate first. Only duplicates whose addresses
 // the kept server already requests reach here (`hostsToServe`), and the reconcile afterwards makes
 // it bind an address the duplicate was holding right away, instead of on its next background retry.
-async function adoptServer(baseUrl, duplicates, reloadKey) {
+async function adoptServer(baseUrl, duplicates, reloadKey, force = false) {
   if (duplicates.length === 0) return baseUrl;
-  await stopDuplicateServers(duplicates, { reloadKey });
+  await stopDuplicateServers(duplicates, { reloadKey, force });
   await probeHealth(baseUrl, { reconcileNetwork: true, timeoutMs: HEALTH_RECONCILE_TIMEOUT_MS });
   return baseUrl;
 }
@@ -2130,7 +2145,7 @@ async function probeHealth(baseUrl, { reconcileNetwork, timeoutMs }) {
 
 // `reloadKey` names the session this invocation is about to open. A version-driven replacement
 // reloads that chrome only; every other open review page is told it is outdated and left alone.
-async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
+async function ensureServer({ forceRestart = false, reloadKey = "", force = false } = {}) {
   const port = defaultPort();
   const requiredHosts = await requiredServerHosts();
   const { baseUrl, health: existing, duplicates, foreign } = await findRunningServer(port, { reconcileNetwork: true });
@@ -2138,7 +2153,7 @@ async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
   const missingHosts =
     existing?.app === "lavish-axi" ? missingServerHosts(existing, hostsToServe(requiredHosts, duplicates)) : [];
   if (existing && !shouldRestartServer(VERSION, existing, forceRestart) && missingHosts.length === 0) {
-    return adoptServer(baseUrl, duplicates, reloadKey);
+    return adoptServer(baseUrl, duplicates, reloadKey, force);
   }
   let alsoListen = inheritedListenHosts([existing, ...duplicates.map((duplicate) => duplicate.health)], requiredHosts);
   let unidentified = "";
@@ -2148,10 +2163,16 @@ async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
         `Stop the process using port ${port}, or set LAVISH_AXI_PORT to another port`,
       ]);
     }
-    await stopDuplicateServers(duplicates, { reloadKey });
+    assertServerIdle(existing, force);
+    await stopDuplicateServers(duplicates, { reloadKey, force });
     // Stale server from an older release is squatting on the port. Ask it to shut down
     // gracefully so the upgraded client doesn't keep handing users an old chrome.
-    await requestShutdown(baseUrl, { reloadKey, reason: serverReplacementReason(VERSION, existing, forceRestart) });
+    await requestShutdown(baseUrl, {
+      reloadKey,
+      reason: serverReplacementReason(VERSION, existing, forceRestart),
+      force,
+      cause: replacementCause(existing, missingHosts, forceRestart),
+    });
     const freed = await waitForPortFree(baseUrl, 2000);
     if (!freed) {
       // Pre-handshake servers (any release older than this change) don't expose /shutdown
@@ -2167,7 +2188,7 @@ async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
   const replacedForNetwork =
     Boolean(existing) &&
     existing.app === "lavish-axi" &&
-    existing.network_stale === true &&
+    confirmedNetworkChange(existing) &&
     !forceRestart &&
     typeof existing.version === "string" &&
     !isServerOlderThanCli(VERSION, existing.version);
@@ -2187,33 +2208,39 @@ async function ensureServer({ forceRestart = false, reloadKey = "" } = {}) {
     // Once is the bound: every replacement carries the hosts of the server it replaces, so two CLIs
     // that each need their own address converge on one server instead of replacing each other.
     if (health && !shouldRestartServer(VERSION, health)) {
-      if (liveMissing.length === 0) return adoptServer(liveUrl, liveDuplicates, reloadKey);
+      if (liveMissing.length === 0) return adoptServer(liveUrl, liveDuplicates, reloadKey, force);
       if (raceRestarted) throw missingHostsError(port, liveMissing);
     }
     // Another daemon won the port while ours was starting (ours exits when a Lavish server already
     // owns loopback) - an older release, or one missing an address this CLI needs. Retire it and
     // start once more rather than wait it out.
-    if (health?.app === "lavish-axi" && health.network_stale !== true && !raceRestarted) {
+    if (health?.app === "lavish-axi" && !confirmedNetworkChange(health) && !raceRestarted) {
       raceRestarted = true;
       alsoListen = inheritedListenHosts(
         [health, ...liveDuplicates.map((duplicate) => duplicate.health)],
         requiredHosts,
         alsoListen,
       );
-      await stopDuplicateServers(liveDuplicates, { reloadKey });
-      await requestShutdown(liveUrl, { reloadKey, reason: serverReplacementReason(VERSION, health) });
+      assertServerIdle(health, force);
+      await stopDuplicateServers(liveDuplicates, { reloadKey, force });
+      await requestShutdown(liveUrl, {
+        reloadKey,
+        reason: serverReplacementReason(VERSION, health),
+        force,
+        cause: replacementCause(health, liveMissing),
+      });
       if (!(await waitForPortFree(liveUrl, 3000))) break;
       await startServer(port, { alsoListen });
       deadline = Date.now() + 5000;
       continue;
     }
-    if (health?.network_stale === true && health.app === "lavish-axi") {
+    if (confirmedNetworkChange(health) && health.app === "lavish-axi") {
       if (networkRestarted) {
         if (liveMissing.length > 0) throw missingHostsError(port, liveMissing);
-        return adoptServer(liveUrl, liveDuplicates, reloadKey);
+        return adoptServer(liveUrl, liveDuplicates, reloadKey, force);
       }
       alsoListen = inheritedListenHosts([health], requiredHosts, alsoListen);
-      await requestShutdown(liveUrl, { reloadKey, reason: "" });
+      await requestShutdown(liveUrl, { reloadKey, reason: "", force, cause: replacementCause(health, liveMissing) });
       if (!(await waitForPortFree(liveUrl, 3000))) break;
       await startServer(port, { alsoListen });
       networkRestarted = true;
@@ -2243,7 +2270,7 @@ function missingHostsError(port, missingHosts) {
 export function shouldRestartServer(currentVersion, healthBody, forceRestart = false) {
   if (!healthBody || typeof healthBody !== "object") return false;
   if (forceRestart && healthBody.app === "lavish-axi") return true;
-  if (healthBody.network_stale === true && healthBody.app === "lavish-axi") return true;
+  if (confirmedNetworkChange(healthBody) && healthBody.app === "lavish-axi") return true;
   if (typeof healthBody.version !== "string" || healthBody.version === "") return true;
   return isServerOlderThanCli(currentVersion, healthBody.version);
 }
@@ -2361,19 +2388,57 @@ function fetchHealth(baseUrl, { reconcileNetwork = false, timeoutMs = DEFAULT_HE
   });
 }
 
-// `reason` is what every other open review page is told: this CLI has exactly two callers, and
-// each knows which of them it is.
-async function requestShutdown(baseUrl, { reloadKey = "", reason = "" } = {}) {
+// Legacy servers cannot distinguish a failed probe from a changed address.
+function confirmedNetworkChange(health) {
+  return (
+    health?.network_stale === true &&
+    typeof health.network_stale_reason === "string" &&
+    health.network_stale_reason.length > 0
+  );
+}
+
+function replacementCause(health, missingHosts, localBuild = false) {
+  if (localBuild) return `local build replacement; running=${health.version}; cli=${VERSION}`;
+  if (isServerOlderThanCli(VERSION, health.version))
+    return `version mismatch; running=${health.version || "unknown"}; cli=${VERSION}`;
+  if (confirmedNetworkChange(health)) return health.network_stale_reason;
+  return `missing requested hosts: ${missingHosts.join(", ")}`;
+}
+
+function assertServerIdle(health, force = false) {
+  const polls = Math.max(health?.listeners?.length || 0, health?.active_connections?.polls || 0);
+  const reviewers = health?.active_connections?.reviewers || 0;
+  if (!force && (polls > 0 || reviewers > 0)) {
+    throw new AxiError(
+      `Lavish has ${polls} active polls and ${reviewers} review listeners. Wait for reviews to finish or use --force to interrupt them.`,
+      "SERVER_BUSY",
+    );
+  }
+}
+
+async function requestShutdown(baseUrl, { reloadKey = "", reason = "", force = false, cause = "" } = {}) {
   const body = {};
   if (reloadKey) body.reload_key = reloadKey;
   if (reason) body.reason = reason;
+  if (force) body.force = true;
+  if (cause) body.cause = cause;
+  assertServerIdle(await fetchHealth(baseUrl), force);
   try {
-    await fetch(`${baseUrl}/shutdown`, {
+    const response = await fetch(`${baseUrl}/shutdown`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
     });
-  } catch {
+    if (response.status === 409) {
+      const payload = await response.json();
+      throw new AxiError(
+        payload.error || "Lavish has active listeners. Wait or use --force.",
+        payload.code || "SERVER_BUSY",
+      );
+    }
+  } catch (error) {
+    if (error instanceof AxiError) throw error;
     // Best effort. If the server died before answering, the port will free up on its own.
   }
 }
@@ -2482,16 +2547,20 @@ export function createServerSpawnOptions(logFd = null) {
 
 /**
  * @param {string} url
- * @param {{ retries?: number, retryDelayMs?: number, onResponse?: ((response: Response) => void) | null, method?: string, headers?: Record<string, string>, body?: string }} [options]
+ * @param {{ retries?: number, retryDelayMs?: number, longPoll?: boolean, onResponse?: ((response: Response) => void) | null, method?: string, headers?: Record<string, string>, body?: string }} [options]
  */
 export async function fetchJson(
   url,
-  { retries = 0, retryDelayMs = 250, onResponse = null, method = "GET", headers, body } = {},
+  { retries = 0, retryDelayMs = 250, longPoll = false, onResponse = null, method = "GET", headers, body } = {},
 ) {
+  // Old servers do not stream bounded polls. Give them the same unlimited transport wait
+  // as heartbeat-capable servers; the server still owns the requested round timeout.
+  const dispatcher = longPoll ? await pollDispatcher() : undefined;
   let response;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       response = await fetch(url, {
+        ...(dispatcher ? { dispatcher } : {}),
         method,
         ...(headers ? { headers } : {}),
         ...(body === undefined ? {} : { body }),
@@ -2499,6 +2568,7 @@ export async function fetchJson(
       break;
     } catch (error) {
       if (error instanceof AxiError) throw error;
+      if (isTransportTimeout(error)) throw pollTimeoutError();
       if (attempt >= retries) throw serverConnectionError();
       await delay(retryDelayMs);
     }
@@ -2530,8 +2600,16 @@ export async function fetchJson(
   }
   onResponse?.(response);
   try {
-    return await response.json();
-  } catch {
+    const payload = await response.json();
+    if (payload?.code === "SERVER_RESTARTED") {
+      throw Object.assign(new AxiError("The Lavish server restarted while this poll waited", "SERVER_RESTARTED"), {
+        serverLost: true,
+      });
+    }
+    return payload;
+  } catch (error) {
+    if (error instanceof AxiError) throw error;
+    if (isTransportTimeout(error)) throw pollTimeoutError();
     throw pollResponseInterruptedError();
   }
 }
@@ -2611,6 +2689,30 @@ function agentReplyReceiptTimeoutError(file, timeoutMs) {
       `Check the Lavish Editor conversation for the reply before re-running \`lavish-axi reply ${file}\`, so it is not posted twice`,
     ],
   );
+}
+
+/** @type {Promise<import("undici").Agent> | undefined} */
+let pollDispatcherPromise;
+function pollDispatcher() {
+  return (pollDispatcherPromise ??= import("undici").then(
+    ({ Agent }) => new Agent({ headersTimeout: 0, bodyTimeout: 0 }),
+  ));
+}
+
+function isTransportTimeout(error) {
+  const codes = new Set(["UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CONNECT_TIMEOUT", "ETIMEDOUT"]);
+  const seen = new Set();
+  for (let current = error; current && !seen.has(current); current = current.cause) {
+    seen.add(current);
+    if (codes.has(current.code) || current.name === "TimeoutError") return true;
+  }
+  return false;
+}
+
+function pollTimeoutError() {
+  return new AxiError("Lavish Editor poll connection timed out", "POLL_TIMEOUT", [
+    "Check the server and network, then re-run lavish-axi poll <html-file>. A timeout does not prove the server restarted.",
+  ]);
 }
 
 // serverLost marks the two ways a server going away surfaces, so a poll can listen again (#3834).
@@ -2839,7 +2941,7 @@ function createCommandHelp({ agent = "generic" } = {}) {
     end: `Usage: lavish-axi end <html-file>\n\nEnd a Lavish Editor session as the agent. A session ended this way still reopens normally on the next \`lavish-axi <html-file>\`, unlike a user ending it from the browser, which requires --reopen.\n`,
     export: `Usage: lavish-axi export <html-file> [--out <path>]\n\nWrite a portable copy of an artifact: one HTML file with its LOCAL assets inlined (relative-path stylesheets, scripts, images, and fonts become inline <style>/<script> blocks and data URIs). Remote CDN/font references (https URLs) are left as links for the browser to load, so the file needs network to render those. Lavish makes no outbound requests - it only reads local files, confined to the artifact's directory. Defaults to writing <name>.export.html next to the source; pass --out to choose a path. The Lavish annotation SDK is never included in an export.\n`,
     share: `Usage:\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n\nPublish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and print a visitable URL. Shares are PUBLIC by default: anyone with the link can open the page, and it may be indexed or scraped. Pass --private to publish a PRIVATE page behind a generated password, returned once in the output - give it to the user with the URL and tell them it is a shared secret. Pass --password <pw> instead when the user chose the password; it is never echoed back. Builds the same local-inlined HTML as 'export' (local assets inlined; remote CDN/font URLs left as links and are not blocked by CSP on ht-ml.app, but still load over the viewer's network), then POSTs it to ht-ml.app's /v1 API. Creating a site needs no account or API key. The response includes the url plus a secret update_key (shown once) for changing the page later.\n\n--site <site_id> with --update-key <key> republishes an existing page in place: same URL, new HTML. On a republish the password is left alone unless you pass --private (rotate to a new generated one) or --password <pw> (set one). There is no way to make a private page public again: ht-ml.app accepts a request to clear a password and silently ignores it, so Lavish does not offer one rather than reporting a page as public while it is still gated. Locking a page that was PUBLIC is also not instant at ht-ml.app's CDN: it was observed still answering uncredentialed requests for minutes after the password was set, so do not tell the user a newly gated page is unreachable right away (a page that was already private has no such cached copy).\n\n--unpublish takes the same credentials and no file. ht-ml.app has NO delete endpoint, so this replaces the page with a short placeholder and locks it behind a random password that is immediately discarded; the URL still resolves and the host still holds what was published. Say that to the user rather than calling it deleted. The update_key still works, so republishing with --private brings the page back behind a new password.\n\nA value flag given an empty or whitespace-only value is REFUSED rather than acted on: an unquoted shell variable that is unset makes \`--password $PW\` an empty password, which the host treats as none and would publish a PUBLIC page while you believed it was gated. Quote the value, or pass --private to have Lavish generate one.\n\nSet LAVISH_AXI_HTML_APP_TOKEN (or pass --token) to attach an optional bearer token when CREATING a page; it is never required. A republish (--site/--update-key) or --unpublish rejects --token, because the update_key is what the Authorization header carries there. The annotation SDK is never included.\n`,
-    stop: `Usage: lavish-axi stop [--port <port>]\n\nShut down the background Lavish Editor server. The server also stops itself when no browser or poll has been connected for a while (LAVISH_AXI_IDLE_TIMEOUT_MS, default 30m) and immediately when the last session ends with nothing connected.\n`,
+    stop: `Usage: lavish-axi stop [--port <port>] [--force]\n\nShut down the background Lavish Editor server. Active polls or review listeners block shutdown unless --force is passed. The server also stops itself when no browser or poll has been connected for a while (LAVISH_AXI_IDLE_TIMEOUT_MS, default 30m) and immediately when the last session ends with nothing connected.\n`,
     playbook: `Usage: lavish-axi playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: diagram, table, comparison, plan, code, input, explanation, slides.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish-axi playbook\n  lavish-axi playbook diagram\n  lavish-axi playbook input\n`,
     update: `Usage: lavish-axi update\n\nDisabled in the Jadev fork. ${FORK_UPDATE_REFUSAL} Update by rebuilding from jadev-corp/lavish-axi; see docs/jadev-fork.md there.\n`,
     design: `Usage: lavish-axi design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,

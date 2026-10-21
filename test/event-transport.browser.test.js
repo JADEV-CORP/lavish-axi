@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -62,7 +64,7 @@ async function stopServer(server, base, reason = "stop") {
   await fetch(`${base}/shutdown`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reason }),
+    body: JSON.stringify({ reason, force: true }),
     signal: AbortSignal.timeout(2000),
   }).catch(() => {});
   const exited = await Promise.race([

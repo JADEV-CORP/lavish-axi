@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
@@ -340,6 +342,7 @@ export async function serve({
   lookupHost,
   extraListenHosts = [],
   bindRecoveryDelaysMs = BIND_RECOVERY_DELAYS_MS,
+  tailscaleRecoveryDelayMs = 5000,
   whiteboardAssetsDir = defaultWhiteboardAssetsDir(),
   agentNudger = createAgentNudger(path.dirname(stateFile)),
   // The newer-fork-version checker (src/fork-update.js). The `server` command passes one; servers
@@ -351,9 +354,14 @@ export async function serve({
   const { WebSocket, WebSocketServer } = await import("ws");
   const extraHosts = allowedHosts ?? extraAllowedHosts(env);
   const envHost = env.LAVISH_AXI_HOST?.trim();
-  const autoTailscale = !envHost;
+  const autoTailscale = !envHost && !hosts?.length;
   const detect = detectTailscaleFn === undefined ? detectTailscale : detectTailscaleFn;
-  const tailscale = !hosts?.length && autoTailscale && typeof detect === "function" ? await detect() : null;
+  let tailscale =
+    !hosts?.length && autoTailscale && typeof detect === "function"
+      ? await Promise.resolve()
+          .then(() => detect())
+          .catch(() => null)
+      : null;
   const requestedListenHosts = sanitizeListenHosts(
     hosts?.length
       ? [...hosts, ...extraListenHosts]
@@ -364,7 +372,8 @@ export async function serve({
     ...lookupOptions,
     keepUnresolved: true,
   });
-  const activeTailscaleNetwork = tailscaleNetworkKey(tailscale);
+  let activeTailscaleNetwork = tailscaleNetworkKey(tailscale);
+  let networkStaleReason = "";
   const serverStateId = stateId(stateFile);
   let tailscalePhoneReady = false;
   let tailscaleDetectionWarning = typeof tailscale?.warning === "string" ? tailscale.warning : "";
@@ -380,6 +389,7 @@ export async function serve({
   let idleTimer = null;
   let attachmentSweepTimer = null;
   let bindRecoveryTimer = null;
+  let tailscaleRecoveryTimer = null;
   const app = express();
   const store = new SessionStore(stateFile);
   const events = new EventEmitter();
@@ -571,19 +581,42 @@ export async function serve({
     return reconcileTailscaleNetwork();
   }
 
-  async function reconcileTailscaleNetwork() {
-    if (Date.now() - networkReconcileCheckedAt < NETWORK_RECONCILE_CACHE_MS) return cachedNetworkStale;
+  async function reconcileTailscaleNetwork(force = false) {
+    if (!force && Date.now() - networkReconcileCheckedAt < NETWORK_RECONCILE_CACHE_MS) return cachedNetworkStale;
     if (networkReconcilePromise) return networkReconcilePromise;
     networkReconcilePromise = (async () => {
       try {
         const detectedTailscale = await detect();
         const detectedNetwork = tailscaleNetworkKey(detectedTailscale);
-        const stale = detectedNetwork !== activeTailscaleNetwork;
-        if (stale) {
-          tailscaleDetectionWarning = typeof detectedTailscale?.warning === "string" ? detectedTailscale.warning : "";
+        if (!detectedNetwork) {
+          writeLog("[lavish] Tailscale check unavailable or failed; retaining the last successful address.");
+          return false;
         }
+        if (!activeTailscaleNetwork) {
+          // Startup may have timed out. Recover in this process rather than asking every
+          // waiting client to replace a healthy loopback server.
+          tailscale = detectedTailscale;
+          activeTailscaleNetwork = detectedNetwork;
+          tailscaleDetectionWarning = "";
+          const address = detectedTailscale.ipv4;
+          if (!requestedListenHosts.includes(address)) requestedListenHosts.push(address);
+          if (!listenHosts.includes(address)) listenHosts.push(address);
+          if (!boundHosts.includes(address)) pendingBinds.set(address, new Error("Tailscale detection recovered"));
+          await retryPendingBinds();
+          applyNetworkState();
+          writeLog(`[lavish] Tailscale startup detection recovered: ${JSON.stringify(detectedNetwork)}`);
+          return false;
+        }
+        const stale = detectedNetwork !== activeTailscaleNetwork;
+        networkStaleReason = stale
+          ? `Tailscale address changed from ${JSON.stringify(activeTailscaleNetwork)} to ${JSON.stringify(detectedNetwork)}`
+          : "";
+        if (stale) writeLog(`[lavish] network stale: ${networkStaleReason}`);
         return stale;
-      } catch {
+      } catch (error) {
+        writeLog(
+          `[lavish] Tailscale check failed; retaining the last successful address: ${error instanceof Error ? error.message : String(error)}`,
+        );
         return false;
       }
     })();
@@ -833,12 +866,14 @@ export async function serve({
     }
     const networkStale = req.query.reconcile_network === "1" ? await reconcileNetwork() : false;
     const networkWarning = currentNetworkWarning();
+    if (networkStale) writeLog(`[lavish] health reports network stale: ${networkStaleReason}`);
     res.json({
       ok: true,
       app: "lavish-axi",
       version,
       state_id: serverStateId,
       state_dir: path.dirname(stateFile),
+      active_connections: { polls: activePolls.size, reviewers: liveEventClients.size },
       // Where this process is listening and every address it was asked to serve (bound or still
       // retrying). The CLI uses both to find one daemon per port whatever host it was configured
       // with, and to tell a same-port daemon at another address apart from this one.
@@ -846,7 +881,7 @@ export async function serve({
       // Configured names sit beside the addresses they resolved to, so a CLI that resolves the same
       // name finds it served whichever form it compares.
       requested_hosts: [...new Set([...listenHosts, ...requestedListenHosts])],
-      ...(networkStale ? { network_stale: true } : {}),
+      ...(networkStale ? { network_stale: true, network_stale_reason: networkStaleReason } : {}),
       ...(networkWarning ? { network_warning: networkWarning } : {}),
       listeners: [...activePolls].map(([key, holder]) => ({
         key,
@@ -867,9 +902,24 @@ export async function serve({
     // an unrecognized or absent reason claims nothing beyond "this server is gone".
     const reloadKey = String(req.body?.reload_key || "");
     const reason = SHUTDOWN_REASONS.has(String(req.body?.reason || "")) ? String(req.body.reason) : "";
+    const force = req.body?.force === true;
+    const activity = `polls=${activePolls.size}, reviewers=${liveEventClients.size}`;
+    const detail = typeof req.body?.cause === "string" ? req.body.cause.slice(0, 1000) : "client supplied no cause";
+    if (!force && (activePolls.size > 0 || liveEventClients.size > 0)) {
+      writeLog(
+        `[lavish] shutdown refused: active ${activity}; reason=${reason || "unspecified"}; cause=${JSON.stringify(detail)}`,
+      );
+      res.status(409).json({
+        code: "SERVER_BUSY",
+        error: `Lavish has active ${activity}. Wait for reviews to finish or use --force to interrupt them.`,
+      });
+      return;
+    }
     res.json({ status: "shutting-down" });
     // Defer until after the response flushes so the client gets confirmation.
-    setImmediate(() => shutdown(reloadKey, reason, "shutdown-request"));
+    setImmediate(() =>
+      shutdown(reloadKey, reason, `shutdown-request force=${force}; ${activity}; cause=${JSON.stringify(detail)}`),
+    );
   });
 
   app.post("/api/sessions", async (req, res, next) => {
@@ -1075,7 +1125,7 @@ export async function serve({
         detachRequestClose();
         return;
       }
-      const streamHeartbeat = timeoutMs === null;
+      const streamHeartbeat = timeoutMs === null || timeoutMs > 0;
       let heartbeat = null;
       if (streamHeartbeat) {
         res.status(200).type("application/json").set("Lavish-Poll-State", "listening");
@@ -1098,6 +1148,7 @@ export async function serve({
         events.off("feedback", onFeedback);
         events.off("ended", onFeedback);
         events.off("browser-disconnected", onBrowserDisconnected);
+        events.off("server-restarted", onServerRestarted);
         releasePollListener(holder, activePolls, deliveredFeedback, events);
         if (!activePolls.has(key)) {
           clearBrowserDisconnectTimer(key);
@@ -1173,6 +1224,10 @@ export async function serve({
         if (changedKey !== key || res.writableEnded) return;
         respond({ status: "browser_disconnected" }).catch(handleRespondError);
       };
+      const onServerRestarted = (reason) => {
+        respond({ status: "server_restarted", code: "SERVER_RESTARTED", reason }).catch(handleRespondError);
+      };
+      events.on("server-restarted", onServerRestarted);
       events.on("feedback", onFeedback);
       events.on("ended", onFeedback);
       events.on("browser-disconnected", onBrowserDisconnected);
@@ -2344,6 +2399,22 @@ export async function serve({
     bindRecoveryTimer.unref?.();
   }
 
+  function scheduleTailscaleRecovery() {
+    if (
+      shuttingDown ||
+      !autoTailscale ||
+      typeof detect !== "function" ||
+      activeTailscaleNetwork ||
+      tailscaleRecoveryTimer
+    )
+      return;
+    tailscaleRecoveryTimer = setTimeout(() => {
+      tailscaleRecoveryTimer = null;
+      reconcileTailscaleNetwork(true).finally(() => scheduleTailscaleRecovery());
+    }, tailscaleRecoveryDelayMs);
+    tailscaleRecoveryTimer.unref?.();
+  }
+
   // Loopback is bound first because it is this port's control address: every CLI probes it
   // whatever its own LAVISH_AXI_HOST says. Whoever holds it owns the port, so a second Lavish
   // server started concurrently (two agents with different host settings) loses here and exits
@@ -2409,6 +2480,10 @@ export async function serve({
   }
   serverReady = true;
   scheduleBindRecovery();
+  if (autoTailscale && typeof detect === "function" && !activeTailscaleNetwork) {
+    writeLog("[lavish] Tailscale startup detection unavailable; retrying in the background.");
+    scheduleTailscaleRecovery();
+  }
 
   // `cause` is log-only and never reaches a chrome: `reason` is the user-facing SHUTDOWN_REASONS
   // value, and widening it here would let an internal cause render as a banner line that claims
@@ -2418,6 +2493,7 @@ export async function serve({
     shuttingDown = true;
     writeLog(`[lavish] shutting down: ${cause}${reason ? ` (reason=${reason})` : ""}`);
     forkUpdates?.stop();
+    if (tailscaleRecoveryTimer) clearTimeout(tailscaleRecoveryTimer);
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;
@@ -2436,6 +2512,7 @@ export async function serve({
     // page the user is reading or writing in is exactly what this avoids.
     // Both events carry the same reason: the reloaded page can end up showing a line from it too,
     // and two pages describing one shutdown differently is how a false claim gets in.
+    events.emit("server-restarted", reason);
     const shutdownData = { reason };
     for (const [client, clientKey] of liveEventClients) {
       try {
@@ -2465,7 +2542,9 @@ export async function serve({
       httpServer.close(closed);
       // Force-close keep-alive sockets so legacy SSE / long-polls don't keep us alive.
       if (typeof httpServer.closeAllConnections === "function") {
-        httpServer.closeAllConnections();
+        // Allow waiting polls to flush their restart JSON before closing stray sockets.
+        const drain = setTimeout(() => httpServer.closeAllConnections(), 100);
+        drain.unref?.();
       }
     }
   }
@@ -2619,9 +2698,7 @@ function listenHttp(app, port, host, onRuntimeError) {
 }
 
 function tailscaleNetworkKey(tailscale) {
-  if (!tailscale) return "down";
-  if (tailscale.warning) return "incomplete";
-  if (!tailscale.ipv4 || !tailscale.magicDnsName) return "incomplete";
+  if (!tailscale?.ipv4 || !tailscale.magicDnsName || tailscale.warning) return null;
   return `up\n${tailscale.ipv4}\n${tailscale.magicDnsName}`;
 }
 

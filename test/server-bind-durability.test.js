@@ -1,3 +1,5 @@
+// Copyright (c) 2026 JADEV-CORP. All rights reserved.
+// Proprietary and confidential.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -143,14 +145,47 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
       return shutdowns;
     }
 
-    assert.equal(await countShutdowns({ ok: true, app: "lavish-axi", version: VERSION, network_stale: true }), 1);
-    assert.equal(await countShutdowns({ ok: true, app: "lavish-axi", version: "0.0.1", network_stale: true }), 2);
     assert.equal(
-      await countShutdowns({ ok: true, app: "lavish-axi", version: "999.0.0-jadev.1", network_stale: true }),
+      await countShutdowns({
+        ok: true,
+        app: "lavish-axi",
+        version: VERSION,
+        network_stale: true,
+        network_stale_reason: "confirmed address change",
+      }),
+      1,
+    );
+    assert.equal(
+      await countShutdowns({
+        ok: true,
+        app: "lavish-axi",
+        version: "0.0.1",
+        network_stale: true,
+        network_stale_reason: "confirmed address change",
+      }),
+      2,
+    );
+    assert.equal(
+      await countShutdowns({
+        ok: true,
+        app: "lavish-axi",
+        version: "999.0.0-jadev.1",
+        network_stale: true,
+        network_stale_reason: "confirmed address change",
+      }),
       1,
     );
     // A plain upstream release is a different channel and still requires replacement by the fork.
-    assert.equal(await countShutdowns({ ok: true, app: "lavish-axi", version: "999.0.0", network_stale: true }), 2);
+    assert.equal(
+      await countShutdowns({
+        ok: true,
+        app: "lavish-axi",
+        version: "999.0.0",
+        network_stale: true,
+        network_stale_reason: "confirmed address change",
+      }),
+      2,
+    );
   });
 });
 
