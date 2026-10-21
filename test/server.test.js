@@ -1239,6 +1239,9 @@ test("chrome shows a waiting banner when no agent has attached", async () => {
   assert.match(html, /id="nudgeStatus" role="status" aria-live="polite" data-tone=""/);
   assert.match(js, /presenceBanner\.hidden = ended \|\| agentPresence !== "waiting"/);
   assert.match(css, /\.presence-banner\{/);
+  // `.nudge-actions .button` sets display, which beats the UA [hidden] rule. Without this, an
+  // unbound session rendered Nudge agent and every click answered 409 unavailable (#3834).
+  assert.match(css, /\.nudge-actions \.button\[hidden\]\{display:none;?\}/);
 });
 
 test("queued notes live in the Queue list above the message box, not in the conversation", async () => {
@@ -1520,6 +1523,60 @@ test("a down Tailscale detector keeps the server loopback-only without a phone l
     assert.match(rejected.body, /Open the working URL below on this computer/);
     assert.match(rejected.body, /Phone access is unavailable/);
     assert.doesNotMatch(rejected.body, /phone through Tailscale/);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("server status pages use the chrome's square rose tokens without loading any asset", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-status-page-"));
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    version: "9.9.9-test",
+    env: {},
+    detectTailscale: async () => null,
+    idleTimeoutMs: null,
+  });
+  try {
+    const rejected = await rawRequest(server.port, "/session/abc", {
+      host: `attacker.example:${server.port}`,
+      headers: { accept: "text/html" },
+    });
+    const landing = await rawRequest(server.port, "/", { headers: { accept: "text/html" } });
+    const chromeCss = await readFile(new URL("../src/chrome.css", import.meta.url), "utf8");
+    // Drop whitespace and leading zeros only; normalizeCssForAssertions would turn 320.12 into 32.12.
+    const tokenValue = (value) =>
+      value
+        .replace(/\s*,\s*/g, ",")
+        .replace(/(?<![\d.])0\./g, ".")
+        .trim();
+    assert.equal(rejected.status, 403);
+    for (const body of [rejected.body, landing.body]) {
+      // The rejected host cannot fetch /chrome-fonts or a stylesheet, so everything is inline (#3834).
+      assert.doesNotMatch(body, /<link|url\(|<script/);
+      assert.doesNotMatch(body, /box-shadow|border-radius:(?!0)|#f7f4ef|#fffdf9/);
+      assert.match(body, /color-scheme:light dark/);
+      // Every token repeats chrome.css's value exactly, so the two cannot drift apart.
+      const tokens = [...body.matchAll(/(--[a-z-]+):([^;}]+)/g)];
+      assert.ok(tokens.length >= 9);
+      for (const [, name, value] of tokens) {
+        const source = new RegExp(`^\\s*${name}:\\s*([^;]+);`, "m").exec(chromeCss)?.[1];
+        assert.equal(tokenValue(value), tokenValue(source ?? ""), name);
+      }
+      assert.match(body, /"Inter Variable",Inter,/);
+      assert.match(body, /class="brand-logo-bubble"/);
+    }
+    assert.match(rejected.body, /<h1>Wrong address<\/h1>/);
+    assert.match(rejected.body, /a:focus-visible\{outline:2px solid var\(--primary\);outline-offset:2px\}/);
+    assert.match(rejected.body, /\.url\{[^}]*overflow-wrap:anywhere/);
+    assert.match(
+      rejected.body,
+      new RegExp(
+        `<a class="url" href="http://127\\.0\\.0\\.1:${server.port}/session/abc">http://127\\.0\\.0\\.1:${server.port}/session/abc</a>`,
+      ),
+    );
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

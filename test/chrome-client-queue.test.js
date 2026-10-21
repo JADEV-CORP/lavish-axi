@@ -9905,6 +9905,30 @@ test("Nudge agent delivers once while pending and retains the copy fallback afte
   assert.equal(chrome.element("copyNudge").dataset.copied, "false");
 });
 
+test("a binding removed after the page loaded retires Nudge agent and hands focus to Copy nudge", async () => {
+  const chrome = await createChromeHarness({
+    sessionData: { ...defaultSessionData, agentNudgeAvailable: true },
+    fetchImpl: async (url) =>
+      String(url).endsWith("/nudge")
+        ? { ok: false, status: 409, json: async () => ({ status: "unavailable" }) }
+        : { ok: true, json: async () => ({}) },
+  });
+  const button = chrome.element("nudgeAgent");
+  const copy = chrome.element("copyNudge");
+  button.focus();
+  await button.onclick();
+  assert.equal(button.hidden, true, "an unavailable nudge is not offered again");
+  assert.equal(chrome.document.activeElement, copy, "keyboard focus does not fall off the hidden button");
+  assert.equal(copy.classList.contains("button-outline"), true);
+  assert.equal(copy.classList.contains("button-ghost"), false);
+  assert.doesNotMatch(chrome.element("presenceCopy").textContent, /Nudge/);
+  assert.equal(chrome.element("nudgeStatus").dataset.tone, "info");
+  assert.equal(
+    chrome.element("nudgeStatusText").textContent,
+    "This review is no longer linked to a T3 Code thread. Copy nudge still reaches your agent.",
+  );
+});
+
 test("without a nudge binding, Copy nudge is the notice's one action and the copy does not offer a nudge", async () => {
   const chrome = await createChromeHarness();
   assert.equal(chrome.element("nudgeAgent").hidden, true);

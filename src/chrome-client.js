@@ -7540,17 +7540,20 @@ const copyNudgeLabel = /** @type {HTMLElement} */ (document.getElementById("copy
 const copyNudgeIcon = /** @type {HTMLElement} */ (document.getElementById("copyNudgeIcon"));
 const nudgeAgentButton = /** @type {HTMLButtonElement} */ (document.getElementById("nudgeAgent"));
 const presenceCopy = /** @type {HTMLElement} */ (document.getElementById("presenceCopy"));
-const nudgeAvailable = sessionData.agentNudgeAvailable === true;
 let nudgePending = false;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let copyNudgeTimer;
-nudgeAgentButton.hidden = !nudgeAvailable;
-copyNudgeButton.classList.toggle("button-outline", !nudgeAvailable);
-copyNudgeButton.classList.toggle("button-ghost", nudgeAvailable);
 nudgeAgentButton.classList.add("button-outline");
-presenceCopy.textContent = nudgeAvailable
-  ? "Feedback waits until it polls again. Nudge it to resume, or copy a message to paste into your agent."
-  : "Feedback waits until it polls again. Copy a message to paste into your agent.";
+/** Availability starts from the bootstrap and drops when the server reports the binding gone. */
+function setNudgeAvailable(available) {
+  nudgeAgentButton.hidden = !available;
+  copyNudgeButton.classList.toggle("button-outline", !available);
+  copyNudgeButton.classList.toggle("button-ghost", available);
+  presenceCopy.textContent = available
+    ? "Feedback waits until it polls again. Nudge it to resume, or copy a message to paste into your agent."
+    : "Feedback waits until it polls again. Copy a message to paste into your agent.";
+}
+setNudgeAvailable(sessionData.agentNudgeAvailable === true);
 
 /** @param {"" | "pending" | "success" | "info" | "error"} tone @param {string} text */
 function setNudgeStatus(tone, text) {
@@ -7569,6 +7572,17 @@ nudgeAgentButton.onclick = async () => {
   try {
     const response = await fetch("/api/" + key + "/nudge", { method: "POST", signal: AbortSignal.timeout(12_000) });
     const result = await response.json();
+    if (response.status === 409 && result.status === "unavailable") {
+      // The binding was cleared after this page loaded. Retire the button and keep focus on an action.
+      const hadFocus = document.activeElement === nudgeAgentButton;
+      setNudgeAvailable(false);
+      if (hadFocus) copyNudgeButton.focus();
+      setNudgeStatus(
+        "info",
+        "This review is no longer linked to a T3 Code thread. Copy nudge still reaches your agent.",
+      );
+      return;
+    }
     if (!response.ok) throw new Error("Nudge failed");
     if (result.status === "sent")
       setNudgeStatus("success", "T3 Code accepted the nudge. This notice closes once your agent polls.");

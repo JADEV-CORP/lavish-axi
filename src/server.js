@@ -2628,15 +2628,37 @@ function wantsHtml(req) {
   return accept.toLowerCase().includes("text/html");
 }
 
+// Status pages answer hosts the allowlist rejected, so they cannot fetch /chrome-fonts or the chrome
+// stylesheet. The tokens below repeat chrome.css's shadcn b50eA1ekc (lyra, mauve, rose) values
+// inline: square corners, hairline borders, no shadow, and Inter only where it is installed.
+const STATUS_PAGE_CSS =
+  ":root{color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(.145 .008 326));--foreground:light-dark(oklch(.145 .008 326),oklch(.985 0 0));--card:light-dark(oklch(1 0 0),oklch(.212 .019 322.12));--muted:light-dark(oklch(.96 .003 325.6),oklch(.263 .024 320.12));--muted-foreground:light-dark(oklch(.542 .034 322.5),oklch(.711 .019 323.02));--border-color:light-dark(oklch(.922 .005 325.62),oklch(1 0 0 / 10%));--primary:light-dark(oklch(.514 .222 16.935),oklch(.455 .188 13.697));--primary-foreground:oklch(.969 .015 12.422);--accent-text:light-dark(oklch(.514 .222 16.935),oklch(.75 .15 14));--accent-text-hover:light-dark(oklch(.455 .188 13.697),oklch(.82 .12 14))}" +
+  '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:var(--background);color:var(--foreground);font:14px/1.45 "Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}' +
+  ".card{width:min(520px,100%);padding:24px;border:1px solid var(--border-color);border-radius:0;background:var(--card)}" +
+  ".brand{display:flex;align-items:center;gap:8px;margin:0 0 20px;color:var(--foreground);font-weight:600;letter-spacing:-.025em;line-height:20px}.brand svg{flex-shrink:0}.brand-logo-bubble{fill:var(--primary)}.brand-logo-letter{stroke:var(--primary-foreground)}" +
+  "h1{margin:0 0 8px;font-size:18px;font-weight:600;line-height:1.45}p{margin:0 0 16px;color:var(--muted-foreground)}p:last-child{margin-bottom:0}" +
+  ".url{display:block;padding:10px 12px;border:1px solid var(--border-color);border-radius:0;background:var(--muted);color:var(--accent-text);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}.url:hover{color:var(--accent-text-hover)}" +
+  "a:focus-visible{outline:2px solid var(--primary);outline-offset:2px}";
+
+function createStatusPageHtml({ title, body }) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${STATUS_PAGE_CSS}</style></head><body><main class="card"><p class="brand">${LAVISH_LOGO_SVG}<span>Lavish</span></p>${body}</main></body></html>`;
+}
+
 function createLandingHtml() {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lavish Editor</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f4ef;color:#25221f;font:16px/1.5 system-ui,sans-serif}.card{width:min(560px,calc(100% - 40px));padding:32px;border:1px solid #d9d0c5;border-radius:16px;background:#fffdf9;box-shadow:0 12px 40px #25221f18}h1{margin:0 0 12px;font-size:26px}p{margin:0}</style></head><body><main class="card"><h1>Lavish Editor is running</h1><p>Open the review session URL printed by your agent.</p></main></body></html>`;
+  return createStatusPageHtml({
+    title: "Lavish Editor",
+    body: "<h1>Lavish Editor is running</h1><p>Open the review session URL printed by your agent.</p>",
+  });
 }
 
 function createDeniedHtml({ title, message, workingUrl }) {
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message);
   const safeUrl = escapeHtml(workingUrl);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeTitle} - Lavish Editor</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f4ef;color:#25221f;font:16px/1.5 system-ui,sans-serif}.card{width:min(560px,calc(100% - 40px));padding:32px;border:1px solid #d9d0c5;border-radius:16px;background:#fffdf9;box-shadow:0 12px 40px #25221f18}h1{margin:0 0 12px;font-size:26px}p{margin:0 0 18px}.url{display:block;padding:12px 14px;border-radius:10px;background:#f0ebe4;color:#25221f;overflow-wrap:anywhere}a{color:inherit;font-weight:700}</style></head><body><main class="card"><h1>${safeTitle}</h1><p>${safeMessage}</p><p>Open this working URL:</p><a class="url" href="${safeUrl}">${safeUrl}</a></main></body></html>`;
+  return createStatusPageHtml({
+    title: `${safeTitle} - Lavish Editor`,
+    body: `<h1>${safeTitle}</h1><p>${safeMessage}</p><p>Open this working URL:</p><a class="url" href="${safeUrl}">${safeUrl}</a>`,
+  });
 }
 
 async function readDesignAsset(asset) {
