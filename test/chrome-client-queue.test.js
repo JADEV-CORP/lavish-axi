@@ -18,6 +18,8 @@ const servedChromeIds = new Set(
   ),
 );
 
+const SERVED_TAB_ICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>";
+
 /** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null, agentNudgeAvailable?: boolean, reviewLabel?: string, reviewContext?: string, loopbackUrl?: string }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
@@ -79,6 +81,9 @@ function identicalProjectionNote(offset) {
   };
 }
 
+const UNSENT_OWNERSHIP_COPY =
+  "Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.";
+
 async function createChromeHarness({
   fetchImpl = /** @type {(url?: any, init?: any) => Promise<any>} */ (
     async () => ({ ok: true, json: async () => ({}) })
@@ -86,6 +91,10 @@ async function createChromeHarness({
   sessionData = defaultSessionData,
   artifactSrc = "",
   storage = new Map(),
+  // The viewer-wide localStorage, kept apart from the per-tab sessionStorage above. `localStorageThrows`
+  // models a browser that refuses storage access outright (private mode, blocked site data).
+  localStore = new Map(),
+  localStorageThrows = false,
   beginLoadResponses = [],
   handoffResponses = [],
   storedQueue = null,
@@ -119,6 +128,22 @@ async function createChromeHarness({
   const windowListeners = new Map();
   const documentListeners = new Map();
   const elements = new Map();
+  let tabIcon = {
+    attrs: { rel: "icon", href: SERVED_TAB_ICON },
+    getAttribute(name) {
+      return name in this.attrs ? this.attrs[name] : null;
+    },
+    // The href property reflects the attribute, as on a real link.
+    get href() {
+      return this.attrs.href ?? "";
+    },
+    set href(value) {
+      this.attrs.href = String(value);
+    },
+    replaceWith(next) {
+      tabIcon = next;
+    },
+  };
   const timers = new Map();
   const srcLoads = [];
   const beginRequests = [];
@@ -467,7 +492,11 @@ async function createChromeHarness({
       }
     },
     document: {
+      // The tab as the server served it: the artifact's title and its icon link.
+      title: "Plan \u00b7 Lavish",
       body: element("body"),
+      head: { appendChild: (link) => (tabIcon = link) },
+      querySelector: (selector) => (selector === 'link[rel~="icon"]' ? tabIcon : null),
       get activeElement() {
         return activeElement;
       },
@@ -481,16 +510,24 @@ async function createChromeHarness({
         if (!documentListeners.has(type)) documentListeners.set(type, []);
         documentListeners.get(type).push({ handler, capture: Boolean(capture) });
       },
-      // The page's one icon link, as a browser finds it.
-      querySelector(selector) {
-        if (selector !== 'link[rel~="icon"]') return null;
-        const icon = element("favicon");
-        if (!icon.href) icon.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>";
-        return icon;
-      },
       createElement(tag) {
         const el = element(`${tag}-${elements.size}`);
         el.tagName = tag.toUpperCase();
+        // Only the tab icon link needs real attributes; other created elements keep the stub's own.
+        if (tag !== "link") return el;
+        el.attrs = {};
+        el.setAttribute = (name, value) => (el.attrs[name] = String(value));
+        el.getAttribute = (name) => (name in el.attrs ? el.attrs[name] : null);
+        Object.defineProperty(el, "href", {
+          get: () => el.attrs.href ?? "",
+          set: (value) => {
+            el.attrs.href = String(value);
+          },
+          configurable: true,
+        });
+        el.replaceWith = (next) => {
+          if (tabIcon === el) tabIcon = next;
+        };
         return el;
       },
       execCommand() {
@@ -506,6 +543,20 @@ async function createChromeHarness({
       },
       removeItem(key) {
         storage.delete(key);
+      },
+    },
+    localStorage: {
+      getItem(key) {
+        if (localStorageThrows) throw new Error("SecurityError: storage disabled");
+        return localStore.has(key) ? localStore.get(key) : null;
+      },
+      setItem(key, value) {
+        if (localStorageThrows) throw new Error("SecurityError: storage disabled");
+        localStore.set(key, String(value));
+      },
+      removeItem(key) {
+        if (localStorageThrows) throw new Error("SecurityError: storage disabled");
+        localStore.delete(key);
       },
     },
     window: {
@@ -639,6 +690,12 @@ async function createChromeHarness({
     webSocketCount() {
       return webSockets.length;
     },
+    messageHandlers() {
+      return windowListeners.get("message") || [];
+    },
+    tab() {
+      return { title: context.document.title, icon: tabIcon ? tabIcon.getAttribute("href") : null };
+    },
     sendFrameMessage(data) {
       const handlers = windowListeners.get("message") || [];
       assert.ok(handlers.length > 0, "chrome-client registered a message handler");
@@ -712,6 +769,7 @@ async function createChromeHarness({
     },
     focusLog,
     storage,
+    localStore,
     warningRows() {
       return element("warningsList").children.filter((child) => String(child.className).startsWith("warning-row"));
     },
@@ -4077,6 +4135,45 @@ test("a page load that cannot begin its own load shows the bootstrapped one", as
   );
 });
 
+// The embedded load token in a freshly served chrome page may already be retired: the previous tab's
+// begin-load is what issued it. Navigating to it first commits the 409 "no longer current" page, and
+// Chrome can then drop the begin-load's navigation, leaving the review stuck on that page (#451).
+test("a fresh open navigates the artifact frame only to the begin-load's token", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: { ...defaultSessionData, initialArtifactRevision: 4, initialArtifactLoadToken: "retired-load" },
+  });
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(chrome.artifactBeginRequests.length, 1);
+  assert.deepEqual(
+    chrome.srcLoads.map((load) => load.src),
+    ["/artifact/abc/index.html?artifact_revision=1&artifact_load_token=harness-load-1"],
+  );
+});
+
+test("a superseded first load still shows the embedded artifact", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: {
+      ...defaultSessionData,
+      chromeLoadToken: "old-handoff",
+      initialArtifactRevision: 4,
+      initialArtifactLoadToken: "live-load",
+    },
+    beginLoadResponses: [{ ok: false, status: 409, json: async () => ({ status: "superseded" }) }],
+  });
+  await flushPromises();
+  await flushPromises();
+
+  assert.deepEqual(
+    chrome.srcLoads.map((load) => load.src),
+    ["/artifact/abc/index.html?artifact_revision=4&artifact_load_token=live-load"],
+  );
+  assert.equal(chrome.element("handoffBanner").hidden, false);
+});
+
 test("the layout gate reveals after a completed pass with no findings", async () => {
   const { posts, fetchImpl } = diagnosticsHarness([[]]);
   const chrome = await createChromeHarness({ fetchImpl });
@@ -4356,6 +4453,50 @@ test("a load that asks for the artifact again gets the whole recovery backoff ag
   assert.match(String(chrome.element("layoutGateTitle").innerHTML), /Checking layout/);
 });
 
+test("empty Send names this tab's queue without importing another window's answers", async () => {
+  const firstStorage = new Map();
+  const secondStorage = new Map();
+  const postedBodies = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith("/prompts")) postedBodies.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({}) };
+  };
+  const first = await createChromeHarness({ storage: firstStorage, fetchImpl });
+  first.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    prompt: { prompt: "Keep my answer", selector: "#answer", tag: "input", text: "Answer" },
+  });
+  const savedQueue = firstStorage.get("lavish-axi:queued:abc");
+  const second = await createChromeHarness({
+    storage: secondStorage,
+    fetchImpl,
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: { ...defaultSessionData, chromeLoadToken: "old-handoff" },
+    beginLoadResponses: [{ ok: false, status: 409, json: async () => ({ status: "superseded" }) }],
+  });
+
+  second.element("send").click();
+  await flushPromises();
+  assert.equal(second.element("sendHint").hidden, false);
+  assert.equal(second.element("sendHint").textContent, `Nothing queued in this tab. ${UNSENT_OWNERSHIP_COPY}`);
+  assert.equal(second.element("layoutGateCopy").textContent, UNSENT_OWNERSHIP_COPY);
+  assert.equal(second.queued().length, 0);
+  assert.equal(first.queued().length, 1);
+  assert.equal(firstStorage.get("lavish-axi:queued:abc"), savedQueue);
+  assert.equal(second.reloadCount(), 0, "empty Send never takes over");
+
+  second.element("handoffTakeover").click();
+  assert.equal(second.reloadCount(), 1);
+  // Model the explicit reload in B with B's storage, not A's. The warning is mitigation,
+  // not draft migration; only reloading A with its own storage recovers its queued answer.
+  const takenOver = await createChromeHarness({ storage: secondStorage, fetchImpl });
+  const originalReloaded = await createChromeHarness({ storage: firstStorage, fetchImpl });
+  assert.equal(takenOver.queued().length, 0);
+  assert.equal(originalReloaded.queued()[0].prompt, "Keep my answer");
+  assert.equal(firstStorage.get("lavish-axi:queued:abc"), savedQueue);
+  assert.equal(postedBodies.length, 0, "neither empty Send nor takeover submits another window's answers");
+});
+
 test("a superseded reviewer is not retried in the background", async () => {
   const chrome = await createChromeHarness({
     artifactSrc: "/artifact/abc/index.html",
@@ -4387,7 +4528,9 @@ test("a superseded first load names itself on the layout gate instead of holding
   assert.equal(chrome.element("artifact").src, "");
   assert.equal(chrome.element("layoutGateOverlay").hidden, false);
   assert.match(chrome.element("layoutGateTitle").textContent, /already open in another tab/);
+  assert.equal(chrome.element("layoutGateCopy").textContent, UNSENT_OWNERSHIP_COPY);
   assert.equal(chrome.element("layoutGateAction").textContent, "Take over here");
+  assert.equal(chrome.reloadCount(), 0, "the warning appears before any takeover");
   chrome.element("layoutGateAction").click();
   assert.equal(chrome.reloadCount(), 1);
   // Taking over is the user's action; nothing may retry in the background against the tab that
@@ -5871,8 +6014,45 @@ test("chrome send and end with an empty composer nudges instead of ending", asyn
   assert.equal(posts.length, 0);
   assert.equal(chrome.postedToFrame.length, 0);
   assert.equal(chrome.element("sendHint").hidden, false);
+  assert.match(chrome.element("sendHint").textContent, /End session/);
   assert.equal(chrome.element("chatInput").focused, true);
   assert.equal(chrome.element("chatInput").disabled, false);
+});
+
+test("chrome send and end nudges toward End session when preparation leaves the queue empty", async () => {
+  const posts = [];
+  let finishPreparation = () => {};
+  const preparation = new Promise((resolve) => {
+    finishPreparation = () => resolve({ ok: true, json: async () => ({ warnings: [] }) });
+  });
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url, init = {}) => {
+      posts.push({ url, body: init.body ? JSON.parse(init.body) : null });
+      if (String(url).endsWith("/layout-warnings/queue")) return preparation;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  chrome.eventSource().listeners.get("layout-warnings")({
+    data: JSON.stringify({ warnings: [warningPayload()] }),
+  });
+  const [row] = chrome.warningRows();
+  row.children[0].checked = true;
+  row.children[0].dispatch("change");
+  chrome.element("sendHint").hidden = true;
+
+  chrome.element("warningsQueueButton").click();
+  chrome.element("sendAndEnd").click();
+  finishPreparation();
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(
+    posts.some((post) => String(post.url).endsWith("/prompts")),
+    false,
+  );
+  assert.equal(chrome.element("sendHint").hidden, false);
+  assert.match(chrome.element("sendHint").textContent, /End session/);
+  assert.equal(chrome.element("sendAndEnd").disabled, false);
 });
 
 test("an oversized terminal snapshot retries once without optional DOM context", async () => {
@@ -5930,9 +6110,14 @@ test("chrome send with an empty composer shows a visible hint", async () => {
   chrome.element("send").click();
 
   assert.equal(chrome.element("sendHint").hidden, false);
-  assert.equal(chrome.element("sendHint").textContent, "Write a message or annotate an element first.");
+  assert.equal(chrome.element("sendHint").textContent, `Nothing queued in this tab. ${UNSENT_OWNERSHIP_COPY}`);
+  assert.doesNotMatch(chrome.element("sendHint").textContent, /End session/);
   assert.equal(chrome.element("chatInput").focused, true);
   assert.equal(chrome.postedToFrame.length, 0);
+  chrome.runTimers(2600);
+  assert.equal(chrome.element("sendHint").hidden, false, "the ownership message outlasts the short hint hold");
+  chrome.runTimers(9000);
+  assert.equal(chrome.element("sendHint").hidden, true);
 });
 
 test("chrome send and end during an in-flight submit still ends after the submit drains the queue", async () => {
@@ -8808,6 +8993,18 @@ test("the artifact learns which elements carry a queued note, never the note its
   });
 });
 
+// The artifact walks the list newest first, so a selector a newer note carries again must sit at
+// that newer note, after a selector queued in between; otherwise the in-between note would win.
+test("the artifact's queued-anchor list places each selector at its newest note", async () => {
+  const chrome = await createChromeHarness();
+  queueHeadingNote(chrome, "Make this heading bigger", "main > h2");
+  queueHeadingNote(chrome, "Make this heading blue", "main > h2:nth-of-type(2)");
+  queueHeadingNote(chrome, "Make this heading bold", "main > h2");
+
+  const anchors = chrome.postedToFrame.filter((message) => message.type === "lavish:queuedAnchors").at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(anchors.selectors)), ["main > h2:nth-of-type(2)", "main > h2"]);
+});
+
 test("clicking an annotated element in the artifact opens its queued note", async () => {
   const chrome = await createChromeHarness();
   queueHeadingNote(chrome, "First thought");
@@ -10801,4 +10998,112 @@ test("whiteboard init flags libraries that changed between the libraries and sou
   });
   assert.equal(failed.librariesUnavailable, true);
   assert.equal(JSON.stringify(failed.libraries), "[]");
+});
+
+// A selector past the 240/300-char caps that table-cell.js and layout-warnings.js put on
+// their own target fields still anchors in full: the queued-anchor list and the reopen lookup
+// use `prompt.selector`, which the chrome never shortens.
+test("a queued note with a very long selector is announced and reopened by its full selector", async () => {
+  const chrome = await createChromeHarness();
+  const selector = "html > body > " + Array.from({ length: 120 }, () => "div").join(" > ") + " > td";
+  assert.ok(selector.length > 512);
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    prompt: {
+      prompt: "Fix this cell",
+      selector,
+      tag: "td",
+      text: "42",
+      target: { type: "table-cell", selector: selector.slice(0, 240), rowLabel: "", columnLabel: "", text: "42" },
+    },
+  });
+
+  const anchors = chrome.postedToFrame.filter((message) => message.type === "lavish:queuedAnchors").at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(anchors)).selectors, [selector]);
+
+  chrome.sendFrameMessage({ type: "lavish:editQueuedAnchor", selector });
+  // Jadev fork: a queued note is edited in the message box, not inline.
+  assert.equal(chrome.element("chatInput").value, "Fix this cell");
+  assert.match(chrome.element("queuedLog").innerHTML, /<li class="queue-item is-editing" data-index="0">/);
+});
+
+// ---- Tab title and icon from the artifact (lavish:documentMeta) ----
+
+const PAGE_ICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><circle r='4'/></svg>";
+
+async function sendDocumentMeta(chrome, meta, { token = chrome.artifactLoadToken() } = {}) {
+  chrome.sendFrameMessage({ type: "lavish:documentMeta", artifact_load_token: token, ...meta });
+}
+
+test("a page can set the tab title and icon after it loaded", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  assert.deepEqual(chrome.tab(), { title: "Plan \u00b7 Lavish", icon: SERVED_TAB_ICON });
+  await sendDocumentMeta(chrome, { title: "(2) Agent canvas", icon: PAGE_ICON });
+  assert.deepEqual(chrome.tab(), { title: "(2) Agent canvas \u00b7 Lavish", icon: PAGE_ICON });
+});
+
+test("a field the page leaves out stays as it was", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await sendDocumentMeta(chrome, { title: "Only title" });
+  assert.deepEqual(chrome.tab(), { title: "Only title \u00b7 Lavish", icon: SERVED_TAB_ICON });
+  await sendDocumentMeta(chrome, { icon: PAGE_ICON });
+  assert.deepEqual(chrome.tab(), { title: "Only title \u00b7 Lavish", icon: PAGE_ICON });
+});
+
+test("null puts back the title and icon the tab loaded with", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await sendDocumentMeta(chrome, { title: "Changed", icon: PAGE_ICON });
+  await sendDocumentMeta(chrome, { title: null, icon: null });
+  assert.deepEqual(chrome.tab(), { title: "Plan \u00b7 Lavish", icon: SERVED_TAB_ICON });
+});
+
+test("the tab title is flattened, trimmed and capped; a blank one restores the load-time title", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await sendDocumentMeta(chrome, { title: "  two\n\tlines\u0000 here  " });
+  assert.equal(chrome.tab().title, "two lines here \u00b7 Lavish");
+  await sendDocumentMeta(chrome, { title: "x".repeat(500) });
+  assert.equal(chrome.tab().title, "x".repeat(120) + " \u00b7 Lavish");
+  await sendDocumentMeta(chrome, { title: " \n " });
+  assert.equal(chrome.tab().title, "Plan \u00b7 Lavish");
+});
+
+for (const [label, icon] of [
+  ["an http URL", "http://example.com/i.svg"],
+  ["an https URL", "https://example.com/i.svg"],
+  ["a png data URL", "data:image/png;base64,AAAA"],
+  ["a javascript URL", "javascript:alert(1)"],
+  ["a non-string", { href: PAGE_ICON }],
+  ["an oversized SVG", "data:image/svg+xml," + "a".repeat(8192)],
+]) {
+  test(`the tab icon refuses ${label}`, async () => {
+    const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+    await sendDocumentMeta(chrome, { icon, title: "still applies" });
+    assert.deepEqual(chrome.tab(), { title: "still applies \u00b7 Lavish", icon: SERVED_TAB_ICON });
+  });
+}
+
+test("the tab icon accepts an SVG data URL at the size cap", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  const icon = "data:image/svg+xml,".padEnd(8192, "a");
+  await sendDocumentMeta(chrome, { icon });
+  assert.equal(chrome.tab().icon, icon);
+});
+
+test("a document-meta message without the current load token is ignored", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await sendDocumentMeta(chrome, { title: "stale", icon: PAGE_ICON }, { token: "an-old-load" });
+  await sendDocumentMeta(chrome, { title: "tokenless" }, { token: "" });
+  assert.deepEqual(chrome.tab(), { title: "Plan \u00b7 Lavish", icon: SERVED_TAB_ICON });
+});
+
+test("a window that is not the artifact frame cannot set the tab", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  const foreign = chrome.createForeignWindow();
+  for (const handler of chrome.messageHandlers()) {
+    handler({
+      source: foreign.source,
+      data: { type: "lavish:documentMeta", artifact_load_token: chrome.artifactLoadToken(), title: "spoof" },
+    });
+  }
+  assert.equal(chrome.tab().title, "Plan \u00b7 Lavish");
 });
