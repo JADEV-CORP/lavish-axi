@@ -95,58 +95,61 @@ test("a degraded bind stays quiet while the requested address is still unavailab
   });
 });
 
+// Runs `lavish-axi open` once against a fake control channel that reports `healthBody`, and
+// returns how many times the CLI asked it to shut down. Each run starts a real server, so one call
+// takes a few seconds.
+async function countShutdowns(dir, artifact, healthBody) {
+  let shutdowns = 0;
+  const fake = createHttpServer((req, res) => {
+    if (req.url?.startsWith("/health")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(healthBody));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/shutdown") {
+      shutdowns += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => fake.listen({ host: "127.0.0.1", port: 0 }, () => resolve(undefined)));
+  const port = /** @type {{ port: number }} */ (fake.address()).port;
+  try {
+    await withEnv(
+      {
+        LAVISH_AXI_PORT: String(port),
+        LAVISH_AXI_HOST: "127.0.0.1",
+        LAVISH_AXI_STATE_DIR: dir,
+        LAVISH_AXI_NO_OPEN: "1",
+        LAVISH_AXI_TELEMETRY: "0",
+        // The real server this spawns can take the port once the fake closes; let it idle out
+        // instead of outliving the test.
+        LAVISH_AXI_IDLE_TIMEOUT_MS: "1000",
+      },
+      async () => {
+        try {
+          await run(["open", artifact, "--no-open"]);
+        } catch {
+          // The fake control channel has no session route; axi-sdk may print that 404
+          // without throwing. The assertion below is the replacement-count contract.
+        }
+      },
+    );
+  } finally {
+    await new Promise((resolve) => fake.close(() => resolve(undefined)));
+  }
+  return shutdowns;
+}
+
 test("a stale control-channel server is replaced only once per CLI invocation", { timeout: 20_000 }, async () => {
   await withTempDir(async (dir) => {
     const artifact = await writeArtifact(dir);
 
-    async function countShutdowns(healthBody) {
-      let shutdowns = 0;
-      const fake = createHttpServer((req, res) => {
-        if (req.url?.startsWith("/health")) {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(healthBody));
-          return;
-        }
-        if (req.method === "POST" && req.url === "/shutdown") {
-          shutdowns += 1;
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end("{}");
-          return;
-        }
-        res.writeHead(404);
-        res.end();
-      });
-      await new Promise((resolve) => fake.listen({ host: "127.0.0.1", port: 0 }, () => resolve(undefined)));
-      const port = /** @type {{ port: number }} */ (fake.address()).port;
-      try {
-        await withEnv(
-          {
-            LAVISH_AXI_PORT: String(port),
-            LAVISH_AXI_HOST: "127.0.0.1",
-            LAVISH_AXI_STATE_DIR: dir,
-            LAVISH_AXI_NO_OPEN: "1",
-            LAVISH_AXI_TELEMETRY: "0",
-            // The real server this spawns can take the port once the fake closes; let it idle out
-            // instead of outliving the test.
-            LAVISH_AXI_IDLE_TIMEOUT_MS: "1000",
-          },
-          async () => {
-            try {
-              await run(["open", artifact, "--no-open"]);
-            } catch {
-              // The fake control channel has no session route; axi-sdk may print that 404
-              // without throwing. The assertion below is the replacement-count contract.
-            }
-          },
-        );
-      } finally {
-        await new Promise((resolve) => fake.close(() => resolve(undefined)));
-      }
-      return shutdowns;
-    }
-
     assert.equal(
-      await countShutdowns({
+      await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
         version: VERSION,
@@ -156,7 +159,7 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
       1,
     );
     assert.equal(
-      await countShutdowns({
+      await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
         version: "0.0.1",
@@ -165,8 +168,17 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
       }),
       2,
     );
+  });
+});
+
+// Fork channel: a newer -jadev.N server is adopted, a plain upstream release is replaced. Kept apart
+// from the test above so each stays well inside its timeout (four runs together took about 19 s of 20).
+test("a stale fork server is adopted by channel, an upstream release is replaced", { timeout: 20_000 }, async () => {
+  await withTempDir(async (dir) => {
+    const artifact = await writeArtifact(dir);
+
     assert.equal(
-      await countShutdowns({
+      await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
         version: "999.0.0-jadev.1",
@@ -177,7 +189,7 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
     );
     // A plain upstream release is a different channel and still requires replacement by the fork.
     assert.equal(
-      await countShutdowns({
+      await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
         version: "999.0.0",
