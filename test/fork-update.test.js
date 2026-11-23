@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  JADEV_REPOSITORY,
   compareJadevVersions,
   createForkUpdateChecker,
   defaultForkUpdateChecker,
@@ -107,4 +108,8 @@ test("the server's checker can be turned off, and only a fork build checks", () 
   const checker = defaultForkUpdateChecker({ currentVersion: "0.1.83-jadev.12", stateDir, env: {} });
   assert.equal(typeof checker?.start, "function");
   checker?.stop();
+});
+
+test("the update check reads the fork on GitHub, not the deleted Azure DevOps repository", () => {
+  assert.equal(JADEV_REPOSITORY, "https://github.com/JADEV-CORP/lavish-axi.git");
 });
