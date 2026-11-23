@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.1.98](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.97...lavish-axi-v0.1.98) (2026-11-17)
+
+
+### Bug Fixes
+
+* **cli:** run the shared server from the state dir, not the caller's folder ([#497](https://github.com/kunchenguid/lavish-axi/issues/497)) ([589681f](https://github.com/kunchenguid/lavish-axi/commit/589681fe1e85f365c8f0747202f8d40fb606e13a))
+* **cli:** stop discovery from retiring the kept server through a proxy alias ([#503](https://github.com/kunchenguid/lavish-axi/issues/503)) ([d0c1667](https://github.com/kunchenguid/lavish-axi/commit/d0c166703d8f18567751a0af48da8071e7b5c923))
+* **server:** ignore HTML comments when reading the artifact title ([#501](https://github.com/kunchenguid/lavish-axi/issues/501)) ([fa70396](https://github.com/kunchenguid/lavish-axi/commit/fa70396c75a6b792be859e036984fcfd6ace9792))
+
+## [0.1.97](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.96...lavish-axi-v0.1.97) (2026-11-13)
+
+
+### Bug Fixes
+
+* **sdk:** keep annotation selectors unique so a click reopens only its own queued note ([#493](https://github.com/kunchenguid/lavish-axi/issues/493)) ([d331d40](https://github.com/kunchenguid/lavish-axi/commit/d331d40561ed2dfac878526e18c6a36c10219bb9))
+* **sdk:** place the reveal marker on the settled target after the smooth scroll ([#491](https://github.com/kunchenguid/lavish-axi/issues/491)) ([b184b58](https://github.com/kunchenguid/lavish-axi/commit/b184b5804e24b9edf618ac8a1c59308a9a2dc8d8))
+
+## [0.1.96](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.95...lavish-axi-v0.1.96) (2026-10-29)
+
+
+### Bug Fixes
+
+* **server:** inject the SDK at the parser-reported body end tag ([#472](https://github.com/kunchenguid/lavish-axi/issues/472)) ([5696b36](https://github.com/kunchenguid/lavish-axi/commit/5696b369d63944e32abb1929681670c21400473d)), closes [#471](https://github.com/kunchenguid/lavish-axi/issues/471)
+* skip unresolved Tailscale binaries before probing ([#467](https://github.com/kunchenguid/lavish-axi/issues/467)) ([3472c71](https://github.com/kunchenguid/lavish-axi/commit/3472c71844d945f4cb5d8a7a7e4b5bc060c192aa))
+
+## [0.1.95](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.94...lavish-axi-v0.1.95) (2026-10-28)
+
+
+### Bug Fixes
+
+* **chrome:** warn that unsent answers stay in their own tab before takeover and on empty Send ([#464](https://github.com/kunchenguid/lavish-axi/issues/464)) ([741ea83](https://github.com/kunchenguid/lavish-axi/commit/741ea8390fed0e56922ef338c274565659dc526d))
+
+## [0.1.94](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.93...lavish-axi-v0.1.94) (2026-10-26)
+
+
+### Features
+
+* **chrome:** collapsible conversation sidebar on desktop ([#462](https://github.com/kunchenguid/lavish-axi/issues/462), port of [#455](https://github.com/kunchenguid/lavish-axi/issues/455)) ([94b9493](https://github.com/kunchenguid/lavish-axi/commit/94b949350c1a26893834527a370f069f97997be0))
+* **chrome:** let the artifact update the tab title and icon live ([#458](https://github.com/kunchenguid/lavish-axi/issues/458)) ([0e2d3de](https://github.com/kunchenguid/lavish-axi/commit/0e2d3dec750fe3b6d1d8a8f31e996e0dc2b58220))
+
+## [0.1.93](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.92...lavish-axi-v0.1.93) (2026-10-24)
+
+
+### Bug Fixes
+
+* **artifact-sdk:** stop artifact key handlers from cancelling annotation typing ([#452](https://github.com/kunchenguid/lavish-axi/issues/452)) ([83ec776](https://github.com/kunchenguid/lavish-axi/commit/83ec77686f2eeb94ed29554bd0c02bd042d648b5))
+* **chrome:** navigate the artifact frame only from replaceArtifactFrame ([#453](https://github.com/kunchenguid/lavish-axi/issues/453)) ([8908c07](https://github.com/kunchenguid/lavish-axi/commit/8908c0772af62051c5c74ef75d347fea8ae5aea1)), closes [#451](https://github.com/kunchenguid/lavish-axi/issues/451)
+
+## [0.1.92](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.91...lavish-axi-v0.1.92) (2026-10-22)
+
+
+### Bug Fixes
+
+* **design-reference:** correct claim that Lavish serves files unmodified ([#449](https://github.com/kunchenguid/lavish-axi/issues/449)) ([8f71a85](https://github.com/kunchenguid/lavish-axi/commit/8f71a854a50a570d076c0b1321708e307bb9aeab))
+
+## [0.1.91](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.90...lavish-axi-v0.1.91) (2026-10-21)
+
+
+### Bug Fixes
+
+* **chrome:** name End session in the empty Send & End hint ([#441](https://github.com/kunchenguid/lavish-axi/issues/441)) ([c3f42c6](https://github.com/kunchenguid/lavish-axi/commit/c3f42c62dab7ae8b4d0c9a8c74c89cdff2c5f489))
+* **cli:** name LAVISH_AXI_ALLOWED_HOSTS in the home help ([#438](https://github.com/kunchenguid/lavish-axi/issues/438)) ([a20e8dd](https://github.com/kunchenguid/lavish-axi/commit/a20e8dd3aa3f07153c59a5c4f320a595e94172d8))
+
 ## [0.1.90](https://github.com/kunchenguid/lavish-axi/compare/lavish-axi-v0.1.89...lavish-axi-v0.1.90) (2026-10-18)
 
 

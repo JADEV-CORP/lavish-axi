@@ -502,6 +502,9 @@ export function createArtifactSdk(
   const pendingQueuedAcks = new Map();
   let outlinedRevision = "";
   let overlayFrame = 0;
+  // The element each note was queued from, by its selector. A selector is unique only for the
+  // page it was made on, so while that element is still in the page, identity decides the match.
+  const queuedAnchorElements = new Map();
   let shadow = null;
   let counter = 0;
   const ids = new WeakMap();
@@ -819,14 +822,21 @@ export function createArtifactSdk(
   function selector(el) {
     if (!el || !el.tagName) return "";
 
+    // Five levels is the short common case; past it, keep climbing until the chain names only
+    // this element, or an id or the root stops it. Two structurally identical elements would
+    // otherwise share a selector, and a click on one would reopen the other's queued note.
     const parts = [];
     let node = el;
-    while (node && node.nodeType === 1 && parts.length < 5) {
-      let part = node.tagName.toLowerCase();
+    while (node && node.nodeType === 1 && (parts.length < 5 || !selectsOnly(parts))) {
+      let part = node.localName || node.tagName.toLowerCase();
       if (node.id) {
-        part += "#" + CSS.escape(node.id);
-        parts.unshift(part);
-        break;
+        const idPart = part + "#" + CSS.escape(node.id);
+        // Generated pages repeat ids; only an id that names this one element ends the climb.
+        if (selectsOnly([idPart, ...parts])) {
+          parts.unshift(idPart);
+          break;
+        }
+        part = idPart;
       }
 
       const parent = node.parentElement;
@@ -841,12 +851,64 @@ export function createArtifactSdk(
     return parts.join(" > ");
   }
 
+  function rememberQueuedAnchor(note, el) {
+    if (note.target?.type === "text-range") return;
+    if (note.selector && el && typeof WeakRef === "function") queuedAnchorElements.set(note.selector, new WeakRef(el));
+  }
+
+  // Which queued note a click reopens, given the clicked element's `context()`. The clicked
+  // element's own note wins; a click inside a diagram node then finds the node's note, because
+  // the node is one target however deep the click lands. A table cell's note stays on the exact
+  // element clicked.
+  function queuedAnchorFor(el, clicked) {
+    const own = queuedAnchorOf(el, clicked.selector);
+    if (own || clicked.target?.type !== "mermaid-node") return own;
+    const node = mermaidNodeElement(el);
+    return node ? queuedAnchorOf(node, clicked.target.selector) : "";
+  }
+
+  // The queued note that belongs to `el`, whose selector in this page is `freshSelector`. A note
+  // queued in this page matches only the element it was queued from, and stops matching anything
+  // once that element leaves the page: whatever now matches its selector is a different element.
+  // A note this page never saw queued (the frame reloaded) falls back to its selector: the same
+  // string, or a selector whose only match in the page is `el`. The chrome lists each selector at
+  // its newest note and opens the newest note carrying it, so the list is walked newest first: an
+  // element whose selector changed between two notes reopens the newer one.
+  function queuedAnchorOf(el, freshSelector) {
+    for (const candidate of [...queuedAnchorSelectors].reverse()) {
+      const ref = queuedAnchorElements.get(candidate);
+      if (ref) {
+        // A removed element is never the one clicked, so its note matches nothing until a reload.
+        if (ref.deref() === el) return candidate;
+        continue;
+      }
+      if (candidate === freshSelector) return candidate;
+      try {
+        const matches = document.querySelectorAll(candidate);
+        if (matches.length === 1 && matches[0] === el) return candidate;
+      } catch {
+        // A stored selector the browser cannot parse simply matches nothing.
+      }
+    }
+    return "";
+  }
+
+  function selectsOnly(parts) {
+    try {
+      return document.querySelectorAll(parts.join(" > ")).length === 1;
+    } catch {
+      return true;
+    }
+  }
+
   // `table` is opt-in because resolving a cell's row and column walks the whole table, while
   // `snapshot()` calls this for every element in the document and reads only uid/tag/text.
-  function context(el, { table = false } = {}) {
+  // `selector` is opt-out because generating one can query the whole document to prove it is
+  // unique, and `snapshot()` reads only uid/tag/text for every element.
+  function context(el, { table = false, withSelector = true } = {}) {
     const base = {
       uid: uid(el),
-      selector: selector(el),
+      selector: withSelector ? selector(el) : "",
       tag: (el.tagName || "").toLowerCase(),
       text: (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 240),
     };
@@ -857,7 +919,7 @@ export function createArtifactSdk(
     const tableTarget = table ? tableCellTarget(el, selector) : null;
     if (tableTarget) base.target = tableTarget;
 
-    const mermaidNode = mermaidNodeFrom(el, selector);
+    const mermaidNode = mermaidNodeFrom(el, withSelector ? selector : null);
     if (mermaidNode) {
       base.tag = "mermaid-node";
       base.text = mermaidNode.label || base.text;
@@ -1349,6 +1411,7 @@ export function createArtifactSdk(
   // says the answer is in the queue (#3241). Only the ack id crosses back, never the answer.
   function queuePrompt(prompt, options = {}) {
     const item = promptItem(prompt, options);
+    if (options.element) rememberQueuedAnchor(item, options.element);
     const ack = "q" + ++queuedAckSequence;
     pendingQueuedAcks.set(ack, options.element || document.activeElement || document.body);
     if (pendingQueuedAcks.size > 20) pendingQueuedAcks.delete(pendingQueuedAcks.keys().next().value);
@@ -1442,7 +1505,7 @@ export function createArtifactSdk(
     function walk(el, depth) {
       if (!(el instanceof Element) || depth > 6 || isLavishUi(el)) return;
 
-      const c = context(el);
+      const c = context(el, { withSelector: false });
       const name = c.text ? ' "' + c.text.slice(0, 80).replace(/"/g, "'") + '"' : "";
       lines.push("  ".repeat(depth) + "uid=" + c.uid + " " + c.tag + name);
       for (const child of el.children) walk(child, depth + 1);
@@ -2485,6 +2548,10 @@ export function createArtifactSdk(
     applyChromeTheme();
 
     shadow = host.attachShadow({ mode: "open" });
+    // Keep the artifact's own key handlers from seeing, and cancelling, typing in Lavish controls.
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      shadow.addEventListener(type, (event) => event.stopPropagation());
+    }
     const style = document.createElement("style");
     style.textContent = `:host{all:initial;position:fixed;z-index:2147483647;left:0;top:0;color-scheme:light dark;--background:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--card:light-dark(oklch(1 0 0),oklch(0.212 0.019 322.12));--secondary:light-dark(oklch(0.967 0.001 286.375),oklch(0.274 0.006 286.033));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 10%));--destructive:light-dark(oklch(0.577 0.245 27.325),oklch(0.704 0.191 22.216));--bg:var(--background);--bg-panel:var(--card);--bg-elevated:var(--secondary);--fg:var(--foreground);--fg-faint:var(--muted-foreground);--border:var(--border-color);--accent:var(--primary);--accent-hover:var(--primary-hover);--accent-ink:var(--primary-foreground);--font-sans:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--radius-md:0;--radius-xl:0;--shadow-floating:0 20px 70px rgba(0,0,0,.35);font-family:var(--font-sans)}:host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.lavish-text-highlight{position:fixed;pointer-events:none;background:oklch(0.586 0.253 17.585 / .16);border-radius:0;box-shadow:0 0 0 1px oklch(0.586 0.253 17.585 / .45)}.lavish-annotation-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:12px;border-radius:var(--radius-xl);background:var(--bg-panel);color:var(--fg);border:1px solid var(--accent);box-shadow:var(--shadow-floating);font:14px/1.4 var(--font-sans)}.lavish-heading{font-weight:700;margin-bottom:6px}.lavish-annotation-card textarea{width:100%;min-height:86px;resize:vertical;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--bg);color:var(--fg);padding:9px;font:inherit;font-family:var(--font-sans)}.lavish-annotation-card textarea::placeholder{color:var(--fg-faint)}.lavish-annotation-card .lavish-hint{margin-top:6px;font-size:11px;color:var(--fg-faint)}.lavish-annotation-card .lavish-hint-alert{color:var(--destructive);font-weight:700}.lavish-annotation-card .lavish-row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}.lavish-annotation-card button{border:0;border-radius:var(--radius-md);padding:8px 10px;font-family:var(--font-sans);font-size:13px;font-weight:700;cursor:pointer}.lavish-annotation-card button:active{opacity:.85}.lavish-annotation-card .lavish-send{background:var(--accent);color:var(--accent-ink)}.lavish-annotation-card .lavish-send:hover{background:var(--accent-hover)}.lavish-annotation-card .lavish-cancel,.lavish-annotation-card .lavish-mark{background:var(--muted);color:var(--fg)}.lavish-annotation-card .lavish-mark:hover{background:var(--secondary)}.lavish-annotation-card.is-dropping{outline:2px dashed var(--accent);outline-offset:3px}.lavish-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:176px;overflow-y:auto}.lavish-attachment-chip{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--radius-md);background:var(--bg);border:1px solid var(--border)}.lavish-attachment-chip.is-error{border-color:var(--destructive)}.lavish-attachment-thumb{width:32px;height:32px;border-radius:0;object-fit:cover;background:var(--muted);flex:0 0 auto}.lavish-attachment-thumb-empty{display:inline-block}.lavish-attachment-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}.lavish-attachment-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lavish-attachment-status{font-size:11px;color:var(--fg-faint)}.lavish-attachment-status-error{color:var(--destructive)}.lavish-attachment-retry{flex:0 0 auto;padding:4px 8px;font-size:11px;font-weight:700;border-radius:0;background:var(--muted);color:var(--fg);cursor:pointer;border:0}.lavish-attachment-remove{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0!important;border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer;border:0}.lavish-attachment-remove:hover{background:var(--muted);color:var(--foreground)}.lavish-attach-row{margin-top:8px}.lavish-attach{display:inline-flex;align-items:center;gap:6px;padding:6px 9px!important;background:var(--muted)!important;color:var(--fg)!important;font-size:12px!important}.lavish-attach:hover{background:var(--secondary)!important}.lavish-reveal-marker{position:fixed;pointer-events:none;border:2px solid var(--accent);border-radius:0;box-shadow:0 0 0 4px oklch(0.586 0.253 17.585 / .2);animation:lavish-reveal-pulse 2.4s var(--ease,ease-out) forwards}@keyframes lavish-reveal-pulse{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}.lavish-pin{position:fixed;pointer-events:none;display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/18px var(--font-sans);box-shadow:0 1px 2px rgba(0,0,0,.25)}.lavish-pin-hot{position:fixed;pointer-events:none;border:2px solid var(--accent)}.lavish-outline{position:fixed;pointer-events:none;border:1px dashed var(--accent)}.lavish-outline-tag{position:absolute;top:-15px;right:-1px;padding:0 4px;background:var(--accent);color:var(--accent-ink);font:600 10px/14px var(--font-sans);white-space:nowrap}.lavish-zoom-btn{position:fixed;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;background:color-mix(in oklch,var(--fg) 70%,transparent);color:var(--bg);cursor:zoom-in;opacity:0;transition:opacity .15s ease-out}.lavish-zoom-btn.is-shown,.lavish-zoom-btn:focus-visible{opacity:1}.lavish-zoom-btn:hover{background:var(--fg)}.lavish-queued-check{position:fixed;pointer-events:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px 0 6px;background:var(--bg-panel);border:1px solid var(--border);color:var(--accent);font:600 12px/1 var(--font-sans);box-shadow:0 1px 2px rgba(0,0,0,.12);animation:lavish-check-in .55s cubic-bezier(.2,.6,.2,1) both}.lavish-queued-check span{color:var(--fg)}.lavish-queued-check svg{overflow:visible;animation:lavish-check-turn .55s cubic-bezier(.34,1.56,.64,1) both}.lavish-queued-check path{stroke-dasharray:22;stroke-dashoffset:22;animation:lavish-check-draw .35s cubic-bezier(.65,0,.35,1) 80ms forwards}.lavish-queued-check.is-leaving{opacity:0;transition:opacity .3s ease-out}@keyframes lavish-check-in{from{opacity:0;filter:blur(6px);translate:0 8px}to{opacity:1;filter:blur(0);translate:0 0}}@keyframes lavish-check-turn{from{rotate:80deg}to{rotate:0deg}}@keyframes lavish-check-draw{to{stroke-dashoffset:0}}.lavish-tooltip{position:fixed;z-index:1;width:max-content;max-width:min(320px,calc(100vw - 12px));padding:6px 12px;border-radius:var(--radius-md);background:var(--fg);color:var(--bg);font:400 12px/1.35 var(--font-sans);text-wrap:balance;pointer-events:none}.lavish-tooltip[hidden]{display:none}.lavish-tooltip.is-open{animation:lavish-tooltip-in .15s cubic-bezier(.2,.6,.2,1) both}.lavish-tooltip[data-side="top"]{--lavish-tooltip-from:8px}.lavish-tooltip[data-side="bottom"]{--lavish-tooltip-from:-8px}@keyframes lavish-tooltip-in{from{opacity:0;transform:translateY(var(--lavish-tooltip-from,0)) scale(.95)}}@media (prefers-reduced-motion:reduce){.lavish-tooltip.is-open{animation:none}.lavish-zoom-btn{transition:none}.lavish-queued-check,.lavish-queued-check svg,.lavish-queued-check path{animation:none;stroke-dashoffset:0}.lavish-queued-check.is-leaving{transition:none}}`;
     shadow.appendChild(style);
@@ -2742,6 +2809,7 @@ export function createArtifactSdk(
       // refers to), but never queue an empty card.
       else if (prompt || readyAttachments.length) {
         queueCardPrompt(prompt, { ...c, queueKey: "", attachments: readyAttachments });
+        rememberQueuedAnchor(c, target);
       }
       closeCard();
       return true;
@@ -2791,6 +2859,20 @@ export function createArtifactSdk(
     return (dataTransfer.types || []).includes?.("Files");
   }
 
+  // Asks the chrome to mirror the page's live title and/or icon onto the outer browser tab. The
+  // chrome owns the validation (length cap, SVG data: icons only); a string sets the field, `null`
+  // restores what the tab loaded with, and a field left out stays as it is.
+  /** @param {{ title?: string | null, icon?: string | null }} [meta] */
+  function setDocumentMeta(meta) {
+    /** @type {{ title?: string | null, icon?: string | null }} */
+    const payload = {};
+    for (const field of /** @type {const} */ (["title", "icon"])) {
+      const value = meta?.[field];
+      if (typeof value === "string" || value === null) payload[field] = value;
+    }
+    postArtifactMessage("lavish:documentMeta", payload);
+  }
+
   /** @type {Window & { lavish?: unknown }} */ (window).lavish = {
     queuePrompt,
     sendQueuedPrompts,
@@ -2803,6 +2885,7 @@ export function createArtifactSdk(
       postArtifactMessage("lavish:suggestions", {
         items: Array.isArray(items) ? items.filter((item) => typeof item === "string").slice(0, 20) : [],
       }),
+    setDocumentMeta,
     snapshot,
   };
 
@@ -2878,28 +2961,52 @@ export function createArtifactSdk(
       renderOverlayMarks();
     }
     if (msg.type === "lavish:annotateElement" && annotationMode) {
-      const target = safeQuerySelector(msg.selector);
+      const queued = queuedAnchorElements.get(msg.selector)?.deref();
+      const target = queued && queued.isConnected !== false ? queued : safeQuerySelector(msg.selector);
       if (target) showAnnotationCard(target);
     }
   });
 
   // Bring a warning's element into view and flash it. The marker is Lavish UI, so it is excluded
   // from the layout audit and never becomes a finding of its own.
+  let stopRevealTracking = () => {};
   function revealElement(selector) {
     const target = selector === "html" ? document.documentElement : safeQuerySelector(selector);
     if (!(target instanceof Element)) return;
     target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    stopRevealTracking();
     const root = ensureShadow();
     for (const el of [...root.querySelectorAll(".lavish-reveal-marker")]) el.remove();
-    const rect = target.getBoundingClientRect();
     const marker = document.createElement("div");
     marker.className = "lavish-reveal-marker";
-    marker.style.left = rect.left + "px";
-    marker.style.top = rect.top + "px";
-    marker.style.width = Math.max(rect.width, 4) + "px";
-    marker.style.height = Math.max(rect.height, 4) + "px";
+    // The smooth scroll has only started when scrollIntoView returns, so the rect read now is the
+    // pre-scroll one. Re-measure the target every frame while the marker lives, which keeps the
+    // fixed marker on it as the smooth scroll settles, inside nested scroll containers, in
+    // browsers without `scrollend`, and when the reviewer scrolls during the flash.
+    const place = () => {
+      const rect = target.getBoundingClientRect();
+      marker.style.left = rect.left + "px";
+      marker.style.top = rect.top + "px";
+      marker.style.width = Math.max(rect.width, 4) + "px";
+      marker.style.height = Math.max(rect.height, 4) + "px";
+    };
+    let tracking = true;
+    const follow = () => {
+      if (!tracking) return;
+      place();
+      window.requestAnimationFrame(follow);
+    };
+    const stop = () => {
+      tracking = false;
+    };
+    stopRevealTracking = stop;
+    place();
     root.appendChild(marker);
-    window.setTimeout(() => marker.remove(), 2400);
+    window.requestAnimationFrame(follow);
+    window.setTimeout(() => {
+      stop();
+      marker.remove();
+    }, 2400);
   }
 
   function placeOverMark(mark, rect) {
@@ -3503,11 +3610,10 @@ export function createArtifactSdk(
         ignoreNextClick = false;
         return;
       }
-      // The clicked element's own selector, plus its diagram node's, so any click inside a node
-      // finds the node's note again. A table cell's note stays on the exact element clicked.
+      // The clicked element's own note, then its diagram node's, so any click inside a node finds
+      // the node's note again. A table cell's note stays on the exact element clicked.
       const clicked = queuedAnchorSelectors.size ? context(event.target) : null;
-      const node = clicked?.target?.type === "mermaid-node" ? clicked.target.selector : "";
-      const selector = [clicked?.selector, node].find((candidate) => candidate && queuedAnchorSelectors.has(candidate));
+      const selector = clicked ? queuedAnchorFor(event.target, clicked) : "";
       if (selector) {
         closeCard();
         postArtifactMessage("lavish:editQueuedAnchor", { selector });

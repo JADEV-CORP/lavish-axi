@@ -107,6 +107,18 @@ function assertObservablePollWakePath(text) {
   assert.doesNotMatch(text, /foreground command may run.*run the poll as a background task/i);
 }
 
+test("home help names LAVISH_AXI_ALLOWED_HOSTS for the 403 forbidden host case", () => {
+  const output = createHomeOutput({ bin: "lavish-axi", sessions: [] });
+  const hostHelp = output.help.find((item) => item.includes("LAVISH_AXI_ALLOWED_HOSTS"));
+
+  assert.ok(hostHelp, "home help names the allowlist variable");
+  assert.match(hostHelp, /403 `forbidden host`/);
+  assert.match(hostHelp, /reverse-proxy/);
+  assert.match(hostHelp, /README's Allowed hosts section/);
+  assert.doesNotMatch(hostHelp, /whitespace-separated/);
+  assert.match(hostHelp, /`lavish-axi stop`/);
+});
+
 test("CLI version tracks package.json so release-please bumps reach the published binary", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(VERSION, packageJson.version);
@@ -389,6 +401,8 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
     /cdn\.jsdelivr\.net\/npm\/@fontsource-variable\/inter@\d+\.\d+\.\d+\/index\.css/,
   );
   assert.match(output.design.lavish_theme_note, /inline/);
+  assert.match(output.design.summary, /start it with `<!doctype html>`/);
+  assert.match(output.design.summary, /quirks mode/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/daisyui@/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/daisyui@.*\/themes\.css/);
   assert.match(output.design.cdn_snippet, /cdn\.jsdelivr\.net\/npm\/@tailwindcss\/browser@/);
@@ -2922,6 +2936,25 @@ test("server spawn options can persist detached server output to a log fd", () =
   assert.deepEqual(options.stdio, ["ignore", 17, 17]);
 });
 
+test("server spawn options run the shared server from the state dir, not the caller's folder", () => {
+  const previousStateDir = process.env.LAVISH_AXI_STATE_DIR;
+  try {
+    const absolute = path.join(os.tmpdir(), "lavish-axi-cwd-test-state");
+    process.env.LAVISH_AXI_STATE_DIR = absolute;
+    const options = createServerSpawnOptions();
+    assert.equal(options.cwd, absolute);
+    assert.equal(options.env?.LAVISH_AXI_STATE_DIR, absolute);
+
+    process.env.LAVISH_AXI_STATE_DIR = "relative-state";
+    const relative = createServerSpawnOptions();
+    assert.equal(relative.cwd, path.resolve("relative-state"));
+    assert.equal(relative.env?.LAVISH_AXI_STATE_DIR, path.resolve("relative-state"));
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LAVISH_AXI_STATE_DIR;
+    else process.env.LAVISH_AXI_STATE_DIR = previousStateDir;
+  }
+});
+
 test("detached server entry dispatches the CLI", () => {
   const entry = fileURLToPath(new URL("../bin/lavish-axi-server.js", import.meta.url));
   const result = spawnSync(process.execPath, [entry, "--version"], { encoding: "utf8" });
@@ -3376,7 +3409,9 @@ test("opening an artifact names that session as the one to reload across a versi
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     recorder.close();
-    await rm(dir, { recursive: true, force: true });
+    // The spawned server runs with the state dir as its cwd, and Windows refuses to remove a
+    // directory that a still-exiting process is in.
+    await rm(dir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

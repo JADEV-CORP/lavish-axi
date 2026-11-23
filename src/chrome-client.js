@@ -948,7 +948,11 @@ async function copyMessage(button) {
   }, 1500);
 }
 
-const DEFAULT_SEND_HINT = "Write a message or annotate an element first.";
+const UNSENT_OWNERSHIP_COPY =
+  "Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.";
+const DEFAULT_SEND_HINT = "Nothing queued in this tab. " + UNSENT_OWNERSHIP_COPY;
+const EMPTY_SEND_HINT_HOLD_MS = 9000;
+const EMPTY_END_HINT = "Nothing to send. To end without feedback, use End session in the More menu (⋮).";
 
 function showSendHint(message = DEFAULT_SEND_HINT, holdMs = 2600, focusInput = true) {
   sendHint.textContent = message;
@@ -972,8 +976,8 @@ function showSendHint(message = DEFAULT_SEND_HINT, holdMs = 2600, focusInput = t
 
 // Error state shake: an empty send shakes the prompt box and reddens its border for as long as the
 // hint explains why.
-function rejectEmptySend() {
-  showSendHint();
+function rejectEmptySend(message = DEFAULT_SEND_HINT, holdMs = undefined) {
+  showSendHint(message, holdMs);
   promptInput.classList.add("is-error");
   promptInput.classList.remove("is-shaking");
   void promptInput.offsetWidth;
@@ -2708,10 +2712,12 @@ for (const prompt of queued) assignPinNumber(prompt);
 
 // Tells the artifact which element selectors carry a queued note, and where each note's pin goes.
 // Only selectors and pin numbers cross into the frame: the artifact is agent-authored, and the
-// note text stays in the chrome.
+// note text stays in the chrome. Each selector is listed where its newest note sits, oldest first,
+// so the artifact can prefer an element's newest note.
 function postQueuedAnchors(force = false) {
   const anchored = queued.filter((prompt) => isElementAnchoredPrompt(prompt));
-  const selectors = [...new Set(anchored.flatMap(queuedAnchorSelectorsOf))];
+  const anchorSelectors = anchored.flatMap(queuedAnchorSelectorsOf);
+  const selectors = [...new Set(anchorSelectors.reverse())].reverse();
   const pins = anchored.map((prompt) => ({ selector: String(prompt.selector), number: queuedPinNumber(prompt) }));
   for (const prompt of queued) {
     for (const mark of groupMarks(prompt)) {
@@ -3328,7 +3334,10 @@ function sendQueued(endAfter) {
   const shouldEnd = Boolean(endAfter && !chipsBlocked);
   const preparations = shouldEnd ? [...feedbackPreparations] : [];
   if (!queued.length && preparations.length === 0) {
-    if (!chipsBlocked && !sendFailureOwner) rejectEmptySend();
+    if (!chipsBlocked && !sendFailureOwner) {
+      if (endAfter) rejectEmptySend(EMPTY_END_HINT);
+      else rejectEmptySend(DEFAULT_SEND_HINT, EMPTY_SEND_HINT_HOLD_MS);
+    }
     return;
   }
   if (!sendFailureOwner) hideSendHint(true);
@@ -3382,7 +3391,7 @@ function completeTerminalPreparation(terminal, results) {
   clearPreparationFailure("terminal");
   if (!terminal.prompts.length) {
     releaseTerminalSubmission(terminal);
-    if (!sendFailureOwner) rejectEmptySend();
+    if (!sendFailureOwner) rejectEmptySend(EMPTY_END_HINT);
     return;
   }
   // Only make the reservation durable once every preparation has joined the exact
@@ -4799,6 +4808,9 @@ async function replaceArtifactFrame({ recoveryRetry = false } = {}) {
       previousToken &&
       artifactSpokeToken !== previousToken
     ) {
+      // A first load that gets no fresh token falls back to the one embedded in the page, so a
+      // superseded chrome still shows the artifact behind its takeover banner.
+      if (!frame.src) frame.src = artifactFrameSrcForLoad({ revision: artifactLoadRevision, token: previousToken });
       armArtifactAvailabilityProbe(previousToken);
     }
     return false;
@@ -4867,7 +4879,7 @@ async function replaceArtifactFrame({ recoveryRetry = false } = {}) {
           if (!artifactLoadToken) {
             setLayoutGateFailure(
               "This review is already open in another tab.",
-              "Lavish loads an artifact in one tab at a time. Take over here to move the review into this tab, or switch back to the tab that already has it.",
+              UNSENT_OWNERSHIP_COPY,
               "Take over here",
             );
           }
@@ -5605,6 +5617,57 @@ async function reloadChromeForOutdatedBanner() {
   }
 }
 
+// ---- Tab title and icon from the artifact ----
+// The server stamps the tab from the artifact's <head> once, when the chrome is served. A page that
+// changes after that (a live dashboard) can ask the chrome to follow it with
+// window.lavish.setDocumentMeta. The page is untrusted, so the chrome clamps the title and takes
+// only a bounded SVG data: icon, which cannot run script or fetch anything as a tab icon.
+const DOCUMENT_TITLE_MAX_CHARS = 120;
+const DOCUMENT_ICON_MAX_CHARS = 8192;
+const DOCUMENT_ICON_RE = /^data:image\/svg\+xml[;,]/i;
+const loadTimeTitle = document.title;
+const loadTimeIconLink = document.querySelector?.('link[rel~="icon"]');
+const loadTimeIconHref = loadTimeIconLink ? loadTimeIconLink.getAttribute("href") : null;
+
+function applyDocumentMeta(msg) {
+  if (msg.title === null) document.title = loadTimeTitle;
+  else if (typeof msg.title === "string") {
+    const title = msg.title
+      .replace(/\p{Cc}+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, DOCUMENT_TITLE_MAX_CHARS)
+      .trim();
+    document.title = title ? title + " · Lavish" : loadTimeTitle;
+  }
+  // Jadev fork: keep the unseen count the background-tab marker put in front of the title.
+  if (unseenCount && msg.title !== undefined) document.title = "(" + unseenCount + ") " + titleWithoutCount();
+  if (msg.icon === null) setDocumentIcon(loadTimeIconHref);
+  else if (
+    typeof msg.icon === "string" &&
+    msg.icon.length <= DOCUMENT_ICON_MAX_CHARS &&
+    DOCUMENT_ICON_RE.test(msg.icon)
+  ) {
+    setDocumentIcon(msg.icon);
+  }
+}
+
+function setDocumentIcon(href) {
+  // Replace the element rather than edit its href: some browsers keep showing the old icon
+  // otherwise.
+  const old = document.querySelector('link[rel~="icon"]');
+  const link = document.createElement("link");
+  link.setAttribute("rel", "icon");
+  if (href) link.setAttribute("href", href);
+  if (old) old.replaceWith(link);
+  else document.head.appendChild(link);
+  // Jadev fork: a tab marked unseen keeps its dot, now over the artifact's new icon.
+  if (faviconHref) {
+    faviconHref = "";
+    markFavicon(true);
+  }
+}
+
 window.addEventListener("message", (event) => {
   if (event.source !== frame.contentWindow) return;
 
@@ -5675,6 +5738,7 @@ window.addEventListener("message", (event) => {
     completeSnapshotRequest(msg.snapshot_request_id, msg.snapshot || "");
   }
   if (msg.type === "lavish:suggestions") setSuggestions(msg.items);
+  if (msg.type === "lavish:documentMeta") applyDocumentMeta(msg);
   if (msg.type === "lavish:scroll") {
     lastScroll = { x: Number(msg.x) || 0, y: Number(msg.y) || 0 };
   }
@@ -7331,11 +7395,12 @@ let unseenCount = 0;
 const titleWithoutCount = () => document.title.replace(/^\(\d+\) /, "");
 // The tab marker (#3795): while something is unseen, the tab's icon carries the accent dot, so the
 // tab that chimed stands out among other Lavish tabs without flashing or desktop permission.
-/** @type {HTMLLinkElement | null} */
-const faviconLink = typeof document.querySelector === "function" ? document.querySelector('link[rel~="icon"]') : null;
+// The icon link is looked up each time: window.lavish.setDocumentMeta replaces the element.
 let faviconHref = "";
 /** @param {boolean} marked */
 function markFavicon(marked) {
+  /** @type {HTMLLinkElement | null} */
+  const faviconLink = typeof document.querySelector === "function" ? document.querySelector('link[rel~="icon"]') : null;
   if (!faviconLink) return;
   if (!marked) {
     if (faviconHref) faviconLink.href = faviconHref;

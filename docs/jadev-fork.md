@@ -102,6 +102,20 @@ folder, and `lavish-axi libraries` lists their references. Libraries never downl
 
 The running server checks for a newer fork version shortly after it starts and then every six hours (`src/fork-update.js`). It fetches the fork's `main` from GitHub (`JADEV-CORP/lavish-axi`; the Azure DevOps copy was removed on 23 Nov 2026) with `--depth=1 --filter=blob:none` into `update-check.git` under the state directory and reads only `package.json`, so git's own credential manager signs in and Lavish never handles a token; terminal and Git Credential Manager prompts are off, so a machine that is not signed in skips the check silently. A higher `-jadev.N` shows **Update** in every open editor's top bar, with the steps above and Copy and Dismiss (dismissed per version). `LAVISH_AXI_UPDATE_CHECK=0` turns the check off.
 
+## Upstream 0.1.98 adaptations
+
+Upstream's desktop sidebar toggle (#462) is not taken: the fork's layout switch already collapses the
+panel to a rail that counts unseen replies, and two controls for one panel would disagree. The rest
+of 0.1.91 to 0.1.98 is in, adapted where the fork's chrome differs:
+
+- Unsent-ownership copy (#464) is in the takeover banner and the empty-Send hint; an empty Send still
+  shakes the message box, and keeps the longer hint on screen.
+- Unique annotation selectors (#493) also cover notes queued from the card and `window.lavish`; the
+  chrome lists each selector at its newest note, next to the fork's pin numbers.
+- `window.lavish.setDocumentMeta` (#458) replaces the tab icon link, so the background-tab marker
+  looks the link up each time, puts its dot back over a new icon, and keeps the unseen count in a
+  title the artifact sets.
+
 `lavish-axi update` is disabled in the fork. The built-in updater installs the newest npm release, which semver ranks
 above every `-jadev.N` prerelease, so it would quietly replace the fork with upstream. It exits with
 `FORK_UPDATE_DISABLED` instead.

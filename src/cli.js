@@ -48,6 +48,7 @@ import {
   LOOPBACK_HOST,
   resolveConcreteListenHosts,
   serverLogFile,
+  stateDir,
   stateFile,
   stateId,
 } from "./paths.js";
@@ -333,6 +334,7 @@ export function createHomeOutput({ bin, sessions, includeSessions = true, agent 
       "Run `lavish-axi end <html-file>` to end a session as the agent - ending it this way still allows a plain reopen later. When the user ends it from the browser instead, a later `lavish-axi <html-file>` refuses to reopen it without `--reopen`",
       "Run `lavish-axi export <html-file> [--out <path>]` to write a portable copy of the artifact - one HTML file with its LOCAL assets inlined - so it opens with no Lavish server and no sibling files. Remote CDN/font references are left as links, so it needs network to render those. Users can also export from the browser chrome's overflow menu",
       "Run `lavish-axi share <html-file> [--private | --password <pw>]` to publish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and get back a visitable URL. Shares are PUBLIC by default, so anyone with the link can open them. Pass --private to publish a PRIVATE page behind a password Lavish generates and returns - hand the user that password with the URL and say it is a shared secret anyone they give it to can use; --password <pw> uses one you were already given instead. Local assets are inlined; remote refs load over the network. It also returns a secret update_key that can republish or lock the same URL later - run `lavish-axi share --help` before using it. Users can also publish from the browser chrome's overflow menu",
+      "A request under a hostname Lavish does not answer to (a reverse-proxy name, a LAN IP) gets 403 `forbidden host`. Set `LAVISH_AXI_ALLOWED_HOSTS` in the environment that starts the server, running `lavish-axi stop` first if one is already up. See README's Allowed hosts section for the rules",
       "Run `lavish-axi stop` to shut down the background server (it also self-stops when idle or after the last session ends with nothing connected)",
       `Run \`lavish-axi playbook <playbook_id>\` for focused artifact guidance. ${PLAYBOOK_ROUTER_HELP}`,
       DESIGN_SYSTEM_HINT,
@@ -2048,14 +2050,22 @@ async function findRunningServer(port, { reconcileNetwork = false } = {}) {
 }
 
 // Other Lavish daemons of this installation on the same port. An address the chosen server itself
-// reports as bound is the chosen server, not a duplicate. A server too old to report its addresses
-// is about to be replaced by version, so every other address is retired with it: an old daemon left
-// holding loopback would otherwise make the upgraded server refuse to start.
+// reports as bound, or a matching process identity through a proxy, is not a duplicate. A server
+// too old to report its addresses is about to be replaced by version, so every other address is
+// retired with it: an old daemon left holding loopback would otherwise make the upgraded server
+// refuse to start.
 function ownedDuplicates(owned, chosen) {
   const covered = new Set([chosen.host, ...(Array.isArray(chosen.health.hosts) ? chosen.health.hosts : [])]);
+  const chosenId = chosen.health.process_id;
   const duplicates = [];
   for (const entry of owned) {
-    if (entry === chosen || covered.has(entry.host)) continue;
+    const processId = entry.health.process_id;
+    if (
+      entry === chosen ||
+      covered.has(entry.host) ||
+      (typeof processId === "string" && processId !== "" && processId === chosenId)
+    )
+      continue;
     duplicates.push(entry);
     for (const host of Array.isArray(entry.health.hosts) ? entry.health.hosts : [entry.host]) covered.add(host);
   }
@@ -2538,10 +2548,16 @@ export function createServerSpawnOptions(logFd = null) {
   const stdio = /** @type {import("node:child_process").StdioOptions} */ (
     logFd === null ? "ignore" : ["ignore", logFd, logFd]
   );
+  // The server is shared machine-wide, so it must not pin the first caller's folder: tools that
+  // reap processes by working directory when deleting a worktree would stop every open session.
+  // The state dir is passed absolute so a relative LAVISH_AXI_STATE_DIR is not re-resolved
+  // against that new cwd.
+  const dir = path.resolve(stateDir());
   return {
     detached: true,
     stdio,
-    env: { ...process.env, LAVISH_AXI_NO_OPEN: "1" },
+    cwd: dir,
+    env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_NO_OPEN: "1" },
   };
 }
 

@@ -1168,6 +1168,17 @@ test("chrome shows agent working state when a previous poll has released", async
   assert.match(js, /<svg class="spinner"[^>]*><path d="M21 12a9 9 0 1 1-6\.219-8\.56"\/><\/svg>/);
 });
 
+test("takeover banner explains draft ownership before offering takeover", () => {
+  const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
+  const banner = html.match(/id="handoffBanner"[^>]*>([\s\S]*?)<\/div>/)?.[1] || "";
+  assert.match(
+    banner,
+    /<span>This review is open in another Lavish tab\. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along\.<\/span>/,
+  );
+  assert.doesNotMatch(banner, /switch back there/i);
+  assert.match(banner, /id="handoffTakeover"[^>]*>Take over here/);
+});
+
 test("composer sends through the prototype's split Send button, with Send and end session under its chevron", async () => {
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
   const css = await chromeCssSource();
@@ -1194,7 +1205,7 @@ test("composer sends through the prototype's split Send button, with Send and en
   // left and the send actions on the right. The hint sits right above the box.
   assert.match(
     html,
-    /<div class="send-hint" id="sendHint" hidden>Write a message or annotate an element first\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden><\/div><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"><\/textarea>/,
+    /<div class="send-hint" id="sendHint" hidden>Nothing queued in this tab\. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along\.<\/div><div class="queue" id="queuePanel" hidden>.*?<\/div><div class="edit-bar" id="editBar" hidden>.*?<\/div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden><\/div><div class="chat-attachments" id="chatAttachments"><\/div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"><\/textarea>/,
   );
   assert.match(
     html,
@@ -6893,6 +6904,31 @@ test("extractArtifactHead pulls a data-URI favicon and title from the artifact h
   assert.match(faviconTag, /viewBox='0 0 100 100'/, "data-URI '>' chars must not truncate the tag");
   assert.match(faviconTag, /<\/svg>">$/, "the full link tag is captured");
   assert.equal(title, "Weekly Board");
+});
+
+test("extractArtifactHead ignores a <title> mentioned inside an HTML comment", () => {
+  const artifact = `<!doctype html><html><head>
+    <!-- Run title (appears in <title> and the header meta) -->
+    <title>Real Board</title>
+    </head><body></body></html>`;
+  assert.equal(extractArtifactHead(artifact).title, "Real Board");
+
+  const multiline = `<head><!--
+    <title>Draft</title>
+    -->
+    <title>Final</title></head>`;
+  assert.equal(extractArtifactHead(multiline).title, "Final");
+
+  assert.equal(extractArtifactHead("<head><!-- <title>Only in a comment</title> --></head>").title, "");
+});
+
+test("extractArtifactHead keeps the title when a '<!--' is not a comment", () => {
+  // Browsers read script and style contents as raw text, so a "<!--" there opens no comment.
+  assert.equal(
+    extractArtifactHead('<head><script>const marker = "<!--";</script><title>Board</title></head>').title,
+    "Board",
+  );
+  assert.equal(extractArtifactHead("<head><style>/* <!-- */</style><title>Board</title></head>").title, "Board");
 });
 
 test("extractArtifactHead handles shortcut icon and absolute hrefs", () => {

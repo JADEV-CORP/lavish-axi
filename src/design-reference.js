@@ -287,7 +287,7 @@ export function createDesignOutput() {
       summary:
         "This is the Lavish design, the default for every artifact whose user gave no design direction. A screen that mocks a specific product keeps that product's own design system inside its frame. Lavish does not auto-inject any design system; artifacts stay portable HTML. Paint an explicit page background and readable text. " +
         DESIGN_PRIORITY_RULE +
-        " Start from `lavish-axi design --template`; the CDN snippet below is what its `<head>` carries.",
+        " Lavish adds only its SDK script to your file and never wraps a fragment, so start it with `<!doctype html>`: without one the page renders in quirks mode, where `<table>` text stops inheriting the color a wrapper theme sets. Start from `lavish-axi design --template`, which already does; the CDN snippet below is what its `<head>` carries.",
       page_template:
         "`lavish-axi design --template` prints the starting page as plain HTML: redirect it into your artifact file, then replace the [bracketed] placeholders and repeat or drop blocks. Keep its classes; add DaisyUI parts from the reference below.",
       cdn_snippet: DESIGN_CDN_SNIPPET,
@@ -326,6 +326,8 @@ export function createDesignOutput() {
       registry_snippet: REVISION_REGISTRY_SNIPPET,
       how: 'Append one entry per round to the `data-lavish-revisions` JSON (oldest first, stable `id`s), and put `data-lavish-revision="<id>"` on each block you actually edited or added. Lavish reads them and never restyles the page, so the saved file looks the same opened directly.',
     },
+    tab_meta:
+      "Opt-in: a long-lived artifact can show live state on the background browser tab with `window.lavish?.setDocumentMeta?.({ title, icon })`; see the README.",
     theme_usage: [
       'Default to `<html data-theme="lavish-auto">` (the template has it): it follows the light or dark mode and theme preset of the editor. `lavish` and `lavish-dark` pin one side. All three ship inline in the CDN snippet. Pick a DaisyUI theme from the list below only when the user asked for one.',
       'Set a nested section theme with `<section data-theme="night">`.',
