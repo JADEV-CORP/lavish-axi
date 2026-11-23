@@ -3,12 +3,12 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-// Newer Jadev versions (#3788). The fork is installed from its Azure DevOps repository, not npm, so
+// Newer Jadev versions (#3788). The fork is installed from its GitHub repository, not npm, so
 // the server reads package.json on the fork's main branch: a shallow, blob-less fetch into a small
 // bare cache under the state directory, then just that one file. Git's own credential manager
 // signs in, so this code never sees a token, and with interactive prompts off a machine that is
 // not signed in simply skips the check.
-export const JADEV_REPOSITORY = "https://dev.azure.com/jadev-corp/DEV-LAB/_git/lavish-axi";
+export const JADEV_REPOSITORY = "https://github.com/JADEV-CORP/lavish-axi.git";
 export const FORK_UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const FORK_UPDATE_FIRST_CHECK_MS = 30_000;
 const GIT_TIMEOUT_MS = 60_000;
