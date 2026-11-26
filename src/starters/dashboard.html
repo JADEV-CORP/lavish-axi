@@ -54,7 +54,7 @@
             <thead>
               <tr>
                 <th>Item</th>
-                <th>Category</th>
+                <th class="hidden sm:table-cell">Category</th>
                 <th class="text-right">Amount</th>
                 <th>Status</th>
                 <th><span class="sr-only">Actions</span></th>
@@ -114,10 +114,17 @@
         document.getElementById("rows").replaceChildren(
           ...rows.map((row) => {
             const tr = document.createElement("tr");
-            for (const [value, right] of [[row.item], [row.category], [money(row.amount), true], [row.status]]) {
+            // Category hides on a phone so the table fits; the header cell carries the same class.
+            const cells = [
+              [row.item, ""],
+              [row.category, "hidden sm:table-cell"],
+              [money(row.amount), "text-right tabular-nums"],
+              [row.status, ""],
+            ];
+            for (const [value, className] of cells) {
               const td = tr.insertCell();
               td.textContent = value;
-              if (right) td.className = "text-right tabular-nums";
+              td.className = className;
             }
             const actions = tr.insertCell();
             actions.className = "whitespace-nowrap text-right";
