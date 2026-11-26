@@ -37,8 +37,15 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
       - run: pnpm run check
       - run: npm pack
+      # Skipped when this version is already on npm (the hand-published 1.0.0, or a rerun after a
+      # failed release step), so the GitHub release still gets created.
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          if npm view "@jadev-corp/lavish@${VERSION}" version >/dev/null 2>&1; then
+            echo "@jadev-corp/lavish@${VERSION} is already on npm"
+          else
+            npm publish --provenance --access public
+          fi
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -60,16 +60,18 @@ A release is a tag on `main`:
 1. Set the version in `package.json`, run `pnpm run build:plugin`, date the `CHANGELOG.md` entry, and merge to
    `main`.
 2. Tag the merge commit `v<version>` and push the tag: `git tag v1.0.0 && git push origin v1.0.0`.
-3. `.github/workflows/jadev-release.yml` checks that the tag matches `package.json`, runs `pnpm run check`, packs
-   the tarball, publishes it to npm with `npm publish --provenance --access public`, and creates a GitHub release
-   with the `.tgz` attached.
+3. `.github/workflows/jadev-release.yml` checks that the tag is on `main` and matches `package.json`, runs
+   `pnpm run check`, packs the tarball, publishes it to npm with `npm publish --provenance --access public`, and
+   creates a GitHub release with the `.tgz` attached. A version already on npm is not published again, so a rerun
+   only finishes the release.
 
 Publishing uses npm trusted publishing. GitHub Actions signs in to npm with a short-lived OIDC token, so no npm
 token is stored in the repository, and npm records provenance that links each version to the workflow run that
 built it. On npmjs.com, the package's trusted publisher names the repository `JADEV-CORP/lavish-axi` and the
 workflow `jadev-release.yml`. npm configures a trusted publisher on an existing package only, so the `jadev-corp`
-npm user publishes 1.0.0 once by hand (`npm publish --access public` from a clean checkout of the tag) and adds the
-trusted publisher right after. Every later version goes through the workflow.
+npm user publishes 1.0.0 once by hand (`npm publish --access public` from a clean checkout of `main`), adds the
+trusted publisher, then pushes the `v1.0.0` tag so the workflow creates the GitHub release. Every later version is
+published by the workflow.
 
 ## Direct agent nudges
 
