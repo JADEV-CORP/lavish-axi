@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 JADEV-CORP. All rights reserved. Proprietary and confidential. -->
+<!-- Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE. -->
 <h1 align="center">lavish-axi</h1>
 <p align="center">
   <a href="https://github.com/kunchenguid/lavish-axi/actions/workflows/ci.yml"
@@ -24,10 +24,10 @@
 <h3 align="center">For when a rich editor is not rich enough.</h3>
 
 <p align="center">
-  <img alt="Lavish Editor demo" src="lavish-editor-marketing/renders/lavish-editor-marketing.gif" width="960" />
+  <img alt="Lavish Editor demo" src="../lavish-editor-marketing/renders/lavish-editor-marketing.gif" width="960" />
 </p>
 
-> **Jadev fork.** This is Jadev's fork of lavish-axi, versioned `<upstream>-jadev.<n>`. Install, upgrade, and upstream sync are in [docs/jadev-fork.md](docs/jadev-fork.md); `lavish-axi update` is disabled here because it would install the upstream npm release.
+> **Jadev fork.** This is Jadev's fork of lavish-axi, versioned `<upstream>-jadev.<n>`. Install, upgrade, and upstream sync are in [docs/jadev-fork.md](jadev-fork.md); `lavish-axi update` is disabled here because it would install the upstream npm release.
 
 HTML is the new markdown. Lavish is the new editor for your HTML artifacts.
 

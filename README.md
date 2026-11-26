@@ -1,0 +1,89 @@
+<!-- Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE. -->
+<h1 align="center">Lavish</h1>
+
+<p align="center"><b>Your agent asks on a page. You answer in one click. It gets every answer.</b></p>
+
+<p align="center">
+  <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.98--jadev.2-informational?style=flat-square" />
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" />
+  <a href="https://github.com/kunchenguid/lavish-axi"><img alt="Based on lavish-axi" src="https://img.shields.io/badge/based%20on-lavish--axi-black?style=flat-square" /></a>
+</p>
+
+<p align="center">
+  <img alt="An agent asks how the JADEV build of Lavish should ship. The reviewer picks Go, Maybe and No, adds a note and an idea, presses Queue all and send, and the agent replies in the page." src="demo/lavish-demo.gif" width="960" />
+</p>
+
+Coding agents write long answers in a terminal. Decisions get lost in scrollback, and "what do you think of options 2 and 4?" turns into a chat of its own.
+
+Lavish puts the answer on a page instead. Your agent writes HTML (a plan, a set of decisions, a review, a diagram), Lavish opens it, and you answer it the way you would a good form: pick options, write notes, point at anything on the page. One click sends everything back, and the agent picks it up in the same session.
+
+The recording above is real: [demo/release-workflow.html](demo/release-workflow.html) on a live Lavish server, driven by [scripts/record-demo.js](scripts/record-demo.js).
+
+<p align="center"><img alt="How Lavish works: the agent writes a page, Lavish opens it, you answer, the agent gets every answer, the agent replies and builds the next round" src="docs/how-it-works.drawio.svg" width="896" /></p>
+
+## What this build adds
+
+This is the JADEV build of [lavish-axi](https://github.com/kunchenguid/lavish-axi) by Kun Chen. Everything upstream does still works; these are the additions.
+
+|                       |                                                                                                                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Queue all**         | Every page with questions ends with one bar: how many you answered, links to the open ones, **Copy**, **Queue all** and **Queue all and send**. The agent never has to remember to build it. |
+| **Notes everywhere**  | A note for the whole page, and an **Add note** on every question that has no text box. Notes are multi-line, ride on the answer they belong to, and survive a reload.                        |
+| **Copy that works**   | Copy writes from inside your click and through the review window, and shows the text selected when the browser still refuses, so pasting into a chat always works.                           |
+| **draw.io diagrams**  | `lavish-axi diagram flow.drawio` renders a static SVG that follows light and dark mode, keeps the diagram editable in draw.io, and gives the agent a preview to check before you see it.     |
+| **Beside the chat**   | In T3 Code the review opens in the thread's preview panel, and in VS Code's Copilot chat in the integrated browser, instead of a separate window.                                            |
+| **Brainstorm rounds** | `lavish-axi playbook brainstorm` shapes a thinking session: the problem, a diagram, three to five real options, Go / Maybe / No with notes, and numbered rounds.                             |
+
+## Install
+
+Node 22 or later.
+
+```sh
+npm i -g https://github.com/JADEV-CORP/lavish-axi/releases/download/lavish-axi-v0.1.98-jadev.2/lavish-axi-0.1.98-jadev.2.tgz
+lavish-axi --version          # 0.1.98-jadev.2
+lavish-axi setup plugin       # optional: register it with VS Code, Cursor and Copilot CLI
+```
+
+For diagrams, install the [draw.io desktop app](https://github.com/jgraph/drawio-desktop/releases) (open source): `brew install --cask drawio` on macOS, `winget install JGraph.Draw` on Windows.
+
+From source:
+
+```sh
+git clone https://github.com/JADEV-CORP/lavish-axi && cd lavish-axi
+pnpm install && pnpm run check && npm pack
+npm i -g ./lavish-axi-*.tgz
+```
+
+## Try it
+
+```sh
+lavish-axi demo/release-workflow.html        # opens the page from the recording
+lavish-axi poll demo/release-workflow.html   # what your agent runs to receive your answers
+```
+
+Then ask your agent for anything easier to judge on a page than in a terminal: "put the three options on a Lavish page", "review this plan with me in Lavish". The agent reads current instructions from the CLI itself (`lavish-axi --help`, `lavish-axi playbook`), so they never go stale.
+
+## Inside T3 Code and VS Code
+
+In T3 Code, Lavish tells the agent to open the review with T3's `preview_open` tool, in the thread's own preview panel. In VS Code, add this to your settings once, and Copilot's agent chat opens reviews in the integrated browser beside the chat:
+
+```json
+"terminal.integrated.env.osx": { "LAVISH_AXI_OPEN": "panel" }
+```
+
+Use `terminal.integrated.env.windows` or `.linux` on those systems. `lavish-axi <page> --external` always opens your regular browser.
+
+## Privacy
+
+Pages, answers and notes stay on your machine. This build sends no telemetry; its only outside call is a check of this repository for a newer version. Sharing a page on the web is a separate, explicit command (`lavish-axi share`).
+
+## More
+
+- [docs/jadev-fork.md](docs/jadev-fork.md): what this build changes, versions, and how it follows upstream.
+- [docs/upstream-readme.md](docs/upstream-readme.md): the full upstream guide (annotation, whiteboards, CLI reference, sharing).
+- Record the demo again after a change: `npm run build && node scripts/record-demo.js`.
+
+## License
+
+MIT. Upstream lavish-axi is copyright Kun Chen; the changes in this build are copyright JADEV-CORP.

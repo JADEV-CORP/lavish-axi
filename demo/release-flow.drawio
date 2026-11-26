@@ -1,0 +1,19 @@
+<mxfile>
+  <diagram id="release-flow" name="Release flow">
+    <mxGraphModel adaptiveColors="auto" grid="0" page="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="merge" value="&lt;b&gt;Merge to main&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="1"><mxGeometry x="0" y="0" width="140" height="48" as="geometry"/></mxCell>
+        <mxCell id="tag" value="&lt;b&gt;Tag&lt;/b&gt;&lt;br&gt;v0.1.98-jadev.N" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1"><mxGeometry x="175" y="0" width="140" height="48" as="geometry"/></mxCell>
+        <mxCell id="ci" value="&lt;b&gt;CI&lt;/b&gt;&lt;br&gt;npm run check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1"><mxGeometry x="350" y="0" width="140" height="48" as="geometry"/></mxCell>
+        <mxCell id="rel" value="&lt;b&gt;GitHub release&lt;/b&gt;&lt;br&gt;packed .tgz" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1"><mxGeometry x="525" y="0" width="140" height="48" as="geometry"/></mxCell>
+        <mxCell id="dev" value="&lt;b&gt;Each machine&lt;/b&gt;&lt;br&gt;npm i -g &amp;lt;url&amp;gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;" vertex="1" parent="1"><mxGeometry x="700" y="0" width="140" height="48" as="geometry"/></mxCell>
+        <mxCell id="e1" edge="1" source="merge" target="tag" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" edge="1" source="tag" target="ci" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" edge="1" source="ci" target="rel" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" edge="1" source="rel" target="dev" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

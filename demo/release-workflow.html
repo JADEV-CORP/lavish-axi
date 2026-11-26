@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto" data-lavish-annotate="off">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Release workflow</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+    <style>
+      :is([data-theme="lavish"], [data-theme="lavish-dark"], [data-theme="lavish-auto"]) {
+        font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+        --radius-selector: 0rem;
+        --radius-field: 0rem;
+        --radius-box: 0rem;
+        --size-selector: 0.25rem;
+        --size-field: 0.25rem;
+        --border: 1px;
+        --depth: 0;
+        --noise: 0;
+        --card-p: 1rem;
+      }
+      /* Inter sits about a pixel low in a fixed-height control; a 2px bottom inset centres its text,
+     and inputs share the 1rem inset cards, alerts, and tables use, so text lines up down a page. */
+      :is([data-theme="lavish"], [data-theme="lavish-dark"], [data-theme="lavish-auto"])
+        :is(.btn, .badge, .kbd, .tab, .input, .select) {
+        padding-bottom: 2px;
+      }
+      :is([data-theme="lavish"], [data-theme="lavish-dark"], [data-theme="lavish-auto"]) :is(.input, .select) {
+        padding-inline: 1rem;
+      }
+      [data-theme="lavish"] {
+        color-scheme: light;
+        --color-base-100: oklch(1 0 0);
+        --color-base-200: oklch(0.96 0.003 325.6);
+        --color-base-300: oklch(0.922 0.005 325.62);
+        --color-base-content: oklch(0.145 0.008 326);
+        --color-primary: oklch(0.514 0.222 16.935);
+        --color-primary-content: oklch(0.969 0.015 12.422);
+        --color-secondary: oklch(0.967 0.001 286.375);
+        --color-secondary-content: oklch(0.21 0.006 285.885);
+        --color-accent: oklch(0.96 0.003 325.6);
+        --color-accent-content: oklch(0.212 0.019 322.12);
+        --color-neutral: oklch(0.212 0.019 322.12);
+        --color-neutral-content: oklch(0.985 0 0);
+        --color-info: oklch(0.6 0.12 240);
+        --color-info-content: oklch(0.985 0 0);
+        --color-success: oklch(0.55 0.13 150);
+        --color-success-content: oklch(0.985 0 0);
+        --color-warning: oklch(0.7 0.15 70);
+        --color-warning-content: oklch(0.2 0.03 70);
+        --color-error: oklch(0.577 0.245 27.325);
+        --color-error-content: oklch(0.985 0 0);
+      }
+      [data-theme="lavish-dark"] {
+        color-scheme: dark;
+        --color-base-100: oklch(0.145 0.008 326);
+        --color-base-200: oklch(0.212 0.019 322.12);
+        --color-base-300: oklch(0.263 0.024 320.12);
+        --color-base-content: oklch(0.985 0 0);
+        --color-primary: oklch(0.455 0.188 13.697);
+        --color-primary-content: oklch(0.969 0.015 12.422);
+        --color-secondary: oklch(0.274 0.006 286.033);
+        --color-secondary-content: oklch(0.985 0 0);
+        --color-accent: oklch(0.263 0.024 320.12);
+        --color-accent-content: oklch(0.985 0 0);
+        --color-neutral: oklch(0.274 0.006 286.033);
+        --color-neutral-content: oklch(0.985 0 0);
+        --color-info: oklch(0.7 0.12 240);
+        --color-info-content: oklch(0.145 0.008 326);
+        --color-success: oklch(0.72 0.15 150);
+        --color-success-content: oklch(0.145 0.008 326);
+        --color-warning: oklch(0.78 0.14 75);
+        --color-warning-content: oklch(0.2 0.03 70);
+        --color-error: oklch(0.704 0.191 22.216);
+        --color-error-content: oklch(0.145 0.008 326);
+      }
+      /* Follows the OS when opened on its own; inside Lavish it follows the editor's light or dark
+     mode and theme preset. */
+      [data-theme="lavish-auto"] {
+        color-scheme: light dark;
+        --color-base-100: light-dark(oklch(1 0 0), oklch(0.145 0.008 326));
+        --color-base-200: light-dark(oklch(0.96 0.003 325.6), oklch(0.212 0.019 322.12));
+        --color-base-300: light-dark(oklch(0.922 0.005 325.62), oklch(0.263 0.024 320.12));
+        --color-base-content: light-dark(oklch(0.145 0.008 326), oklch(0.985 0 0));
+        --color-primary: light-dark(oklch(0.514 0.222 16.935), oklch(0.455 0.188 13.697));
+        --color-primary-content: oklch(0.969 0.015 12.422);
+        --color-secondary: light-dark(oklch(0.967 0.001 286.375), oklch(0.274 0.006 286.033));
+        --color-secondary-content: light-dark(oklch(0.21 0.006 285.885), oklch(0.985 0 0));
+        --color-accent: light-dark(oklch(0.96 0.003 325.6), oklch(0.263 0.024 320.12));
+        --color-accent-content: light-dark(oklch(0.212 0.019 322.12), oklch(0.985 0 0));
+        --color-neutral: light-dark(oklch(0.212 0.019 322.12), oklch(0.274 0.006 286.033));
+        --color-neutral-content: oklch(0.985 0 0);
+        --color-info: light-dark(oklch(0.6 0.12 240), oklch(0.7 0.12 240));
+        --color-info-content: light-dark(oklch(0.985 0 0), oklch(0.145 0.008 326));
+        --color-success: light-dark(oklch(0.55 0.13 150), oklch(0.72 0.15 150));
+        --color-success-content: light-dark(oklch(0.985 0 0), oklch(0.145 0.008 326));
+        --color-warning: light-dark(oklch(0.7 0.15 70), oklch(0.78 0.14 75));
+        --color-warning-content: oklch(0.2 0.03 70);
+        --color-error: light-dark(oklch(0.577 0.245 27.325), oklch(0.704 0.191 22.216));
+        --color-error-content: light-dark(oklch(0.985 0 0), oklch(0.145 0.008 326));
+      }
+      .choice {
+        cursor: pointer;
+      }
+      .choice:has(input:checked) {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        color: var(--color-primary-content);
+      }
+    </style>
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <main class="mx-auto max-w-4xl space-y-10 px-6 py-10">
+      <header class="space-y-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+          lavish-axi · JADEV build · Round 1
+        </p>
+        <h1 class="text-3xl font-semibold tracking-tight text-balance">
+          How should the JADEV build of Lavish reach every machine?
+        </h1>
+        <p class="max-w-prose text-lg text-base-content/70">
+          Today each developer clones the fork, runs the checks and packs it by hand. A good outcome: one command
+          installs a version that passed CI, and nobody can pick up the upstream build by mistake.
+        </p>
+      </header>
+      <figure class="space-y-2">
+        <img
+          src="release-flow.drawio.svg"
+          alt="Release flow for the JADEV build"
+          width="866"
+          height="74"
+          style="max-width: 100%; height: auto"
+        />
+        <figcaption class="text-sm text-base-content/60">
+          The flow behind option O1. Edit it in draw.io: release-flow.drawio.
+        </figcaption>
+      </figure>
+      <section class="space-y-4">
+        <h2 class="text-xl font-semibold tracking-tight">Three options</h2>
+        <p class="text-sm text-base-content/70">
+          Fit out of 100: reliability 40, effort per release 30, ease of install 30. Estimates.
+        </p>
+        <form
+          class="card card-border bg-base-100"
+          data-lavish-question="O1"
+          onsubmit="
+            event.preventDefault();
+            const a = new FormData(event.currentTarget).get('a');
+            if (a)
+              window.lavish?.queuePrompt('O1 (Tag, CI, GitHub release with the packed .tgz): ' + a, {
+                tag: 'choice',
+                text: 'O1: ' + a,
+                element: event.currentTarget,
+              });
+          "
+        >
+          <div class="card-body gap-3">
+            <h3 class="card-title text-base">
+              O1 · Tag, CI, GitHub release with the packed .tgz
+              <span class="badge badge-primary badge-sm">Recommended</span> <span class="badge badge-sm">fit 84</span>
+            </h3>
+            <p class="text-sm text-base-content/70">
+              Every install is a version CI checked. One line per machine. Costs one workflow file.
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <label class="btn btn-sm choice"><input type="radio" name="a" value="Go" class="hidden" />Go</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="Maybe" class="hidden" />Maybe</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="No" class="hidden" />No</label>
+            </div>
+            <div class="card-actions justify-end"><button type="submit" class="btn btn-sm">Queue answer</button></div>
+          </div>
+        </form>
+        <form
+          class="card card-border bg-base-100"
+          data-lavish-question="O2"
+          onsubmit="
+            event.preventDefault();
+            const a = new FormData(event.currentTarget).get('a');
+            if (a)
+              window.lavish?.queuePrompt('O2 (Publish to npm under the company scope): ' + a, {
+                tag: 'choice',
+                text: 'O2: ' + a,
+                element: event.currentTarget,
+              });
+          "
+        >
+          <div class="card-body gap-3">
+            <h3 class="card-title text-base">
+              O2 · Publish to npm under the company scope <span class="badge badge-sm">fit 72</span>
+            </h3>
+            <p class="text-sm text-base-content/70">
+              Easiest install, but a second public package beside upstream, and npx -y still finds upstream first.
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <label class="btn btn-sm choice"><input type="radio" name="a" value="Go" class="hidden" />Go</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="Maybe" class="hidden" />Maybe</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="No" class="hidden" />No</label>
+            </div>
+            <div class="card-actions justify-end"><button type="submit" class="btn btn-sm">Queue answer</button></div>
+          </div>
+        </form>
+        <form
+          class="card card-border bg-base-100"
+          data-lavish-question="O3"
+          onsubmit="
+            event.preventDefault();
+            const a = new FormData(event.currentTarget).get('a');
+            if (a)
+              window.lavish?.queuePrompt('O3 (Keep building from source on each machine): ' + a, {
+                tag: 'choice',
+                text: 'O3: ' + a,
+                element: event.currentTarget,
+              });
+          "
+        >
+          <div class="card-body gap-3">
+            <h3 class="card-title text-base">
+              O3 · Keep building from source on each machine <span class="badge badge-sm">fit 55</span>
+            </h3>
+            <p class="text-sm text-base-content/70">
+              No release step at all, but five commands per machine and versions drift.
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <label class="btn btn-sm choice"><input type="radio" name="a" value="Go" class="hidden" />Go</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="Maybe" class="hidden" />Maybe</label
+              ><label class="btn btn-sm choice"><input type="radio" name="a" value="No" class="hidden" />No</label>
+            </div>
+            <div class="card-actions justify-end"><button type="submit" class="btn btn-sm">Queue answer</button></div>
+          </div>
+        </form>
+        <form
+          class="card card-border bg-base-100"
+          data-lavish-question="O4-something-else"
+          onsubmit="
+            event.preventDefault();
+            const t = String(new FormData(event.currentTarget).get('idea') || '').trim();
+            if (t)
+              window.lavish?.queuePrompt('Another idea: ' + t, {
+                tag: 'idea',
+                text: 'Idea',
+                element: event.currentTarget,
+              });
+          "
+        >
+          <div class="card-body gap-3">
+            <h3 class="card-title text-base">Something else?</h3>
+            <textarea name="idea" class="textarea w-full" rows="2" placeholder="An option I did not list"></textarea>
+            <div class="card-actions justify-end"><button type="submit" class="btn btn-sm">Queue answer</button></div>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
