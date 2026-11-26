@@ -5,7 +5,12 @@
 This repository is Jadev's fork of [kunchenguid/lavish-axi](https://github.com/kunchenguid/lavish-axi). It carries the
 redesigned review chrome (shadcn/ui preset b50eA1ekc, resizable and movable conversation panel, Peek, the AI Elements
 chat, transitions.dev motion, note pins, the command palette, revision outlines) and the Lavish design default for
-artifacts. Upstream behaviour is otherwise unchanged.
+artifacts.
+
+From 1.1 a page is more than a review: it is your own local Artifact. It can start from a template, remember what the
+reader enters, ask the agent and wait for the reply, take files and save them, and keep every version. The gallery lists
+every page. Everything stays on this machine, in the state directory. [Pages that do more](#pages-that-do-more) covers
+these. Upstream behaviour is otherwise unchanged.
 
 ## Package and versions
 
@@ -169,6 +174,81 @@ sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"`
 five real options with IDs and fit scores, Go / Maybe / No on each with a note, an open "Something else?" question, and
 numbered rounds that open with what changed.
 
+## Pages that do more
+
+These four parts turn a page into a small app the reader comes back to:
+
+- [Templates](#templates): `lavish new <type>` starts a decision, brainstorm, dashboard, report, tracker or deck.
+- [Page apps](#page-apps): the page stores data, asks the agent, takes files and saves them, through `window.lavish`.
+- [Versions](#versions): every saved change is kept, and any version can be viewed, compared or restored.
+- [Gallery](#gallery): the server's root URL lists every page, with its status.
+
+## Templates
+
+`lavish new <type> [file]` writes a ready page, so the agent fills in a page instead of starting from a blank file. Each
+type is example content in the Lavish design, already wired to what Lavish adds, with a comment at the top that says
+what each part does.
+
+| Type         | For                                  | Wired to                                                           |
+| ------------ | ------------------------------------ | ------------------------------------------------------------------ |
+| `decision`   | A few questions answered in one pass | One card per question, Queue all and notes                         |
+| `brainstorm` | Options weighed over rounds          | The brainstorm playbook: diagram slot, IDs, Go / Maybe / No, round |
+| `dashboard`  | Records the reader adds to and edits | `store`, an add and edit form, a CSV through `download`            |
+| `report`     | What happened and what it means      | Summary, key numbers, sections, a diagram slot, sources            |
+| `tracker`    | A checklist kept over days           | `store`, and an Ask button through `ask` that explains `NO_AGENT`  |
+| `slides`     | A short talk, one idea per slide     | Arrow keys, Page Up and Down, Space, Home and End                  |
+
+The file defaults to `.lavish/<type>-<date>.html` in the current folder. An existing file is never replaced unless
+`--force` is passed. `lavish new` alone lists the types. `lavish design`, `lavish --help` and the playbooks point
+agents here; `lavish design --template` stays for a page no type fits.
+
+The pages are plain HTML in `src/starters/`, copied to `dist/starters/` by the build. Each `<head>` holds a
+`<!-- lavish:design -->` marker that becomes the design snippet when the page is written, so the CDN versions and the
+theme have one source. A page opened without Lavish still works: storage then lasts until the tab closes, and Ask says
+it needs Lavish. `test/page-starters.test.js` checks every page for the snippet, theme colors only, no remote images, and
+its wiring.
+
+## Page apps
+
+A page can do more than collect review notes. Four calls on `window.lavish` turn it into a small local app,
+and everything stays on this machine. The frame never talks to the server: the SDK asks the chrome, the chrome
+checks the request and forwards it, and the server checks it again. Each call returns a Promise that rejects
+with an `Error` whose `code` the page can show or branch on. When no chrome answers within 15 seconds, the
+call rejects with `UNAVAILABLE`. A page opened without Lavish has no `window.lavish`, so check for it first.
+
+- **Storage.** `store.get(key)`, `store.set(key, value)`, `store.delete(key)` and `store.list(prefix?)` keep JSON
+  per page file in the state directory (`page-data/<key>.json`, owner-only). Data survives reloads and server
+  restarts. Keys are 1 to 256 characters without control characters; one value is at most 1 MB of JSON; a page
+  holds at most 5 MB and 10,000 keys. `get` resolves `undefined` for a missing key, `delete` resolves whether
+  the key existed, `list` resolves the sorted keys. Codes: `KEY_INVALID`, `VALUE_INVALID`, `VALUE_TOO_LARGE`,
+  `STORE_FULL`. `lavish data <page>` prints what a page stored (`--json` for one JSON document), and
+  `lavish data <page> --clear --yes` deletes it; `--clear` alone only reports what would go.
+- **Ask the agent.** `ask(question, { data, timeoutMs, attachments })` sends the question at once as a prompt
+  tagged `ask`, shows it in the conversation, and resolves with the text of the agent reply that answers it.
+  Poll hands the agent `target.ask_id` and `target.expires_at`; the agent answers with
+  `lavish reply <page> --ask <id> --agent-reply "..."` (or `poll --ask`). A reply without `--ask` answers the
+  oldest question the agent has received, never one it has not seen yet. With no agent listening the call
+  rejects at once with `NO_AGENT`. One question at a time per page (`ASK_BUSY`); a newer question from another
+  tab or after a reload replaces the open one (`ASK_SUPERSEDED`). The wait is 5 minutes by default, 10 seconds
+  to 30 minutes (`ASK_TIMEOUT`), and at most 6 questions a minute (`RATE_LIMITED`). An expired or replaced
+  question is not handed to the agent, and `reply --ask` on it posts nothing (`ASK_CLOSED`). The question is
+  at most 4,000 characters; `data` goes to the agent as TOON, up to 64 KB. Ending the review rejects it with
+  `SESSION_ENDED`.
+- **Files in.** `files.pick({ accept, multiple })`, called from a click, opens the browser's file picker in the
+  chrome. The chosen files go to the attachment store with its limits (10 MB a file, 20 per prompt by default);
+  the page receives `{ id, name, size, type }` and never the bytes. It passes them on with
+  `queuePrompt(text, { attachments: files })` or `ask(question, { attachments: files })`, and the agent gets
+  each file's local `path`. Besides PNG, JPEG and WebP, a picked file may be a PDF (checked by its bytes) or
+  UTF-8 text (`.txt`, `.csv`, `.md`, `.json`). Documents are never served back over HTTP. Cancelling resolves
+  `[]`. Codes: `NEEDS_CLICK`, `FILE_TYPE`, `FILE_TOO_LARGE`, `TOO_MANY`, `UPLOAD_FAILED`.
+- **Files out.** `download(name, content, type?)` saves a string, a `Blob` or bytes through the browser's own
+  save flow. The sandboxed frame may not download, so the chrome saves it, and only right after a click
+  (`NEEDS_CLICK`). Names lose path separators and characters Windows refuses, up to 200 characters
+  (`NAME_INVALID`); a download is at most 50 MB (`TOO_LARGE`).
+
+The helpers live in `src/page-apps.js` (SDK side and shared limits), `src/page-store.js`, `src/page-asks.js`,
+and `handlePageAppRequest` in `src/chrome-client.js`. The input playbook shows each call in a page.
+
 ## Versions
 
 Every saved change of a page's HTML becomes a version, kept on this machine. Lavish records one when the page is
@@ -249,47 +329,6 @@ server holds no other listener for the review. It does not post its reply a seco
 `window.lavish.queuePrompt(text, { data })` appends the data to the prompt as TOON (`question: D20`,
 `items[2]{id,label}:` rows) instead of indented JSON: the same content in fewer tokens.
 
-## Page apps
-
-A page can do more than collect review notes. Four calls on `window.lavish` turn it into a small local app,
-and everything stays on this machine. The frame never talks to the server: the SDK asks the chrome, the chrome
-checks the request and forwards it, and the server checks it again. Each call returns a Promise that rejects
-with an `Error` whose `code` the page can show or branch on. When no chrome answers within 15 seconds, the
-call rejects with `UNAVAILABLE`. A page opened without Lavish has no `window.lavish`, so check for it first.
-
-- **Storage.** `store.get(key)`, `store.set(key, value)`, `store.delete(key)` and `store.list(prefix?)` keep JSON
-  per page file in the state directory (`page-data/<key>.json`, owner-only). Data survives reloads and server
-  restarts. Keys are 1 to 256 characters without control characters; one value is at most 1 MB of JSON; a page
-  holds at most 5 MB and 10,000 keys. `get` resolves `undefined` for a missing key, `delete` resolves whether
-  the key existed, `list` resolves the sorted keys. Codes: `KEY_INVALID`, `VALUE_INVALID`, `VALUE_TOO_LARGE`,
-  `STORE_FULL`. `lavish data <page>` prints what a page stored (`--json` for one JSON document), and
-  `lavish data <page> --clear --yes` deletes it; `--clear` alone only reports what would go.
-- **Ask the agent.** `ask(question, { data, timeoutMs, attachments })` sends the question at once as a prompt
-  tagged `ask`, shows it in the conversation, and resolves with the text of the agent reply that answers it.
-  Poll hands the agent `target.ask_id` and `target.expires_at`; the agent answers with
-  `lavish reply <page> --ask <id> --agent-reply "..."` (or `poll --ask`). A reply without `--ask` answers the
-  oldest question the agent has received, never one it has not seen yet. With no agent listening the call
-  rejects at once with `NO_AGENT`. One question at a time per page (`ASK_BUSY`); a newer question from another
-  tab or after a reload replaces the open one (`ASK_SUPERSEDED`). The wait is 5 minutes by default, 10 seconds
-  to 30 minutes (`ASK_TIMEOUT`), and at most 6 questions a minute (`RATE_LIMITED`). An expired or replaced
-  question is not handed to the agent, and `reply --ask` on it posts nothing (`ASK_CLOSED`). The question is
-  at most 4,000 characters; `data` goes to the agent as TOON, up to 64 KB. Ending the review rejects it with
-  `SESSION_ENDED`.
-- **Files in.** `files.pick({ accept, multiple })`, called from a click, opens the browser's file picker in the
-  chrome. The chosen files go to the attachment store with its limits (10 MB a file, 20 per prompt by default);
-  the page receives `{ id, name, size, type }` and never the bytes. It passes them on with
-  `queuePrompt(text, { attachments: files })` or `ask(question, { attachments: files })`, and the agent gets
-  each file's local `path`. Besides PNG, JPEG and WebP, a picked file may be a PDF (checked by its bytes) or
-  UTF-8 text (`.txt`, `.csv`, `.md`, `.json`). Documents are never served back over HTTP. Cancelling resolves
-  `[]`. Codes: `NEEDS_CLICK`, `FILE_TYPE`, `FILE_TOO_LARGE`, `TOO_MANY`, `UPLOAD_FAILED`.
-- **Files out.** `download(name, content, type?)` saves a string, a `Blob` or bytes through the browser's own
-  save flow. The sandboxed frame may not download, so the chrome saves it, and only right after a click
-  (`NEEDS_CLICK`). Names lose path separators and characters Windows refuses, up to 200 characters
-  (`NAME_INVALID`); a download is at most 50 MB (`TOO_LARGE`).
-
-The helpers live in `src/page-apps.js` (SDK side and shared limits), `src/page-store.js`, `src/page-asks.js`,
-and `handlePageAppRequest` in `src/chrome-client.js`. The input playbook shows each call in a page.
-
 ## Upstream 0.1.90 adaptations
 
 This base includes custom Excalidraw libraries, platform-specific link modifiers, WebKit IME confirmation guards,
@@ -333,9 +372,11 @@ pnpm run check
 Resolve conflicts in favour of upstream behaviour unless the fork deliberately changed it; the fork's changes are in
 `src/chrome.css`, `src/chrome-client.js`, `src/server.js` (chrome markup), `src/artifact-sdk.js` (pins, outlines,
 palette hotkey), `src/design-reference.js`, `src/whiteboard-frame.css` (the whiteboard header and Excalidraw
-accent on the chrome palette and preset), the versions and gallery files (`src/version-*.js`, `src/versions*`,
-`src/gallery*`), and their tests. Upstream's root page was a short status card; here `/` is the gallery. Bump the minor version, name the new upstream base in
-`CHANGELOG.md`, open a PR into `main`, and release it with a tag once it merges.
+accent on the chrome palette and preset), the page app files (`src/page-apps.js`, `src/page-store.js`,
+`src/page-asks.js`), the versions and gallery files (`src/version-*.js`, `src/versions*`, `src/gallery*`), the
+templates (`src/page-starters.js`, `src/starters/`), and their tests. Upstream's root page was a short status card;
+here `/` is the gallery. Bump the minor version, name the new upstream base in `CHANGELOG.md`, open a PR into `main`,
+and release it with a tag once it merges.
 
 ## Hidden files are not served
 
