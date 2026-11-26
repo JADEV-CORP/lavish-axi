@@ -99,3 +99,17 @@ test("only the JADEV workflows remain, and CI runs on every pull request", async
   const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.doesNotMatch(ci, /paths-ignore|release-please/);
 });
+
+test("the release workflow publishes to npm by trusted publishing from a v<version> tag", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/jadev-release.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /tags: \["v\*\.\*\.\*"\]/);
+  assert.match(workflow, /id-token: write/);
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /if: github\.repository == 'JADEV-CORP\/lavish-axi'/);
+  assert.match(workflow, /test "v\$\{version\}" = "\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /pnpm run check/);
+  assert.match(workflow, /npm publish --provenance --access public/);
+  assert.match(workflow, /gh release create "\$\{GITHUB_REF_NAME\}" "jadev-corp-lavish-\$\{VERSION\}\.tgz"/);
+  assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN:/, "no long-lived npm token");
+});
