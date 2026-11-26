@@ -25,7 +25,9 @@ jobs:
   check:
     name: Generated files must not be hand-edited
     runs-on: ubuntu-latest
+    # Upstream's contribution process; the JADEV fork does not use it.
     if: >-
+      github.repository == 'kunchenguid/lavish-axi' &&
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.user.login != 'release-please[bot]'
     steps:

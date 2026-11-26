@@ -47,7 +47,9 @@ jobs:
     # a GITHUB_TOKEN PR's run is created in action_required and never starts.
     # Keeping the condition here preserves the exact verdict shape this
     # repository's gate already produces for those authors.
+    # Upstream's contribution process; the JADEV fork does not use it.
     if: >-
+      github.repository == 'kunchenguid/lavish-axi' &&
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'release-please[bot]'
