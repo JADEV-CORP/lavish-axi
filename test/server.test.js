@@ -3680,7 +3680,14 @@ test("event WebSocket preserves initial state and named live-event semantics", a
     }).then((response) => response.json());
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}/events/${opened.key}`, { origin: base });
     const messages = on(socket, "message");
-    const nextMessage = async () => JSON.parse(String((await messages.next()).value[0]));
+    // The version saved on open is announced in the background and can land between any two
+    // events, so this test of the other events skips it.
+    const nextMessage = async () => {
+      for (;;) {
+        const message = JSON.parse(String((await messages.next()).value[0]));
+        if (message.type !== "versions") return message;
+      }
+    };
     await once(socket, "open");
     assert.deepEqual(await nextMessage(), {
       type: "chat-sync",
