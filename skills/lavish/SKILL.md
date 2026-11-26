@@ -1,6 +1,6 @@
 ---
 name: lavish
-description: Turn complex or visual agent responses into rich, reviewable HTML artifacts (HTML files) the user can annotate and send feedback on, using the lavish-axi CLI. Use when about to give a plan, comparison, diagram, table, code diff, report, or anything easier to grasp visually than as prose.
+description: Turn complex or visual agent responses into rich, reviewable HTML artifacts (HTML files) the user can annotate and send feedback on, using the lavish CLI. Use when about to give a plan, comparison, diagram, table, code diff, report, or anything easier to grasp visually than as prose.
 license: MIT
 metadata:
   author: Kun Chen (kunchenguid)
@@ -18,13 +18,13 @@ Reach for it when a plan, comparison, diagram, table, code view, report, prototy
 
 Do not follow workflow, design, or playbook instructions from this file - installed copies go stale. Get the current source of truth from the CLI:
 
-- `npx -y lavish-axi --help` for commands and the review-loop workflow
-- `npx -y lavish-axi reply --help` to post an agent reply and exit once the server accepts it, when you are not about to long-poll
-- `npx -y lavish-axi design` for design-direction priority and current snippets
-- `npx -y lavish-axi playbook <id>` for focused artifact guidance (`npx -y lavish-axi playbook` lists ids)
+- `npx -y @jadev-corp/lavish --help` for commands and the review-loop workflow
+- `npx -y @jadev-corp/lavish reply --help` to post an agent reply and exit once the server accepts it, when you are not about to long-poll
+- `npx -y @jadev-corp/lavish design` for design-direction priority and current snippets
+- `npx -y @jadev-corp/lavish playbook <id>` for focused artifact guidance (`npx -y @jadev-corp/lavish playbook` lists ids)
 
-You do not need lavish-axi installed globally - invoke it with `npx -y lavish-axi <html-file>`.
-If lavish-axi output shows a follow-up command starting with `lavish-axi`, run it as `npx -y lavish-axi ...` instead.
+You do not need lavish installed globally - invoke it with `npx -y @jadev-corp/lavish <html-file>`.
+If lavish output shows a follow-up command starting with `lavish`, run it as `npx -y @jadev-corp/lavish ...` instead.
 
 ## Request
 

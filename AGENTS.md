@@ -3,7 +3,7 @@
 This file is loaded every session. It keeps only rules that apply to almost every change. Detail lives in the doc that owns it.
 
 - [README.md](README.md) owns the user-facing contract: features, CLI flags, environment variables, keyboard shortcuts, export and share, and session-end etiquette.
-- CLI output owns what agents are told while using Lavish: `lavish-axi --help`, `lavish-axi design`, and `lavish-axi playbook <id>` (`src/cli.js`, `src/design-reference.js`, `src/playbooks.js`). The generated skill (`src/skill.js` to `skills/lavish/SKILL.md`) stays a stub that points at those commands. Do not copy CLI-owned instructions into the skill.
+- CLI output owns what agents are told while using Lavish: `lavish --help`, `lavish design`, and `lavish playbook <id>` (`src/cli.js`, `src/design-reference.js`, `src/playbooks.js`). The generated skill (`src/skill.js` to `skills/lavish/SKILL.md`) stays a stub that points at those commands. Do not copy CLI-owned instructions into the skill.
 - [VISION.md](VISION.md) owns the acceptance policy. Change it only through the author.
 - [docs/invariants.md](docs/invariants.md) owns architecture internals, security rationale, and easy-to-reintroduce failure modes. Read the section for the area you are editing before changing it.
 - Update the owner when a contract changes. Edit this file only when an every-session rule changes.
@@ -34,7 +34,7 @@ Seven-tab pool regression: `LAVISH_AXI_BROWSER_E2E=1 node --test test/event-tran
 - Tests that start the server set `LAVISH_AXI_STATE_DIR` and use an ephemeral port.
 - `run()` returns on `--version` / `-v` / `-V` before `ensureStateDir` (`test/cli-version.test.js`). New startup work goes after that short-circuit.
 - `canonicalFile` runs `realpath`. Two paths to the same file are one session.
-- `normalizeArgv` must let AXI `RESERVED_COMMANDS` (including `update`) pass through. A bare `lavish-axi update` must not become `open update`.
+- `normalizeArgv` must let AXI `RESERVED_COMMANDS` (including `update`) pass through. A bare `lavish update` must not become `open update`.
 
 ## Safety and correctness
 
@@ -57,7 +57,7 @@ Each line is the rule. [docs/invariants.md](docs/invariants.md) has the failure 
 - The artifact route injects only the one SDK `<script>` tag. Served artifact bytes otherwise match the file on disk. [Request flow](docs/invariants.md#request-flow).
 - `/api/sessions` refuses a path that is not a regular `.html`/`.htm` file after `realpath`. [Request flow](docs/invariants.md#request-flow).
 - Artifact asset serving (`/artifact/:key/<path>`) stays inside that session's HTML-file directory, resolves with `realpath`, and never serves a symlink target outside that tree. [Request flow](docs/invariants.md#request-flow).
-- Layout detection never emits `feedback`. Only a user prompt and the narrow fatal artifact-failure path may wake `lavish-axi poll`. [Request flow](docs/invariants.md#request-flow).
+- Layout detection never emits `feedback`. Only a user prompt and the narrow fatal artifact-failure path may wake `lavish poll`. [Request flow](docs/invariants.md#request-flow).
 - Layout-diagnostics reports are fire-and-forget and never hold the artifact behind a round-trip. Ordinary layout findings are never relabelled fatal. [Request flow](docs/invariants.md#request-flow).
 - The chrome mints each queued prompt's `prompt_id` (never from the iframe) and removes a queued note only when the transcript acknowledges that id. Evicted ids stay on `chat_ack_ids`. [Request flow](docs/invariants.md#request-flow).
 - Only agent chat entries render as HTML. User entries are always escaped. [Request flow](docs/invariants.md#request-flow).

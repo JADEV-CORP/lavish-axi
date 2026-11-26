@@ -1,6 +1,6 @@
 import { DESIGN_CDN_SNIPPET } from "./design-reference.js";
 
-// The one starting page every agent copies (`lavish-axi design --template`), so review pages share
+// The one starting page every agent copies (`lavish design --template`), so review pages share
 // a layout instead of each agent inventing its own: a header that states the outcome, sections of
 // DaisyUI parts on the Lavish theme, a decision card, and quiet sources. `lavish-auto` keeps it
 // adaptive: on its own it follows the OS, inside Lavish the editor's light/dark mode and preset.

@@ -1075,7 +1075,7 @@ test("the share dialog hands back the site id alongside the update key it tells 
   // command as a way to lock a page - only --private sets one.
   assert.match(
     html,
-    /Republish this page&#39;s HTML with <code>lavish-axi share &lt;file&gt; --site &lt;site id&gt; --update-key &lt;key&gt;<\/code>/,
+    /Republish this page&#39;s HTML with <code>lavish share &lt;file&gt; --site &lt;site id&gt; --update-key &lt;key&gt;<\/code>/,
   );
   assert.match(html, /add <code>--private<\/code> to also lock it/);
   assert.doesNotMatch(html, /Republish or lock this page/);
@@ -5008,7 +5008,7 @@ test("an agent-initiated end via the file-based route reopens normally without t
       body: JSON.stringify({ file: artifact }),
     });
 
-    // `lavish-axi end <file>` uses the file-based route - agent-initiated.
+    // `lavish end <file>` uses the file-based route - agent-initiated.
     await fetch(`${base}/api/end`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6252,7 +6252,7 @@ test("SSE agent-presence resets to waiting after ending and reopening a session"
   }
 });
 
-// #171: a browser tab left open across `lavish-axi end` must be told the session ended, instead
+// #171: a browser tab left open across `lavish end` must be told the session ended, instead
 // of silently keeping Send enabled for feedback nobody will ever poll for.
 test("SSE forwards an ended event to an attached chrome when the agent ends the session (#171)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));

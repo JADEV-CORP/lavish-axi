@@ -336,7 +336,7 @@ const ARTIFACT_SILENCE_PROBE_MS = 8000;
 const ARTIFACT_LOAD_BEGIN_RETRY_DELAYS_MS = [100, 300];
 // Backoff for retrying a whole begin-load attempt after its in-call retries ran out. The
 // in-call retries span 400ms, which only covers a slow response - not the multi-second window
-// where the server is being replaced (a version-driven restart, or another `lavish-axi <file>`
+// where the server is being replaced (a version-driven restart, or another `lavish <file>`
 // invocation restarting the shared server). Without these the chrome abandons the artifact for
 // good: the frame is never navigated, `artifact_revision` never advances, and the page sits on
 // the layout gate and then on an empty frame with nothing to click.
@@ -5546,7 +5546,7 @@ async function probeChromeHealth() {
 }
 
 // The replacement server usually binds within a second, but it is a fresh node process competing
-// with whatever else the machine is doing, and several `lavish-axi` invocations can be racing for
+// with whatever else the machine is doing, and several `lavish` invocations can be racing for
 // the same port. Reloading on a fixed short deadline regardless of whether anything is listening
 // trades a recoverable page for the browser's connection-error page, which no Lavish code can
 // recover from. So wait for the port to answer, and if it never does, say so instead.
@@ -7703,7 +7703,7 @@ nudgeAgentButton.onclick = async () => {
   }
 };
 copyNudgeButton.onclick = async () => {
-  const nudge = 'Feedback is waiting in Lavish. Run: lavish-axi poll "' + filePath + '"';
+  const nudge = 'Feedback is waiting in Lavish. Run: lavish poll "' + filePath + '"';
   if (!(await copyText(nudge))) return;
   copyNudgeLabel.textContent = "Copied";
   copyNudgeButton.dataset.copied = "true";

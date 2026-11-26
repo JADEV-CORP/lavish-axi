@@ -1169,7 +1169,7 @@ export function createArtifactSdk(
   }
   // DaisyUI sets `:root{scrollbar-color}` (#3331). Chrome ignores ::-webkit-scrollbar wherever that
   // standard property applies, and it inherits, so every DaisyUI page - the Lavish design and
-  // `lavish-axi design --template` pages included - fell back to the browser's rounded scrollbar
+  // `lavish design --template` pages included - fell back to the browser's rounded scrollbar
   // tinted by the text colour: white on a dark page. On a page that loads DaisyUI, the root's value
   // goes back to auto, after DaisyUI, and Firefox gets the editor's thin colours instead.
   function usesDaisyUi() {
@@ -2519,7 +2519,7 @@ export function createArtifactSdk(
     pageAccentStyle.textContent = ":root:root{--lavish-accent:" + color + "}";
   }
 
-  // A page on data-theme="lavish-auto" (the `lavish-axi design --template` page) follows the
+  // A page on data-theme="lavish-auto" (the `lavish design --template` page) follows the
   // editor: its light or dark mode, and the preset's DaisyUI colors when one is picked. Any other
   // page is left alone. Opened on its own, the same page follows the OS.
   let autoThemeStyle = null;

@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function lavish(...args) {
   const result = spawnSync(process.execPath, [cli, ...args], { env, encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`lavish-axi ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
+  if (result.status !== 0) throw new Error(`lavish ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
   return result.stdout;
 }
 

@@ -943,7 +943,7 @@ test(
         assert.equal(shutdowns, 2, "expected the initial replacement plus exactly one retry");
         assert.match(output, /SERVER_ERROR/);
         assert.ok(output.includes(otherHost), `expected the missing address in ${output}`);
-        assert.match(output, /lavish-axi stop/);
+        assert.match(output, /lavish stop/);
       } finally {
         await new Promise((resolve) => loopbackOnly.close(() => resolve(undefined)));
         await shutdownAt(otherHost, port);

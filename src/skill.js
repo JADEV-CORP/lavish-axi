@@ -2,11 +2,11 @@
 // Kept terse and outcome-focused so it fires on "about to show something visual" intents.
 export const SKILL_DESCRIPTION =
   "Turn complex or visual agent responses into rich, reviewable HTML artifacts (HTML files) the user can " +
-  "annotate and send feedback on, using the lavish-axi CLI. Use when about to give a plan, " +
+  "annotate and send feedback on, using the lavish CLI. Use when about to give a plan, " +
   "comparison, diagram, table, code diff, report, or anything easier to grasp visually than as prose.";
 
 // Hard cap so a future regeneration cannot silently re-inflate the stub with CLI-owned
-// instructions. The CLI (`lavish-axi --help`, `design`, `playbook`) is the source of truth.
+// instructions. The CLI (`lavish --help`, `design`, `playbook`) is the source of truth.
 export const MAX_SKILL_MARKDOWN_CHARS = 4000;
 
 // Agent Skills allows only these top-level frontmatter keys; the reference validator
@@ -25,7 +25,7 @@ export const ALLOWED_SKILL_FRONTMATTER_KEYS = Object.freeze([
  * Render the installable SKILL.md for the lavish skill.
  *
  * This is a discovery stub, not a copy of CLI guidance. Installed skills go stale;
- * `lavish-axi --help`, `lavish-axi design`, and `lavish-axi playbook <id>` do not.
+ * `lavish --help`, `lavish design`, and `lavish playbook <id>` do not.
  * Keep the body to what Lavish is, when to reach for it, how to invoke the CLI,
  * slash-command request handling, and pointers at those commands.
  *
@@ -56,13 +56,13 @@ Reach for it when a plan, comparison, diagram, table, code view, report, prototy
 
 Do not follow workflow, design, or playbook instructions from this file - installed copies go stale. Get the current source of truth from the CLI:
 
-- \`npx -y lavish-axi --help\` for commands and the review-loop workflow
-- \`npx -y lavish-axi reply --help\` to post an agent reply and exit once the server accepts it, when you are not about to long-poll
-- \`npx -y lavish-axi design\` for design-direction priority and current snippets
-- \`npx -y lavish-axi playbook <id>\` for focused artifact guidance (\`npx -y lavish-axi playbook\` lists ids)
+- \`npx -y @jadev-corp/lavish --help\` for commands and the review-loop workflow
+- \`npx -y @jadev-corp/lavish reply --help\` to post an agent reply and exit once the server accepts it, when you are not about to long-poll
+- \`npx -y @jadev-corp/lavish design\` for design-direction priority and current snippets
+- \`npx -y @jadev-corp/lavish playbook <id>\` for focused artifact guidance (\`npx -y @jadev-corp/lavish playbook\` lists ids)
 
-You do not need lavish-axi installed globally - invoke it with \`npx -y lavish-axi <html-file>\`.
-If lavish-axi output shows a follow-up command starting with \`lavish-axi\`, run it as \`npx -y lavish-axi ...\` instead.
+You do not need lavish installed globally - invoke it with \`npx -y @jadev-corp/lavish <html-file>\`.
+If lavish output shows a follow-up command starting with \`lavish\`, run it as \`npx -y @jadev-corp/lavish ...\` instead.
 
 ## Request
 

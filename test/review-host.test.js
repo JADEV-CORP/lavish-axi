@@ -34,7 +34,7 @@ test("the open output names the tool, the url, and the way back to the browser",
     output.next_step,
     /^Show the review in this thread's preview panel in T3 Code first: call the preview_open/,
   );
-  assert.match(output.next_step, /lavish-axi \/w\/page\.html --external/);
+  assert.match(output.next_step, /lavish \/w\/page\.html --external/);
   assert.equal(createOpenOutput({ file: "/w/page.html", url: "u", status: "opened" }).open_in, undefined);
   assert.equal(hostOpenStep(null, "f", "u"), "");
 });
