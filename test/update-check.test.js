@@ -96,30 +96,41 @@ test("an older or equal published version never claims an update", async () => {
 test("turning the check off on a running checker stops the next fetch", async () => {
   let on = true;
   let fetches = 0;
+  let asked = 0;
   const seen = [];
+  // Waits for a condition instead of a fixed time, so a slow runner only makes the test longer.
+  const until = async (done) => {
+    const deadline = Date.now() + 10_000;
+    while (!done()) {
+      assert.ok(Date.now() < deadline, "timed out waiting for the checker");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
   const checker = createUpdateChecker({
     currentVersion: "1.0.0",
     read: async () => {
       fetches += 1;
       return "1.1.0";
     },
-    enabled: () => on,
-    firstCheckMs: 5,
-    intervalMs: 10,
+    enabled: () => {
+      asked += 1;
+      return on;
+    },
+    firstCheckMs: 1,
+    intervalMs: 5,
   });
   checker.start((update) => seen.push(update));
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.ok(fetches >= 1);
-  assert.equal(checker.current()?.version, "1.1.0");
+  await until(() => checker.current()?.version === "1.1.0");
 
   on = false;
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  const after = fetches;
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await until(() => seen.at(-1) === null);
+  // Let three more checks run while it is off: each asks the policy first and must not fetch.
+  const fetchesWhenOff = fetches;
+  const askedWhenOff = asked;
+  await until(() => asked >= askedWhenOff + 3);
   checker.stop();
-  assert.equal(fetches, after, "no fetch once the policy is off");
+  assert.equal(fetches, fetchesWhenOff, "no fetch once the policy is off");
   assert.equal(checker.current(), null, "a pending notice is dropped");
-  assert.equal(seen.at(-1), null);
 });
 
 test("the server's checker can be turned off, and needs a semver version to compare", async (t) => {

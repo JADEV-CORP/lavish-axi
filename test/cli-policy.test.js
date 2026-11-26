@@ -162,6 +162,16 @@ test("the update checker is null when the policy turns it off, with no environme
   stillOn.stop();
 });
 
+test("an unreadable policy is reported without handing out a way to switch it on", async (t) => {
+  const { stateDir } = await workspace(t);
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(policyFile(stateDir), "{share:");
+  const out = await lavish(["policy"], stateDir);
+  assert.match(out, /source: invalid/);
+  assert.match(out, /could not be read, so both switches are treated as off\. Ask the user to fix or reset it/);
+  assert.doesNotMatch(out, /--share on/);
+});
+
 test("lavish policy rejects positional arguments", async (t) => {
   const { stateDir } = await workspace(t);
   const out = await lavish(["policy", "share", "off"], stateDir, {}, { fails: true, code: 2 });

@@ -1057,7 +1057,7 @@ async function policyCommand(args) {
     return {
       ...output,
       next_step:
-        "The policy file cannot be read, so both switches are off. Set them again with `lavish policy --share on|off --update-check on|off`.",
+        "The policy file could not be read, so both switches are treated as off. Ask the user to fix or reset it",
     };
   }
   return output;
