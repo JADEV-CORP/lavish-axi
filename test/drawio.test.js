@@ -32,9 +32,14 @@ async function tempDir(t) {
 test("draw.io is looked up in the override, on PATH, then in the usual install folder", () => {
   const mac = drawioCandidates({ LAVISH_AXI_DRAWIO: "/custom/drawio", PATH: "/a:/b", HOME: "/Users/x" }, "darwin");
   assert.equal(mac[0], "/custom/drawio");
-  assert.ok(mac.includes(path.join("/a", "drawio")));
+  // Candidates follow the platform asked about, not the one running the test.
+  assert.ok(mac.includes("/a/drawio"));
   assert.ok(mac.includes("/Applications/draw.io.app/Contents/MacOS/draw.io"));
-  assert.ok(mac.indexOf(path.join("/a", "drawio")) < mac.indexOf("/Applications/draw.io.app/Contents/MacOS/draw.io"));
+  assert.ok(mac.indexOf("/a/drawio") < mac.indexOf("/Applications/draw.io.app/Contents/MacOS/draw.io"));
+
+  const windows = drawioCandidates({ PATH: "C:\\tools;D:\\bin" }, "win32");
+  assert.ok(windows.includes("C:\\tools\\draw.io.exe"));
+  assert.ok(windows.includes("D:\\bin\\drawio.exe"));
 
   const linux = drawioCandidates({ PATH: "" }, "linux");
   assert.ok(linux.includes("/opt/drawio/drawio"));
