@@ -55,14 +55,17 @@ test("sources are .drawio, .xml and Mermaid files, never the rendered SVG", () =
 });
 
 test("outputs sit next to the source; a Mermaid file gets an editable .drawio first", () => {
-  const plain = diagramPaths("/w/flow.drawio", { previewDir: "/state/p" });
-  assert.equal(plain.drawio, "/w/flow.drawio");
-  assert.equal(plain.svg, "/w/flow.drawio.svg");
-  assert.match(plain.preview, /^\/state\/p\/flow-[0-9a-f]{10}\.png$/);
+  // Built with path.join so the expectations hold on Windows as well.
+  const source = path.join(path.sep, "w", "flow.drawio");
+  const plain = diagramPaths(source, { previewDir: path.join(path.sep, "state", "p") });
+  assert.equal(plain.drawio, source);
+  assert.equal(plain.svg, path.join(path.sep, "w", "flow.drawio.svg"));
+  assert.equal(path.dirname(plain.preview), path.join(path.sep, "state", "p"));
+  assert.match(path.basename(plain.preview), /^flow-[0-9a-f]{10}\.png$/);
   assert.equal(plain.isMermaid, false);
 
-  const mermaid = diagramPaths("/w/seq.mmd", { out: "/out/x.svg" });
-  assert.equal(mermaid.drawio, "/w/seq.drawio");
+  const mermaid = diagramPaths(path.join(path.sep, "w", "seq.mmd"), { out: "/out/x.svg" });
+  assert.equal(mermaid.drawio, path.join(path.sep, "w", "seq.drawio"));
   assert.equal(mermaid.svg, path.resolve("/out/x.svg"));
   assert.equal(mermaid.preview, "");
   assert.equal(mermaid.isMermaid, true);
