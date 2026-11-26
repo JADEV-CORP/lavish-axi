@@ -18,7 +18,7 @@ Coding agents write long answers in a terminal. Decisions get lost in scrollback
 
 Lavish puts the answer on a page instead. Your agent writes HTML (a plan, a set of decisions, a review, a diagram), Lavish opens it, and you answer it the way you would a good form: pick options, write notes, point at anything on the page. One click sends everything back, and the agent picks it up in the same session.
 
-A page can also stay in use, like your own Artifacts, kept on your machine. It starts from a template, remembers what you enter, asks the agent and shows the reply, takes the files you pick and saves the ones it makes, and keeps every version. The gallery lists every page you opened.
+A page can also be something you keep using: your own Artifacts, on your machine. It starts from a template, remembers what you enter, asks the agent and shows the reply, takes the files you pick and saves the ones it makes, and keeps every version. The gallery lists every page you opened.
 
 The recording above is real: [demo/release-workflow.html](demo/release-workflow.html) on a live Lavish server, driven by [scripts/record-demo.js](scripts/record-demo.js).
 
