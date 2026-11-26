@@ -50,11 +50,13 @@ export async function readLatestPublishedVersion({ packageName = PACKAGE_NAME, f
  * Checks shortly after the server starts and then every few hours, and calls `onChange` with
  * `{ version, current }` when a newer version is published (or `null` once it no longer is).
  * Its timers never keep the server alive.
- * @param {{ currentVersion: string, read: () => Promise<string>, intervalMs?: number, firstCheckMs?: number }} options
+ * `enabled` is asked before every fetch, so a policy change stops a running checker.
+ * @param {{ currentVersion: string, read: () => Promise<string>, enabled?: () => boolean, intervalMs?: number, firstCheckMs?: number }} options
  */
 export function createUpdateChecker({
   currentVersion,
   read,
+  enabled = () => true,
   intervalMs = UPDATE_CHECK_INTERVAL_MS,
   firstCheckMs = UPDATE_CHECK_FIRST_MS,
 }) {
@@ -65,6 +67,14 @@ export function createUpdateChecker({
   let stopped = false;
 
   async function check(onChange) {
+    if (!enabled()) {
+      // Turned off while running: drop a pending notice and fetch nothing.
+      if (available) {
+        available = null;
+        onChange(null);
+      }
+      return;
+    }
     const latest = await read();
     if (stopped || !latest) return;
     const next =
@@ -103,5 +113,10 @@ export function defaultUpdateChecker({ currentVersion, env = process.env, stateD
   if (["0", "off", "false"].includes(String(env.LAVISH_AXI_UPDATE_CHECK || "").toLowerCase())) return null;
   // A build whose own version is not plain semver has nothing to compare against.
   if (compareReleaseVersions(currentVersion, currentVersion) === null) return null;
-  return createUpdateChecker({ currentVersion, read: () => readLatestPublishedVersion() });
+  return createUpdateChecker({
+    currentVersion,
+    read: () => readLatestPublishedVersion(),
+    // Read before each fetch, so `lavish policy --update-check off` applies to a running server.
+    enabled: () => readPolicy(stateDir).updateCheck,
+  });
 }

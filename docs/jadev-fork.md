@@ -319,7 +319,7 @@ document event.
 
 ## Machine policy
 
-A company can switch off page sharing and the npm update check once per machine:
+A company can switch off page sharing and the npm update check for a user:
 
 ```
 lavish policy --share off --update-check off
@@ -327,7 +327,9 @@ lavish policy --share off --update-check off
 
 `lavish policy` with no flag prints the current state, `--json` prints it as JSON, and `--share on` or `--update-check on` turns a switch back on. A switch you do not name keeps its value.
 
-The policy is a file, `policy.json`, in the state directory (`~/.lavish-axi`, or `LAVISH_AXI_STATE_DIR`). It is written for the current user only (mode 0600), through a temporary file and a rename.
+The policy is a file, `policy.json`, in the state directory (`~/.lavish-axi`, or `LAVISH_AXI_STATE_DIR`). It is written through a temporary file and a rename. On macOS and Linux it has mode 0600; on Windows the permissions of the user profile apply.
+
+The policy applies per user, not per machine: run `lavish policy` as each user. It is a guardrail against publishing by accident, not a lock. Any user can change their own policy, and the refusal tells an agent not to.
 
 ```json
 { "share": false, "updateCheck": false }
@@ -335,11 +337,11 @@ The policy is a file, `policy.json`, in the state directory (`~/.lavish-axi`, or
 
 - Both switches default to on. No file means both are on.
 - `false`, `"off"`, `"false"` and `0` turn a switch off. A switch missing from the file stays on.
-- The file fails closed. If it cannot be parsed or a value is not a switch, both switches are off and `lavish policy` reports `source: invalid`. Fix it by running `lavish policy` with both flags again.
+- The file fails closed. If it cannot be parsed or a value is not a switch, both switches are off and `lavish policy` reports `source: invalid`. A file written by Windows PowerShell 5.1 starts with a BOM, which is ignored. Fix it by running `lavish policy` with both flags again.
 
 **Share off.** `lavish share` stops with `SHARE_DISABLED` before it reads the page or contacts ht-ml.app. This includes republish and unpublish. In the review window, `POST /api/:key/share` answers 403 with the same code, **Publish link** is left out of the More menu, and the command palette has no publish entry. The server reads the policy on every request, so a change applies to windows already open after they reload.
 
-**Update check off.** The server does not ask npm for a newer version, and the **Update** button never appears. `LAVISH_AXI_UPDATE_CHECK=0` still works on its own. The check is set when the server starts, so a running server picks the change up on its next start (`lavish stop`).
+**Update check off.** The server does not ask npm for a newer version, and the **Update** button never appears. `LAVISH_AXI_UPDATE_CHECK=0` still works on its own. The policy is read before every check, so a running server stops checking without a restart.
 
 The code is in `src/policy.js`. Tests are in `test/policy.test.js` and `test/cli-policy.test.js`.
 

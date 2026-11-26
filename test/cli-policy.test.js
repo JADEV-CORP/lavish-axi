@@ -23,7 +23,7 @@ const execFileAsync = promisify(execFile);
 const BIN = fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url));
 const PAGE = "<!doctype html><html><head><title>Plan</title></head><body><h1>Plan</h1></body></html>\n";
 
-async function lavish(args, stateDir, env = {}, { fails = false } = {}) {
+async function lavish(args, stateDir, env = {}, { fails = false, code = 1 } = {}) {
   try {
     const { stdout } = await execFileAsync(process.execPath, [BIN, ...args], {
       env: {
@@ -38,6 +38,7 @@ async function lavish(args, stateDir, env = {}, { fails = false } = {}) {
     return stdout;
   } catch (error) {
     if (!fails || typeof error?.stdout !== "string") throw error;
+    assert.equal(error.code, code, `expected exit code ${code}`);
     return error.stdout;
   }
 }
@@ -97,7 +98,7 @@ test("lavish policy --share off --update-check off writes both switches and prin
 
 test("lavish policy rejects a value that is not on or off", async (t) => {
   const { stateDir } = await workspace(t);
-  const out = await lavish(["policy", "--share", "maybe"], stateDir, {}, { fails: true });
+  const out = await lavish(["policy", "--share", "maybe"], stateDir, {}, { fails: true, code: 2 });
   assert.match(out, /--share takes on or off/);
 });
 
@@ -108,7 +109,7 @@ test("with sharing off, lavish share exits 1 with SHARE_DISABLED and sends nothi
 
   const out = await lavish(["share", file], stateDir, { LAVISH_AXI_HTML_APP_API_URL: host.url }, { fails: true });
   assert.match(out, /SHARE_DISABLED/);
-  assert.match(out, /Sharing is turned off on this machine \(lavish policy\)\./);
+  assert.match(out, /Sharing is turned off for this user \(lavish policy\)\./);
   assert.equal(host.hits.count, 0, "nothing may reach the host");
 });
 
@@ -156,7 +157,23 @@ test("the update checker is null when the policy turns it off, with no environme
 
   // Sharing off alone leaves the update check on.
   await writePolicy(stateDir, { updateCheck: true, share: false });
-  defaultUpdateChecker({ currentVersion: "1.0.0", env: {}, stateDir })?.stop();
+  const stillOn = defaultUpdateChecker({ currentVersion: "1.0.0", env: {}, stateDir });
+  assert.equal(typeof stillOn?.start, "function");
+  stillOn.stop();
+});
+
+test("lavish policy rejects positional arguments", async (t) => {
+  const { stateDir } = await workspace(t);
+  const out = await lavish(["policy", "share", "off"], stateDir, {}, { fails: true, code: 2 });
+  assert.match(out, /Unexpected argument: share/);
+  assert.match(out, /lavish policy \[--share on\|off\]/);
+});
+
+test("a policy file with a UTF-8 BOM is read through lavish policy", async (t) => {
+  const { stateDir } = await workspace(t);
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(policyFile(stateDir), '\uFEFF{"share": false, "updateCheck": true}');
+  assert.match(await lavish(["policy"], stateDir), /share: off\nupdate_check: on\nsource: file/);
 });
 
 test("the review window cannot share when sharing is off, and the chrome drops the entry", async (t) => {
@@ -205,6 +222,9 @@ test("the review window cannot share when sharing is off, and the chrome drops t
 
   await writePolicy(stateDir, { share: true });
   assert.match(await chrome(), /id="shareArtifact"/);
+  // Positive control: with sharing on the same request reaches the host, so the counter works.
+  assert.equal((await share()).status, 200);
+  assert.equal(host.hits.count, 1);
 });
 
 test("the chrome script tolerates a missing publish item and leaves it out of the palette", async () => {

@@ -31,6 +31,12 @@ test("a switch missing from the file stays allowed", async (t) => {
   assert.deepEqual(readPolicy(dir), { share: false, updateCheck: true, source: "file" });
 });
 
+test("a UTF-8 BOM before the JSON is ignored", async (t) => {
+  const dir = await tempDir(t);
+  await writeFile(policyFile(dir), '\uFEFF{"share": false}');
+  assert.deepEqual(readPolicy(dir), { share: false, updateCheck: true, source: "file" });
+});
+
 test("broken JSON fails closed", async (t) => {
   const dir = await tempDir(t);
   await writeFile(policyFile(dir), "{share:");

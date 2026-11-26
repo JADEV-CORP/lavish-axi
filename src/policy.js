@@ -1,5 +1,5 @@
 // Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
-// Machine policy: two switches a company can set once per machine, `share` (publishing pages to
+// Per-user policy: two switches a company can set for each user, `share` (publishing pages to
 // ht-ml.app) and `updateCheck` (asking npm for a newer Lavish). The file lives in the state
 // directory as policy.json. No file means both are allowed. A file that cannot be read means both
 // are off: a policy that is there but unreadable must never leave sharing open.
@@ -11,7 +11,7 @@ import path from "node:path";
 /** @typedef {{ share: boolean, updateCheck: boolean, source: "default" | "file" | "invalid" }} Policy */
 
 // What every surface says when sharing is off, so the CLI, the review window and the docs agree.
-export const SHARE_DISABLED_MESSAGE = "Sharing is turned off on this machine (lavish policy).";
+export const SHARE_DISABLED_MESSAGE = "Sharing is turned off for this user (lavish policy).";
 
 const POLICY_FILE = "policy.json";
 const SWITCHES = ["share", "updateCheck"];
@@ -73,7 +73,8 @@ export function readPolicy(stateDir) {
       return { share: true, updateCheck: true, source: "default" };
     return { ...INVALID };
   }
-  return parsePolicy(text);
+  // Windows PowerShell 5.1 writes a UTF-8 BOM, which JSON.parse rejects.
+  return parsePolicy(text.replace(/^\uFEFF/, ""));
 }
 
 /**

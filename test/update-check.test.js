@@ -93,6 +93,35 @@ test("an older or equal published version never claims an update", async () => {
   assert.equal(checker.current(), null);
 });
 
+test("turning the check off on a running checker stops the next fetch", async () => {
+  let on = true;
+  let fetches = 0;
+  const seen = [];
+  const checker = createUpdateChecker({
+    currentVersion: "1.0.0",
+    read: async () => {
+      fetches += 1;
+      return "1.1.0";
+    },
+    enabled: () => on,
+    firstCheckMs: 5,
+    intervalMs: 10,
+  });
+  checker.start((update) => seen.push(update));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.ok(fetches >= 1);
+  assert.equal(checker.current()?.version, "1.1.0");
+
+  on = false;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const after = fetches;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  checker.stop();
+  assert.equal(fetches, after, "no fetch once the policy is off");
+  assert.equal(checker.current(), null, "a pending notice is dropped");
+  assert.equal(seen.at(-1), null);
+});
+
 test("the server's checker can be turned off, and needs a semver version to compare", async (t) => {
   // An empty state directory, so a policy file on the machine running the tests cannot change the result.
   const stateDir = await mkdtemp(path.join(tmpdir(), "lavish-update-check-"));
