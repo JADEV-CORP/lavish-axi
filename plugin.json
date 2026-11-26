@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "lavish-axi",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Your agent asks on an HTML page, you answer in one click, and it gets every answer. The JADEV build of lavish-axi.",
   "author": {
     "name": "JADEV-CORP",
