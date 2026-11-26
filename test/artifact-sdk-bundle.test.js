@@ -1792,3 +1792,36 @@ test("setDocumentMeta forwards null to restore, omits unset fields and drops non
     [{ title: null }, {}, {}],
   );
 });
+
+test("the served SDK bundle relays page storage through the chrome and resolves its answer", async () => {
+  const sdk = bootSdk();
+  const saved = sdk.api.store.set("draft", { lines: 2 });
+  const request = sdk.posted.at(-1);
+  assert.equal(request.type, "lavish:pageApp");
+  assert.equal(request.op, "store.set");
+  assert.equal(request.json, '{"lines":2}');
+  assert.equal(request.artifact_load_token, "load-token");
+  assert.equal(typeof request.nonce, "string");
+
+  sdk.sendChromeMessage({ type: "lavish:pageAppResult", id: request.id, nonce: request.nonce, ok: true });
+  assert.equal(await saved, undefined);
+
+  const read = sdk.api.store.get("draft");
+  const get = sdk.posted.at(-1);
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: get.id,
+    nonce: get.nonce,
+    ok: true,
+    value: { found: true, value: { lines: 2 } },
+  });
+  assert.deepEqual(await read, { lines: 2 });
+});
+
+test("the served SDK bundle exposes ask, files.pick and download beside store", () => {
+  const sdk = bootSdk();
+  assert.equal(typeof sdk.api.ask, "function");
+  assert.equal(typeof sdk.api.files.pick, "function");
+  assert.equal(typeof sdk.api.download, "function");
+  assert.deepEqual(Object.keys(sdk.api.store).sort(), ["delete", "get", "list", "set"]);
+});

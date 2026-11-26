@@ -116,6 +116,10 @@ async function createChromeHarness({
   // plain-http page on a non-loopback host, which browsers refuse notification permission.
   /** @type {{ permission: string, secure?: boolean } | null} */
   background = null,
+  // Opt-in user activation: the chrome reads `navigator.userActivation.isActive`, which a click in
+  // the artifact frame also turns on. Tests flip `activation.isActive` to model one.
+  /** @type {{ isActive: boolean } | null} */
+  activation = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -454,6 +458,7 @@ async function createChromeHarness({
           clipboardWrites.push(String(value));
         },
       },
+      ...(activation ? { userActivation: activation } : {}),
     },
     setTimeout: fakeSetTimeout,
     crypto: globalThis.crypto,
@@ -11105,4 +11110,94 @@ test("a window that is not the artifact frame cannot set the tab", async () => {
     });
   }
   assert.equal(chrome.tab().title, "Plan \u00b7 Lavish");
+});
+
+// ---- Page apps (src/page-apps.js): the chrome relays the frame's requests to the server. ----
+
+function pageAppRequest(chrome, fields) {
+  chrome.sendFrameMessage({
+    type: "lavish:pageApp",
+    nonce: "doc-nonce",
+    artifact_load_token: chrome.artifactLoadToken(),
+    ...fields,
+  });
+}
+
+// Plain copies: the chrome runs in its own realm, so its objects have that realm's prototypes.
+function pageAppResults(chrome) {
+  return JSON.parse(JSON.stringify(chrome.postedToFrame.filter((message) => message.type === "lavish:pageAppResult")));
+}
+
+test("page storage requests reach the server as JSON and the answer goes back to the asking page", async () => {
+  const bodies = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/page-store")) {
+        bodies.push(init.body);
+        return { ok: true, json: async () => ({ keys: 1, bytes: 12 }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  pageAppRequest(chrome, { id: "r1", op: "store.set", key: "plan", json: '{"step":2}' });
+  await flushPromises();
+
+  assert.deepEqual(JSON.parse(bodies[0]), { op: "set", key: "plan", value: { step: 2 } });
+  assert.deepEqual(pageAppResults(chrome).at(-1), {
+    type: "lavish:pageAppResult",
+    id: "r1",
+    nonce: "doc-nonce",
+    ok: true,
+    value: { keys: 1, bytes: 12 },
+  });
+});
+
+test("the chrome refuses a bad storage request without calling the server", async () => {
+  let calls = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/page-store")) calls += 1;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  pageAppRequest(chrome, { id: "r1", op: "store.set", key: "", json: "1" });
+  pageAppRequest(chrome, { id: "r2", op: "store.set", key: "k", json: '1,"op":"list"' });
+  pageAppRequest(chrome, { id: "r3", op: "store.get", key: "a\nb" });
+  await flushPromises();
+  assert.equal(calls, 0);
+  assert.deepEqual(
+    pageAppResults(chrome).map((result) => [result.id, result.code]),
+    [
+      ["r1", "KEY_INVALID"],
+      ["r2", "VALUE_INVALID"],
+      ["r3", "KEY_INVALID"],
+    ],
+  );
+});
+
+test("a page-app request without an id or nonce, or from a stale load, gets no answer", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  pageAppRequest(chrome, { id: "r1", op: "store.get", key: "k", nonce: "" });
+  pageAppRequest(chrome, { id: "x1", op: "store.get", key: "k" });
+  chrome.sendFrameMessage({ type: "lavish:pageApp", id: "r2", nonce: "n", op: "store.get", key: "k" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).length, 0);
+});
+
+test("a server refusal reaches the page with its code", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) =>
+      String(url).endsWith("/page-store")
+        ? { ok: false, status: 507, json: async () => ({ code: "STORE_FULL", error: "A page can store up to 5 MB." }) }
+        : { ok: true, json: async () => ({}) },
+  });
+  pageAppRequest(chrome, { id: "r4", op: "store.set", key: "k", json: '"v"' });
+  await flushPromises();
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "STORE_FULL");
+  assert.equal(result.error, "A page can store up to 5 MB.");
 });

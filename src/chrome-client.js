@@ -71,6 +71,21 @@ const uploadTimestamps = [];
 let uploadedBytesTotal = 0;
 let uploadsInFlight = 0;
 
+// Page apps (src/page-apps.js): the limits every hop applies, from the server. The defaults only
+// cover an unwired harness; the server checks everything again.
+const PAGE_APP_LIMITS = {
+  storeKeyMaxChars: 256,
+  storeValueMaxBytes: 1024 * 1024,
+  askQuestionMaxChars: 4000,
+  askContextMaxChars: 64 * 1024,
+  askMinTimeoutMs: 10_000,
+  askMaxTimeoutMs: 30 * 60_000,
+  askDefaultTimeoutMs: 5 * 60_000,
+  downloadMaxBytes: 50 * 1024 * 1024,
+  downloadNameMaxChars: 200,
+  ...(sessionData.pageAppLimits && typeof sessionData.pageAppLimits === "object" ? sessionData.pageAppLimits : {}),
+};
+
 function formatByteLimit(bytes) {
   if (bytes >= 1024 * 1024) return Math.round(bytes / (1024 * 1024)) + " MB";
   if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
@@ -5781,6 +5796,7 @@ window.addEventListener("message", (event) => {
     ).catch(() => {});
   }
   if (msg.type === "lavish:uploadAttachment") uploadAttachment(msg);
+  if (msg.type === "lavish:pageApp") handlePageAppRequest(msg);
   // There is deliberately no attachment-delete message. See removeAttachment's
   // removal note below: the iframe cannot be trusted to decide a delete, and the
   // chrome cannot see every live reference, so reclamation is the sweeper's job.
@@ -5908,6 +5924,106 @@ async function uploadAttachment(message, reportResult = postToFrame, signal) {
   } finally {
     uploadsInFlight -= 1;
   }
+}
+
+// ---- Page apps (docs/jadev-fork.md, Page apps). The artifact frame cannot reach the server, so
+// `window.lavish.store`, `ask`, `files.pick` and `download` ask the chrome. Everything in the request
+// is untrusted: the chrome checks it, answers only the document that asked (its load token and
+// nonce), and the server checks it again. ----
+const PAGE_APP_ID_RE = /^r\d{1,9}$/;
+
+function handlePageAppRequest(msg) {
+  const id = typeof msg.id === "string" && PAGE_APP_ID_RE.test(msg.id) ? msg.id : "";
+  const nonce = typeof msg.nonce === "string" && msg.nonce.length > 0 && msg.nonce.length <= 100 ? msg.nonce : "";
+  if (!id || !nonce) return;
+  const askingLoad = artifactLoadToken;
+  // A result goes only to the document that asked: after a reload, the old request has no one to answer.
+  const reply = (result) => {
+    if (askingLoad !== artifactLoadToken) return;
+    postToFrame({ type: "lavish:pageAppResult", id, nonce, ...result });
+  };
+  const fail = (code, error) => reply({ ok: false, code, error });
+  const op = String(msg.op || "");
+  let work;
+  if (op.startsWith("store.")) work = pageStoreRequest(op.slice(6), msg);
+  else work = Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "This Lavish does not know that request." });
+  work.then(reply, (error) => fail("FAILED", error instanceof Error ? error.message : String(error)));
+}
+
+// Storage requests run one at a time, in the order the page made them, so a set followed by a get
+// reads its own write. A page that piles up more than this many waits is told to slow down.
+const PAGE_STORE_QUEUE_MAX = 256;
+let pageStoreChain = Promise.resolve();
+let pageStoreWaiting = 0;
+
+function pageStoreKeyError(name) {
+  if (typeof name !== "string" || name.length === 0) return "A storage key must be a non-empty string.";
+  if (name.length > PAGE_APP_LIMITS.storeKeyMaxChars) {
+    return "A storage key is limited to " + PAGE_APP_LIMITS.storeKeyMaxChars + " characters.";
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) return "A storage key cannot contain control characters.";
+  return "";
+}
+
+/** @returns {Promise<{ ok: boolean, value?: unknown, code?: string, error?: string }>} */
+function pageStoreRequest(op, msg) {
+  let body;
+  if (op === "list") {
+    const prefix = typeof msg.prefix === "string" ? msg.prefix : "";
+    if (prefix.length > PAGE_APP_LIMITS.storeKeyMaxChars) {
+      return Promise.resolve({ ok: false, code: "KEY_INVALID", error: "The list prefix is too long." });
+    }
+    body = JSON.stringify({ op, prefix });
+  } else if (op === "get" || op === "delete" || op === "set") {
+    const keyError = pageStoreKeyError(msg.key);
+    if (keyError) return Promise.resolve({ ok: false, code: "KEY_INVALID", error: keyError });
+    if (op === "set") {
+      const json = typeof msg.json === "string" ? msg.json : "";
+      // A UTF-16 length past the byte limit is past it in UTF-8 too; the server measures exactly.
+      if (!json || json.length > PAGE_APP_LIMITS.storeValueMaxBytes) {
+        return Promise.resolve({ ok: false, code: "VALUE_TOO_LARGE", error: "The value is too large to store." });
+      }
+      try {
+        JSON.parse(json);
+      } catch {
+        return Promise.resolve({ ok: false, code: "VALUE_INVALID", error: "The value is not JSON." });
+      }
+      // The value travels as JSON, not as a string inside JSON, so it is not escaped twice on the way.
+      body = '{"op":"set","key":' + JSON.stringify(msg.key) + ',"value":' + json + "}";
+    } else {
+      body = JSON.stringify({ op, key: msg.key });
+    }
+  } else {
+    return Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "Unknown storage request." });
+  }
+  if (pageStoreWaiting >= PAGE_STORE_QUEUE_MAX) {
+    return Promise.resolve({
+      ok: false,
+      code: "BUSY",
+      error: "Too many storage requests at once. Wait for some to finish.",
+    });
+  }
+  pageStoreWaiting += 1;
+  const run = pageStoreChain.then(async () => {
+    const response = await fetch("/api/" + key + "/page-store", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { ok: false, code: String(data.code || "FAILED"), error: String(data.error || "Storage failed.") };
+    }
+    return { ok: true, value: data };
+  });
+  pageStoreChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run.finally(() => {
+    pageStoreWaiting -= 1;
+  });
 }
 
 // There is intentionally no eager attachment delete here. Removing a chip used to

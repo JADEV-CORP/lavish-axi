@@ -87,6 +87,7 @@ const COMMANDS = new Set([
   "libraries",
   "diagram",
   "bind-agent",
+  "data",
 ]);
 // SDK-reserved built-ins (e.g. `update`) must reach runAxiCli untouched; otherwise
 // the bare-arg normalization below would rewrite them into the hidden `open` command.
@@ -252,6 +253,7 @@ export async function run(argv) {
       libraries: librariesCommand,
       diagram: diagramCommand,
       "bind-agent": bindAgentCommand,
+      data: dataCommand,
     },
     getCommandHelp: (command) => getCommandHelp(command, { agent }),
   });
@@ -846,6 +848,68 @@ function createEndedNextStep(file, endedBy) {
     return `The user ended this Lavish Editor session. Stop polling ${file} - do not run \`lavish ${file}\` to reopen it. Deliver any remaining updates directly in this conversation instead. Only reopen with \`lavish ${file} --reopen\` if the user explicitly asks for further review or something genuinely important needs their visual attention.`;
   }
   return `This Lavish Editor session for ${file} has ended. Stop polling. Deliver any remaining updates directly in this conversation, or run \`lavish ${file}\` to open a fresh session if the user needs further visual review.`;
+}
+
+// `lavish data <page>`: what a page stored through `window.lavish.store`, read through the server so
+// it never races a write the page is making. Clearing needs `--clear --yes`: an agent cannot answer
+// a prompt, so the confirmation is a flag it has to pass on purpose.
+const DATA_FLAGS = new Set(["--json", "--clear", "--yes", "--force"]);
+
+async function dataCommand(args) {
+  const file = firstPositionalArg(args);
+  if (!file) {
+    throw new AxiError("HTML file path is required", "VALIDATION_ERROR", ["Run `lavish data <html-file>`"]);
+  }
+  const unknown = args.find((arg) => arg.startsWith("-") && arg !== "--" && !DATA_FLAGS.has(arg));
+  if (unknown) {
+    throw new AxiError(`Unknown option: ${unknown}`, "VALIDATION_ERROR", [
+      "Run `lavish data <html-file> [--json]` or `lavish data <html-file> --clear --yes`",
+    ]);
+  }
+  // The data is keyed by the page's canonical path. A page file that was moved or deleted still has
+  // its data under the path it had, so fall back to the resolved path rather than failing.
+  const absolute = await canonicalFile(file).catch(() => path.resolve(file));
+  const key = sessionKey(absolute);
+  const baseUrl = await ensureServer({ force: args.includes("--force") });
+  const stored = await fetchJson(`${baseUrl}/api/${key}/page-data`);
+  if (args.includes("--clear")) {
+    if (!args.includes("--yes")) {
+      throw new AxiError(
+        `Clearing deletes ${stored.keys} stored key${stored.keys === 1 ? "" : "s"} (${stored.bytes} bytes) for ${absolute}. Nothing was deleted.`,
+        "CONFIRMATION_REQUIRED",
+        [`Run \`lavish data ${absolute} --clear --yes\` to delete them, only if the user asked for it`],
+      );
+    }
+    const cleared = await fetchJson(`${baseUrl}/api/${key}/page-data/clear`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    return {
+      data: { file: absolute, status: "cleared", keys: cleared.keys, bytes: cleared.bytes },
+      next_step:
+        "The page's stored data is gone. An open page keeps what it already read until it reads again or reloads.",
+    };
+  }
+  return createDataOutput({ file: absolute, stored, json: args.includes("--json") });
+}
+
+/**
+ * @param {{ file: string, stored: { keys?: number, bytes?: number, updated_at?: string, entries?: Record<string, unknown> }, json?: boolean }} input
+ */
+export function createDataOutput({ file, stored, json = false }) {
+  const entries = stored.entries && typeof stored.entries === "object" ? stored.entries : {};
+  const summary = {
+    file,
+    keys: Number(stored.keys) || 0,
+    bytes: Number(stored.bytes) || 0,
+    ...(stored.updated_at ? { updated_at: stored.updated_at } : {}),
+  };
+  if (json) return JSON.stringify({ ...summary, entries }, null, 2);
+  if (summary.keys === 0) {
+    return { data: summary, next_step: "This page has stored nothing through window.lavish.store." };
+  }
+  return { data: summary, entries };
 }
 
 async function endCommand(args) {
@@ -2931,7 +2995,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish end <html-file>\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -2945,6 +3009,7 @@ function createCommandHelp({ agent = "generic" } = {}) {
     stop: `Usage: lavish stop [--port <port>] [--force]\n\nShut down the background Lavish Editor server. Active polls or review listeners block shutdown unless --force is passed. The server also stops itself when no browser or poll has been connected for a while (LAVISH_AXI_IDLE_TIMEOUT_MS, default 30m) and immediately when the last session ends with nothing connected.\n`,
     playbook: `Usage: lavish playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: diagram, table, comparison, plan, code, input, explanation, slides.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish playbook\n  lavish playbook diagram\n  lavish playbook input\n`,
     design: `Usage: lavish design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
+    data: `Usage: lavish data <html-file> [--json]\n       lavish data <html-file> --clear --yes\n\nPrint what the page stored through window.lavish.store: the number of keys, their size, and every key with its JSON value. --json prints one JSON document instead of TOON. Data is kept per page file in the Lavish state directory (page-data/) and survives reloads and server restarts.\n\n--clear deletes everything the page stored. It refuses without --yes and reports what it would delete, so pass --yes only when the user asked for the data to go. An open page keeps what it already read until it reads again or reloads.\n`,
     "bind-agent": `Usage: lavish bind-agent <html-file> (--t3-thread <id> | --webhook-file <path> | --clear)\n\nLet the reviewer wake this session's T3 Code thread with Nudge agent. Pass --t3-thread with the id orchestrator_capabilities returns as parentThreadId. Lavish checks the thread with \`t3 thread show\` and, on a click, runs \`t3 thread send\` with a message naming this review's file. It sends no feedback text and registers nothing in T3 Code. Reviews this conversation opens later link by themselves, and ending a review removes its link. --webhook-file is the older T3 Connect webhook link: its task stays in T3 Code until the thread that created it deletes it. --clear disconnects. An open review tab picks the change up the next time its agent stops listening.\n`,
     diagram: `Usage: lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n\nRender a draw.io diagram for a Lavish page with the local draw.io desktop app (open source, Apache-2.0). Writes <name>.drawio.svg next to the source: a static image that follows light and dark mode and embeds the diagram, so draw.io reopens it for editing. Also writes a PNG preview to the state directory: look at it before serving the page. Prints the <img> tag to paste into the page.\n\n--layout ${DRAWIO_LAYOUTS.join("|")} lays the diagram out and writes the positions back into the .drawio, so you can write nodes and edges without coordinates. A .mmd or .mermaid input becomes an editable .drawio first. Set LAVISH_AXI_DRAWIO when draw.io is not on PATH or in the usual install folder.\n\nExamples:\n  lavish diagram .lavish/flow.drawio\n  lavish diagram .lavish/flow.drawio --layout horizontalFlow --alt "Booking flow"\n  lavish diagram .lavish/sequence.mmd\n`,
     libraries: `Usage: lavish libraries [--search <text>] [--library <id>]\n\nList the Excalidraw libraries (.excalidrawlib files) the user copied into ~/.lavish-axi/excalidraw-libraries, or LAVISH_AXI_STATE_DIR/excalidraw-libraries when set. Their items appear in every whiteboard's library panel. --search lists item refs whose ref contains every search word; --library lists one library's item refs. Lavish only reads this directory and never downloads libraries.\n\nExamples:\n  lavish libraries\n  lavish libraries --search lambda\n  lavish libraries --library aws-architecture-icons\n`,

@@ -45,6 +45,8 @@ import * as mermaidNode from "./mermaid-node.js";
 import * as queueAll from "./queue-all.js";
 import * as tableCellHelpers from "./table-cell.js";
 import * as toonEncode from "./toon-encode.js";
+import * as pageApps from "./page-apps.js";
+import { createPageStore, pageStoreError } from "./page-store.js";
 import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
 import { createExcalidrawLibraryCache, excalidrawLibrariesDir } from "./whiteboard-library-store.js";
 import { parseLibraryIconDirectives } from "./whiteboard-libraries.js";
@@ -843,6 +845,14 @@ export async function serve({
   // `store.runExclusive`, so a reference can never be acquired in the window between
   // the sweeper's reference snapshot and its delete (D5), and `queuePrompts` cannot
   // interleave with a concurrent poll.
+
+  // Page apps (docs/jadev-fork.md, Page apps): one set of limits for the SDK, the chrome, and these
+  // routes. Picked files reuse the attachment store, so its own limits apply to them.
+  const pageLimits = pageApps.pageAppLimits({
+    pickMaxFiles: attachmentConfig.maxPerPrompt,
+    pickMaxBytes: attachmentConfig.maxBytes,
+  });
+  const pageStore = createPageStore(attachmentStateRoot, { limits: pageLimits, log: writeLog });
 
   const defaultJsonParser = express.json({ limit: "2mb" });
   const whiteboardJsonParser = express.json({ limit: "20mb" });
@@ -1681,6 +1691,7 @@ export async function serve({
           chromeLoadToken: chromeLoad.chrome_load_token,
           attachmentMaxBytes: attachmentConfig.maxBytes,
           attachmentMaxCount: attachmentConfig.maxPerPrompt,
+          pageAppLimits: pageLimits,
           agentId: agentIds.get(session.key) || "",
           updateAvailable: updateChecker?.current() || null,
           agentNudgeAvailable: await agentNudger.available(session.key),
@@ -1891,6 +1902,7 @@ export async function serve({
         createSdkJs(String(req.query.key || ""), verified.artifact_revision, verified.artifact_load_token, {
           maxAttachmentCount: attachmentConfig.maxPerPrompt,
           maxAttachmentBytes: attachmentConfig.maxBytes,
+          pageAppLimits: pageLimits,
         }),
       );
     } catch (error) {
@@ -2172,6 +2184,76 @@ export async function serve({
       });
       res.json({ status });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  // Page storage (`window.lavish.store`). Only this server's chrome may call it: the artifact frame
+  // asks the chrome, which validates the request and forwards it here, where it is validated again.
+  app.post("/api/:key/page-store", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page storage request rejected" });
+        return;
+      }
+      const session = await store.findByKey(req.params.key);
+      if (!session) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      const op = String(req.body?.op || "");
+      const name = req.body?.key;
+      if (op === "get") {
+        res.json(await pageStore.get(session.key, name));
+      } else if (op === "set") {
+        res.json(await pageStore.set(session.key, session.file, name, req.body?.value));
+      } else if (op === "delete") {
+        res.json(await pageStore.delete(session.key, session.file, name));
+      } else if (op === "list") {
+        res.json(await pageStore.list(session.key, typeof req.body?.prefix === "string" ? req.body.prefix : ""));
+      } else {
+        throw pageStoreError("INVALID", "unknown page storage operation");
+      }
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page>`: what a page stored, for the agent. Header-less CLI requests pass; a
+  // present foreign Origin or Referer does not, like the poll control routes.
+  app.get("/api/:key/page-data", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json(await pageStore.read(req.params.key));
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page> --clear --yes`. The global origin guard already refuses a foreign page.
+  app.post("/api/:key/page-data/clear", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json({ status: "cleared", ...(await pageStore.clear(req.params.key)) });
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -3526,6 +3608,7 @@ export function createChromeHtml(
     attachmentMaxBytes = 0,
     attachmentMaxCount = 0,
     attachmentAcceptedMime = ACCEPTED_IMAGE_MIME,
+    pageAppLimits = pageApps.pageAppLimits(),
     agentId = "",
     agentNudgeAvailable = false,
     /** @type {{ version: string, current: string } | null} */
@@ -3565,6 +3648,7 @@ export function createChromeHtml(
     attachmentMaxBytes,
     attachmentMaxCount,
     attachmentAcceptedMime: acceptedMime,
+    pageAppLimits,
     updateAvailable,
     // The legend's swatches are server-owned, not artifact-owned. The chrome
     // derives every swatch from this palette by registry position, so an
@@ -3651,13 +3735,13 @@ function serializeModuleHelpers(module) {
  * @param {string} key
  * @param {number} [artifactRevision]
  * @param {string} [artifactLoadToken]
- * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[] }} [options]
+ * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[], pageAppLimits?: Record<string, number> }} [options]
  */
 export function createSdkJs(
   key,
   artifactRevision = 0,
   artifactLoadToken = "",
-  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME } = {},
+  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME, pageAppLimits = undefined } = {},
 ) {
   const mermaidHelperSource = serializeModuleHelpers(mermaidNode);
   const tableHelperSource = serializeModuleHelpers(tableCellHelpers);
@@ -3665,6 +3749,7 @@ export function createSdkJs(
   const findHelperSource = serializeModuleHelpers(findInPage);
   const toonHelperSource = serializeModuleHelpers(toonEncode);
   const queueAllHelperSource = serializeModuleHelpers(queueAll);
+  const pageAppHelperSource = serializeModuleHelpers(pageApps);
   const revisionNumber = Number(artifactRevision);
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : 0;
   const loadToken = String(artifactLoadToken || "").slice(0, 200);
@@ -3676,6 +3761,7 @@ export function createSdkJs(
     maxAttachmentCount: Number.isFinite(maxAttachmentCount) ? maxAttachmentCount : undefined,
     maxAttachmentBytes: Number.isFinite(maxAttachmentBytes) ? maxAttachmentBytes : undefined,
     acceptedImageMime: acceptedImageMime.map(String),
+    pageAppLimits: pageApps.pageAppLimits(pageAppLimits),
   };
   return `(() => {
 const key=${JSON.stringify(key)};
@@ -3706,6 +3792,7 @@ ${revisionHelperSource.declarations}
 ${findHelperSource.declarations}
 ${toonHelperSource.declarations}
 ${queueAllHelperSource.declarations}
+${pageAppHelperSource.declarations}
 (${createArtifactSdk.toString()})(deriveQueueKey, isNativeInteractiveControl, mermaidHelpers, artifactRevision, artifactLoadToken, key, ${JSON.stringify(sdkOptions)});
 })();`;
 }
