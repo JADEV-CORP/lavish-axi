@@ -41,7 +41,7 @@ name: lavish
 description: ${SKILL_DESCRIPTION}
 license: MIT
 metadata:
-  author: JADEV-CORP, based on lavish-axi by Kun Chen (kunchenguid)
+  author: JADEV-CORP, based on Lavish by Kun Chen (kunchenguid)
   argument-hint: <what the artifact should show>
   hermes-tags: html, review, artifacts, visualization
   hermes-category: productivity

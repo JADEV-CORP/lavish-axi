@@ -25,7 +25,7 @@ test("createSkillMarkdown emits Hermes Agent metadata as string-valued frontmatt
   const { frontmatter } = parseSkillFrontmatter(createSkillMarkdown());
 
   assert.deepEqual(frontmatter.metadata, {
-    author: "Kun Chen (kunchenguid)",
+    author: "JADEV-CORP, based on Lavish by Kun Chen (kunchenguid)",
     "argument-hint": "<what the artifact should show>",
     "hermes-tags": "html, review, artifacts, visualization",
     "hermes-category": "productivity",
