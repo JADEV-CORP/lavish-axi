@@ -20,7 +20,7 @@ const servedChromeIds = new Set(
 
 const SERVED_TAB_ICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>";
 
-/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], forkUpdate?: { version: string, current: string } | null, agentNudgeAvailable?: boolean, reviewLabel?: string, reviewContext?: string, loopbackUrl?: string }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, commandPaletteHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, initialAgent?: { id: string, name: string, short: string } | null, themePresets?: any[], revisionPalette?: { hex: string, borderStyle: string, pattern: string }[], updateAvailable?: { version: string, current: string } | null, agentNudgeAvailable?: boolean, reviewLabel?: string, reviewContext?: string, loopbackUrl?: string }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -10309,29 +10309,28 @@ test("the notification controls say why no desktop notification can appear, and 
   assert.equal(action(insecure).hidden, true);
 });
 
-test("a newer Jadev version shows Update in the top bar with its steps, until dismissed for that version", async () => {
+test("a newer npm release shows Update in the top bar with lavish update, until dismissed for that version", async () => {
   const localStore = new Map();
-  const forkUpdate = { version: "0.1.83-jadev.13", current: "0.1.83-jadev.12" };
+  const updateAvailable = { version: "1.0.1", current: "1.0.0" };
   const chrome = await createChromeHarness({
-    sessionData: { ...defaultSessionData, forkUpdate },
+    sessionData: { ...defaultSessionData, updateAvailable },
     theme: { localStore },
   });
   assert.equal(chrome.element("updateWrap").hidden, false);
-  assert.match(
-    chrome.element("updateCopy").textContent,
-    /0\.1\.83‑jadev\.13 is on the Jadev fork; you have 0\.1\.83‑jadev\.12/,
-  );
-  assert.match(chrome.element("updateSteps").textContent, /npm i -g \.\/lavish-axi-0\.1\.83-jadev\.13\.tgz$/);
+  assert.match(chrome.element("updateCopy").textContent, /Version 1\.0\.1 is on npm; you have 1\.0\.0/);
+  assert.equal(chrome.element("updateSteps").textContent, "lavish update");
+  assert.doesNotMatch(chrome.element("updateCopy").textContent, /fork|checkout/i);
 
   chrome.element("updateDismiss").onclick();
   assert.equal(chrome.element("updateWrap").hidden, true);
-  assert.equal(localStore.get("lavish-axi:update-dismissed"), "0.1.83-jadev.13");
+  assert.equal(localStore.get("lavish-axi:update-dismissed"), "1.0.1");
 
-  const live = (data) => chrome.eventSource().listeners.get("fork-update")({ data: JSON.stringify(data) });
-  live({ update: forkUpdate });
+  const live = (data) => chrome.eventSource().listeners.get("update-available")({ data: JSON.stringify(data) });
+  live({ update: updateAvailable });
   assert.equal(chrome.element("updateWrap").hidden, true, "the dismissed version stays quiet");
-  live({ update: { version: "0.1.83-jadev.14", current: "0.1.83-jadev.12" } });
+  live({ update: { version: "1.1.0-beta.1", current: "1.0.0" } });
   assert.equal(chrome.element("updateWrap").hidden, false, "a newer one shows again");
+  assert.match(chrome.element("updateCopy").textContent, /1\.1\.0‑beta\.1/, "one line per version");
   live({ update: null });
   assert.equal(chrome.element("updateWrap").hidden, true, "caught up, nothing to show");
   live({ update: { version: "<script>", current: "x" } });

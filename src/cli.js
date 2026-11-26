@@ -21,7 +21,7 @@ import { AxiError, installSessionStartHooks, RESERVED_COMMANDS, runAxiCli } from
 
 import { createDesignOutput, DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "./design-reference.js";
 import { buildDiagram, DRAWIO_LAYOUTS, resolveDrawio } from "./drawio.js";
-import { compareJadevVersions, defaultForkUpdateChecker } from "./fork-update.js";
+import { compareReleaseVersions, defaultUpdateChecker } from "./update-check.js";
 import { agentOwnerId, autoLinkSession, bindAgentNudge, linkT3Thread, releaseAgentLink } from "./agent-nudge.js";
 import { PAGE_TEMPLATE } from "./page-template.js";
 import {
@@ -248,7 +248,8 @@ export async function run(argv) {
       server: serverCommand,
       export: exportCommand,
       share: shareCommand,
-      update: updateCommand,
+      // No `update` here: the SDK's built-in upgrades the package named in package.json
+      // (@jadev-corp/lavish) the way it was installed (npm, pnpm, Homebrew or npx).
       libraries: librariesCommand,
       diagram: diagramCommand,
       "bind-agent": bindAgentCommand,
@@ -1560,20 +1561,6 @@ async function designCommand(args = []) {
   return createDesignOutput();
 }
 
-// This build is the Jadev fork (docs/jadev-fork.md). The SDK's built-in `update` installs the
-// newest npm release, which semver ranks above any 0.1.83-jadev.N, so it would silently swap the
-// fork for upstream. Shadowing the reserved command keeps that from happening by accident.
-export const FORK_UPDATE_REFUSAL =
-  "This lavish-axi is the Jadev fork, so `update` would replace it with the upstream npm release.";
-
-/** @returns {Promise<never>} */
-async function updateCommand() {
-  throw new AxiError(FORK_UPDATE_REFUSAL, "FORK_UPDATE_DISABLED", [
-    "Update the fork instead: pull main in jadev-corp/lavish-axi, run `pnpm run check`, then `npm pack` and `npm i -g` the tarball",
-    "See docs/jadev-fork.md in that repository",
-  ]);
-}
-
 async function setupCommand(args) {
   if (args.length !== 1 || (args[0] !== "hooks" && args[0] !== "plugin")) {
     throw new AxiError("Unknown setup action", "VALIDATION_ERROR", [
@@ -1945,7 +1932,7 @@ async function serverCommand(args) {
     version: VERSION,
     debug,
     extraListenHosts: flagValues(args, "--also-listen"),
-    forkUpdates: defaultForkUpdateChecker({ currentVersion: VERSION, stateDir: path.dirname(state) }),
+    updateChecker: defaultUpdateChecker({ currentVersion: VERSION }),
   });
   await server.done;
   return "";
@@ -2296,26 +2283,14 @@ export function shouldRestartServer(currentVersion, healthBody, forceRestart = f
 }
 
 // A running server newer than this CLI is adopted, never replaced: two installed versions on one
-// machine would otherwise restart each other's server in turn. Numeric, so 0.1.9 is older than
-// 0.1.10. A version that does not parse falls back to "different means replace".
+// machine would otherwise restart each other's server in turn. Semver precedence, so 0.1.9 is older
+// than 0.1.10, a prerelease is older than its release, and 1.0.0 (the first @jadev-corp/lavish) is
+// newer than every 0.1.98-jadev.N server the fork ran before it moved to npm. A version that does
+// not parse falls back to "different means replace".
 function isServerOlderThanCli(currentVersion, runningVersion) {
   if (runningVersion === currentVersion) return false;
-  const jadevVersion = /^\d+\.\d+\.\d+-jadev\.\d+$/;
-  if (jadevVersion.test(currentVersion) && jadevVersion.test(runningVersion)) {
-    return compareJadevVersions(runningVersion, currentVersion) < 0;
-  }
-  const current = parseReleaseVersion(currentVersion);
-  const running = parseReleaseVersion(runningVersion);
-  if (!current || !running) return true;
-  for (let index = 0; index < 3; index += 1) {
-    if (running[index] !== current[index]) return running[index] < current[index];
-  }
-  return false;
-}
-
-function parseReleaseVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version));
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  const order = compareReleaseVersions(runningVersion, currentVersion);
+  return order === null ? true : order < 0;
 }
 
 // Which branch of `shouldRestartServer` actually fired, because that is what the other open
@@ -2485,12 +2460,19 @@ function lavishListenerPids(baseUrl) {
       const pid = Number(line.trim());
       if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
       const command = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
-      if (command.status === 0 && /lavish-axi/.test(command.stdout)) pids.push(pid);
+      if (command.status === 0 && isLavishServerCommand(command.stdout)) pids.push(pid);
     }
     return pids;
   } catch {
     return [];
   }
+}
+
+// A Lavish server's command line names its entry: `…/lavish-axi/…` for a source checkout and the
+// 0.1.x installs, `…/@jadev-corp/lavish/dist/server.mjs` for the npm package, whose path no longer
+// contains "lavish-axi".
+export function isLavishServerCommand(command) {
+  return /lavish-axi|@jadev-corp[\\/]lavish[\\/]/.test(String(command));
 }
 
 function listenerMatchesLavish(baseUrl) {
@@ -2956,7 +2938,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish-axi - Lavish Editor AXI\n\nUsage:\n  lavish-axi\n  lavish-axi <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish-axi poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish-axi reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish-axi end <html-file>\n  lavish-axi export <html-file> [--out <path>]\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n  lavish-axi stop\n  lavish-axi playbook [playbook_id]\n  lavish-axi design\n  lavish-axi libraries [--search <text>] [--library <id>]\n  lavish-axi diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish-axi setup hooks\n  lavish-axi setup plugin\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish-axi reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish-axi - Lavish Editor AXI\n\nUsage:\n  lavish-axi\n  lavish-axi <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish-axi poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>]\n  lavish-axi reply <html-file> (--agent-reply "..." | --agent-reply-file <path>)\n  lavish-axi end <html-file>\n  lavish-axi export <html-file> [--out <path>]\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n  lavish-axi stop\n  lavish-axi playbook [playbook_id]\n  lavish-axi design\n  lavish-axi libraries [--search <text>] [--library <id>]\n  lavish-axi diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish-axi setup hooks\n  lavish-axi setup plugin\n  lavish-axi update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish-axi reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -2969,7 +2951,6 @@ function createCommandHelp({ agent = "generic" } = {}) {
     share: `Usage:\n  lavish-axi share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish-axi share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish-axi share --unpublish --site <site_id> --update-key <key>\n\nPublish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and print a visitable URL. Shares are PUBLIC by default: anyone with the link can open the page, and it may be indexed or scraped. Pass --private to publish a PRIVATE page behind a generated password, returned once in the output - give it to the user with the URL and tell them it is a shared secret. Pass --password <pw> instead when the user chose the password; it is never echoed back. Builds the same local-inlined HTML as 'export' (local assets inlined; remote CDN/font URLs left as links and are not blocked by CSP on ht-ml.app, but still load over the viewer's network), then POSTs it to ht-ml.app's /v1 API. Creating a site needs no account or API key. The response includes the url plus a secret update_key (shown once) for changing the page later.\n\n--site <site_id> with --update-key <key> republishes an existing page in place: same URL, new HTML. On a republish the password is left alone unless you pass --private (rotate to a new generated one) or --password <pw> (set one). There is no way to make a private page public again: ht-ml.app accepts a request to clear a password and silently ignores it, so Lavish does not offer one rather than reporting a page as public while it is still gated. Locking a page that was PUBLIC is also not instant at ht-ml.app's CDN: it was observed still answering uncredentialed requests for minutes after the password was set, so do not tell the user a newly gated page is unreachable right away (a page that was already private has no such cached copy).\n\n--unpublish takes the same credentials and no file. ht-ml.app has NO delete endpoint, so this replaces the page with a short placeholder and locks it behind a random password that is immediately discarded; the URL still resolves and the host still holds what was published. Say that to the user rather than calling it deleted. The update_key still works, so republishing with --private brings the page back behind a new password.\n\nA value flag given an empty or whitespace-only value is REFUSED rather than acted on: an unquoted shell variable that is unset makes \`--password $PW\` an empty password, which the host treats as none and would publish a PUBLIC page while you believed it was gated. Quote the value, or pass --private to have Lavish generate one.\n\nSet LAVISH_AXI_HTML_APP_TOKEN (or pass --token) to attach an optional bearer token when CREATING a page; it is never required. A republish (--site/--update-key) or --unpublish rejects --token, because the update_key is what the Authorization header carries there. The annotation SDK is never included.\n`,
     stop: `Usage: lavish-axi stop [--port <port>] [--force]\n\nShut down the background Lavish Editor server. Active polls or review listeners block shutdown unless --force is passed. The server also stops itself when no browser or poll has been connected for a while (LAVISH_AXI_IDLE_TIMEOUT_MS, default 30m) and immediately when the last session ends with nothing connected.\n`,
     playbook: `Usage: lavish-axi playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: diagram, table, comparison, plan, code, input, explanation, slides.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish-axi playbook\n  lavish-axi playbook diagram\n  lavish-axi playbook input\n`,
-    update: `Usage: lavish-axi update\n\nDisabled in the Jadev fork. ${FORK_UPDATE_REFUSAL} Update by rebuilding from jadev-corp/lavish-axi; see docs/jadev-fork.md there.\n`,
     design: `Usage: lavish-axi design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
     "bind-agent": `Usage: lavish-axi bind-agent <html-file> (--t3-thread <id> | --webhook-file <path> | --clear)\n\nLet the reviewer wake this session's T3 Code thread with Nudge agent. Pass --t3-thread with the id orchestrator_capabilities returns as parentThreadId. Lavish checks the thread with \`t3 thread show\` and, on a click, runs \`t3 thread send\` with a message naming this review's file. It sends no feedback text and registers nothing in T3 Code. Reviews this conversation opens later link by themselves, and ending a review removes its link. --webhook-file is the older T3 Connect webhook link: its task stays in T3 Code until the thread that created it deletes it. --clear disconnects. An open review tab picks the change up the next time its agent stops listening.\n`,
     diagram: `Usage: lavish-axi diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n\nRender a draw.io diagram for a Lavish page with the local draw.io desktop app (open source, Apache-2.0). Writes <name>.drawio.svg next to the source: a static image that follows light and dark mode and embeds the diagram, so draw.io reopens it for editing. Also writes a PNG preview to the state directory: look at it before serving the page. Prints the <img> tag to paste into the page.\n\n--layout ${DRAWIO_LAYOUTS.join("|")} lays the diagram out and writes the positions back into the .drawio, so you can write nodes and edges without coordinates. A .mmd or .mermaid input becomes an editable .drawio first. Set LAVISH_AXI_DRAWIO when draw.io is not on PATH or in the usual install folder.\n\nExamples:\n  lavish-axi diagram .lavish/flow.drawio\n  lavish-axi diagram .lavish/flow.drawio --layout horizontalFlow --alt "Booking flow"\n  lavish-axi diagram .lavish/sequence.mmd\n`,

@@ -116,7 +116,8 @@ test("the plugin keeps its lavish-axi name so earlier registrations are repaired
 });
 
 test("normalizeAuthor keeps only the fields the manifest schema allows", () => {
-  assert.deepEqual(normalizeAuthor({ name: "JADEV-CORP", url: "https://github.com/JADEV-CORP", extra: 1 }), {
+  const author = /** @type {any} */ ({ name: "JADEV-CORP", url: "https://github.com/JADEV-CORP", extra: 1 });
+  assert.deepEqual(normalizeAuthor(author), {
     name: "JADEV-CORP",
     url: "https://github.com/JADEV-CORP",
   });

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import WebSocket from "ws";
 
-import { AxiError } from "axi-sdk-js";
+import { AxiError, planUpgrade, readNearestPackageJson, runUpdate } from "axi-sdk-js";
 
 process.env.LAVISH_AXI_HOST = "127.0.0.1";
 process.env.LAVISH_AXI_LINK_HOST = "127.0.0.1";
@@ -37,6 +37,7 @@ import {
   fetchJson,
   getCommandHelp,
   herdrPollChimeEnabled,
+  isLavishServerCommand,
   normalizeArgv,
   notifyHerdrPollReady,
   resolveShareRequest,
@@ -2984,10 +2985,13 @@ test("shouldRestartServer adopts a server that is newer than the CLI", () => {
   assert.equal(shouldRestartServer("0.1.4", { ok: true, app: "lavish-axi", version: "1.0.0" }), false);
 });
 
-test("shouldRestartServer replaces a server whose version is not plain x.y.z", () => {
+test("shouldRestartServer orders prereleases by semver and replaces a server whose version is not semver", () => {
   assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "0.1.87-beta.1" }), true);
   assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "v0.1.88" }), true);
-  assert.equal(shouldRestartServer("0.1.87-beta.1", { ok: true, app: "lavish-axi", version: "0.1.88" }), true);
+  assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "0.1.88+build.1" }), true);
+  // A prerelease CLI adopts a newer release instead of fighting it (semver precedence).
+  assert.equal(shouldRestartServer("0.1.87-beta.1", { ok: true, app: "lavish-axi", version: "0.1.88" }), false);
+  assert.equal(shouldRestartServer("0.1.88-beta.2", { ok: true, app: "lavish-axi", version: "0.1.88-beta.1" }), true);
 });
 
 test("shouldRestartServer compares versions numerically, not as strings", () => {
@@ -3645,38 +3649,91 @@ test("createShareUnpublishOutput separates the immediate content swap from the l
   assert.doesNotMatch(output.next_step, /no visitor can read the old content/i);
 });
 
-test("update is refused in the Jadev fork instead of installing the upstream npm release", async () => {
+test("update is the SDK built-in, and it upgrades @jadev-corp/lavish", async () => {
   const stateDir = await mkdtemp(`${os.tmpdir()}/lavish-axi-update-test-`);
   try {
-    for (const args of [["update"], ["update", "--check"]]) {
-      const result = spawnSync(
-        process.execPath,
-        [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), ...args],
-        {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          encoding: "utf8",
-          env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir },
-        },
-      );
-      assert.notEqual(result.status, 0, args.join(" "));
-      assert.match(result.stdout, /FORK_UPDATE_DISABLED/);
-      assert.match(result.stdout, /Jadev fork/);
-    }
-    assert.match(getCommandHelp("update"), /Disabled in the Jadev fork/);
+    // `update --help` is answered by the SDK without a network call; a shadowing command would
+    // print Lavish's own help or an error instead.
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "update", "--help"],
+      {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        encoding: "utf8",
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir },
+      },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /latest published npm version/);
+    assert.match(result.stdout, /--check/);
+    assert.doesNotMatch(result.stdout, /FORK_UPDATE_DISABLED|Jadev fork/);
+    assert.equal(getCommandHelp("update"), null, "no Lavish-side update help shadows the SDK's");
+
+    // The SDK reads the package name from the package.json nearest the entrypoint.
+    const entry = fileURLToPath(new URL("../dist/cli.mjs", import.meta.url));
+    assert.equal(readNearestPackageJson(entry).packageName, "@jadev-corp/lavish");
+    /** @type {string[]} */
+    const asked = [];
+    const check = await runUpdate({
+      args: ["--check"],
+      stdout: { write: () => true },
+      invokedAs: entry,
+      version: "1.0.0",
+      fetchLatest: async (name) => {
+        asked.push(name);
+        return "1.0.1";
+      },
+    });
+    assert.deepEqual(asked, ["@jadev-corp/lavish"]);
+    assert.deepEqual(/** @type {any} */ (check).update, {
+      package: "@jadev-corp/lavish",
+      current: "1.0.0",
+      latest: "1.0.1",
+      available: true,
+    });
+    assert.equal(
+      planUpgrade({ kind: "npm-global" }, "@jadev-corp/lavish").command,
+      "npm install -g @jadev-corp/lavish@latest",
+    );
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
 
-test("older Jadev CLIs adopt newer fork servers without replacing them", () => {
-  const newer = { app: "lavish-axi", version: "0.1.90-jadev.12" };
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer), false);
-  assert.equal(shouldKillProcessOnPort("0.1.90-jadev.2", newer), false);
-  assert.equal(serverReplacementReason("0.1.90-jadev.2", newer), "");
-  assert.equal(shouldRestartServer("0.1.90-jadev.13", newer), true);
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer, true), true);
-  // A plain upstream server is a different build channel and must not substitute for our fork.
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.91" }), true);
+test("the first npm release replaces a 0.1.98-jadev.N server; newer servers are adopted", () => {
+  for (const running of ["0.1.98-jadev.2", "0.1.98-jadev.99", "0.1.83-jadev.12"]) {
+    const old = { app: "lavish-axi", version: running };
+    assert.equal(shouldRestartServer("1.0.0", old), true, running);
+    assert.equal(serverReplacementReason("1.0.0", old), "upgrade", running);
+    assert.equal(shouldKillProcessOnPort("1.0.0", old), true, running);
+  }
+  const newer = { app: "lavish-axi", version: "1.0.1" };
+  assert.equal(shouldRestartServer("1.0.0", newer), false);
+  assert.equal(shouldKillProcessOnPort("1.0.0", newer), false);
+  assert.equal(serverReplacementReason("1.0.0", newer), "");
+  assert.equal(shouldRestartServer("1.0.1", { app: "lavish-axi", version: "1.0.0" }), true);
+  assert.equal(shouldRestartServer("1.0.0", { app: "lavish-axi", version: "1.1.0-beta.1" }), false);
+  assert.equal(shouldRestartServer("1.1.0", { app: "lavish-axi", version: "1.1.0-beta.1" }), true);
+  // Fork servers still order among themselves, so an older 0.1.x CLI still on PATH somewhere is
+  // judged the same way the fork judged it.
+  assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.90-jadev.12" }), false);
+  assert.equal(shouldRestartServer("0.1.90-jadev.13", { app: "lavish-axi", version: "0.1.90-jadev.12" }), true);
+  assert.equal(shouldRestartServer("1.0.0", newer, true), true, "a forced local build still replaces");
+});
+
+test("a Lavish server process is recognised from its npm install path too", () => {
+  assert.equal(isLavishServerCommand("node /usr/local/lib/node_modules/lavish-axi/dist/server.mjs server"), true);
+  assert.equal(
+    isLavishServerCommand("node /usr/local/lib/node_modules/@jadev-corp/lavish/dist/server.mjs server --port 4387"),
+    true,
+  );
+  assert.equal(
+    isLavishServerCommand("node /Users/me/.npm/_npx/1a2b/node_modules/@jadev-corp/lavish/dist/server.mjs server"),
+    true,
+  );
+  assert.equal(isLavishServerCommand("node /Users/me/dev/lavish-axi/bin/lavish-axi-server.js server"), true);
+  assert.equal(isLavishServerCommand("node /srv/lavish-site/server.js"), false);
+  assert.equal(isLavishServerCommand("python -m http.server 4387"), false);
 });
 
 test("the CLI reports the package's own semver version", async () => {
