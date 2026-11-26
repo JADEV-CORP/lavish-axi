@@ -52,6 +52,7 @@ Each line is the rule. [docs/invariants.md](docs/invariants.md) has the failure 
 - Live-event WebSockets keep the ping/pong heartbeat so half-open sockets terminate. Idle self-shutdown keys off tracked live connections, not session status. [Process model](docs/invariants.md#process-model).
 - The detached server entrypoint logs `uncaughtException` and exits 1 explicitly. Each listener keeps its `error` handler after `listening`. [Process model](docs/invariants.md#process-model).
 - `/api/:key/prompts`, `/share`, whiteboard writes, and attachment upload/delete are same-origin guarded. The key alone must never queue a prompt or publish. [Request flow](docs/invariants.md#request-flow).
+- Version restore, gallery pins and gallery reopen are same-origin guarded. A version view carries no SDK and keeps its `sandbox` CSP. Versions are read only under their own page key. [Versions and gallery](docs/invariants.md#versions-and-gallery-jadev-fork).
 - Poll control `GET` and `POST` requests reject a present foreign Origin or Referer while header-less CLI requests keep working. [Request flow](docs/invariants.md#request-flow).
 - The chrome page (`/session/:key`) answers `X-Frame-Options: DENY` and `frame-ancestors 'none'`. Keep that header off `/artifact/*` and `/whiteboard-frame`, which are framed. [Request flow](docs/invariants.md#request-flow).
 - The artifact route injects only the one SDK `<script>` tag. Served artifact bytes otherwise match the file on disk. [Request flow](docs/invariants.md#request-flow).

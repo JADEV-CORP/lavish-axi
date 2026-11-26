@@ -169,6 +169,74 @@ sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"`
 five real options with IDs and fit scores, Go / Maybe / No on each with a note, an open "Something else?" question, and
 numbered rounds that open with what changed.
 
+## Versions
+
+Every saved change of a page's HTML becomes a version, kept on this machine. Lavish records one when the page is
+opened, each time the file watcher reports a save, and before and after a restore. A save that leaves the bytes
+unchanged adds nothing.
+
+In the review, **More > Versions** (or **Show versions** in the command palette) opens the panel. It lists every
+version with its time, size, size change and one line on what changed: lines changed, added or removed, and the first
+text that changed. Pick one to view it read-only. **Compare** diffs it against any other version, by the text the page
+shows or by its HTML, with the changed words marked. **Restore** asks first, then writes that version back to the page
+file. The open review reloads, and the restore is saved as a new version, so the state it replaced stays in the list.
+A restore does not mark delivered notes Working: that save is the reviewer's, not the agent's.
+
+Agents use the CLI:
+
+```sh
+lavish versions plan.html               # newest first: number, time, size, change, summary
+lavish versions plan.html --show 3      # version 3's HTML, exactly
+lavish versions plan.html --show 3 --out /tmp/plan-v3.html
+lavish versions plan.html --restore 3   # only when the user asks for an earlier state
+```
+
+`versions` needs no running server. Listing also records the page as it is now when that state is new.
+
+Storage lives in the state directory, one folder per page key:
+
+- `versions/<key>/index.json` lists the versions oldest first: number, sha256, time, size, stored size, source
+  (`open`, `save`, `restore` or `cli`), the restored version's number and the change summary. It never holds the page
+  path.
+- `versions/<key>/<sha256>.html.gz` holds each distinct content once, gzipped. Going back to earlier content adds a
+  version and no bytes. A read checks the sha256 and refuses a damaged object.
+- Folders are `0700`, files `0600`. `index.json` is replaced by write and rename, so a crash leaves the old list.
+
+Limits: 50 versions per page (`LAVISH_AXI_VERSIONS_MAX`), 25 MB of stored objects per page
+(`LAVISH_AXI_VERSIONS_MAX_MB`), and no version for a save over 10 MB. The oldest go first; the newest always stays.
+`LAVISH_AXI_VERSIONS=0` stops recording; stored versions still list, show and restore.
+
+What versions do not cover: images, styles and scripts beside the page are not versioned. A version renders with the
+page's current assets. Text a script builds at runtime is not in the text diff; the HTML diff shows its source. Saves
+made while Lavish was not watching the page are kept as one version the next time it opens.
+
+A version renders from `/api/<key>/versions/<n>/view` with a `<base>` pointing at the page's folder, no SDK, and the
+CSP `sandbox allow-scripts; frame-ancestors 'self'`. Restore is same-origin guarded like `/prompts`, refuses an ended
+review, and never writes through a symlink swapped in after the page was opened.
+
+## Gallery
+
+The server's root URL (`/`, also `/gallery`) lists every page this machine opened in Lavish: title, project folder,
+path with `~` for the home folder, last change, and status. **Waiting for you** means the page waits for the reviewer,
+**Answered** means the reviewer sent something the agent has not answered, **Ended** means the review was closed. A
+green dot means the agent is listening. Search matches titles, folders and paths; `/` focuses it. The status filters
+show counts. Pins put pages at the top and live in `gallery-pins.json` in the state directory. One click opens a page;
+an ended review reopens first, which is the reviewer's explicit opt-in.
+
+`lavish gallery` opens it in the browser. A person who runs `lavish` alone at a terminal also gets it opened: both
+ends must be a TTY, with no agent harness (`CLAUDECODE`, `CODEX_*`, T3 Code), no `CI` and no `LAVISH_AXI_NO_OPEN`.
+Agents still get the home output and nothing opens for them.
+
+The gallery reads `state.json` and the first 16 KB of each page for its `<title>`, cached by modification time, so a
+gallery of hundreds of pages costs one stat per page after the first load. Rows render once and filter by toggling
+`hidden`. It follows the same host rules as review pages; full paths are not sent, only `~` paths. Pin and reopen are
+same-origin guarded, and the page answers `X-Frame-Options: DENY`.
+
+The Versions panel and the gallery ship as their own files (`src/versions-client.js`, `src/versions.css`,
+`src/gallery-client.js`, `src/gallery.css`), served from a fixed allowlist under `/lavish-assets/`. The Versions
+script reaches `chrome-client.js` only through `window.setLayerOpen`, `window.closeMenus` and the `lavish:versions`
+document event.
+
 ## Polls survive a server restart
 
 A newer CLI replacing the server, `lavish stop`, or a Tailscale address change all restart the server. A poll
@@ -224,7 +292,8 @@ pnpm run check
 Resolve conflicts in favour of upstream behaviour unless the fork deliberately changed it; the fork's changes are in
 `src/chrome.css`, `src/chrome-client.js`, `src/server.js` (chrome markup), `src/artifact-sdk.js` (pins, outlines,
 palette hotkey), `src/design-reference.js`, `src/whiteboard-frame.css` (the whiteboard header and Excalidraw
-accent on the chrome palette and preset), and their tests. Bump the minor version, name the new upstream base in
+accent on the chrome palette and preset), the versions and gallery files (`src/version-*.js`, `src/versions*`,
+`src/gallery*`), and their tests. Upstream's root page was a short status card; here `/` is the gallery. Bump the minor version, name the new upstream base in
 `CHANGELOG.md`, open a PR into `main`, and release it with a tag once it merges.
 
 ## Hidden files are not served

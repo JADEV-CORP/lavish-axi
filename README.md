@@ -61,6 +61,8 @@ This is the JADEV build of [lavish-axi](https://github.com/kunchenguid/lavish-ax
 | **draw.io diagrams**  | `lavish diagram flow.drawio` renders a static SVG that follows light and dark mode, keeps the diagram editable in draw.io, and gives the agent a preview to check before you see it.         |
 | **Beside the chat**   | In T3 Code the review opens in the thread's preview panel, and in VS Code's Copilot chat in the integrated browser, instead of a separate window.                                            |
 | **Brainstorm rounds** | `lavish playbook brainstorm` shapes a thinking session: the problem, a diagram, three to five real options, Go / Maybe / No with notes, and numbered rounds.                                 |
+| **Versions**          | Every saved change of a page is kept on your machine. View any version, compare two by text or HTML, and restore one after a confirmation. Agents use `lavish versions`.                     |
+| **Gallery**           | `lavish` at a terminal, or the server's root URL, lists every page you opened: title, folder, last change, status, search and pins. One click reopens a page.                                |
 
 ## Inside T3 Code and VS Code
 

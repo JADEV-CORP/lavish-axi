@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+### Added
+
+- **Versions.** Every saved change of a page's HTML is kept in the state directory: content-addressed, gzipped, 50 per page and 25 MB per page by default, oldest pruned first. **More > Versions** lists them with a one-line summary, shows any version read-only, compares two by text or HTML, and restores one after a confirmation. `lavish versions <page>` lists them for agents; `--show <n>` prints one, `--restore <n>` writes it back. Assets beside the page are not versioned. `LAVISH_AXI_VERSIONS=0` stops recording.
+- **Gallery.** The server's root URL lists every page this machine opened in Lavish, with title, folder, `~` path, last change and status (waiting for you, answered, ended), search, status filters and pins kept in the state directory. One click opens a page and reopens an ended review. `lavish gallery` opens it, and so does `lavish` alone at a terminal; agents keep the home output.
+
 ## 1.0.0 (2026-11-26)
 
 First release of `@jadev-corp/lavish` on npm. It is based on [lavish-axi](https://github.com/kunchenguid/lavish-axi) 0.1.98 by Kun Chen, under the MIT license. Upstream's release history is in [its changelog](https://github.com/kunchenguid/lavish-axi/blob/main/CHANGELOG.md). Every change this build makes to upstream is described in [docs/jadev-fork.md](docs/jadev-fork.md).
