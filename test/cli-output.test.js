@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -358,7 +357,7 @@ test("top-level help renders static home output without dynamic sessions", async
     );
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /playbooks\[8\]/);
+    assert.match(result.stdout, /playbooks\[9\]/);
     assert.match(result.stdout, /lavish-axi playbook <playbook_id>/);
     assert.match(result.stdout, /reference other filesystem assets/);
     assert.match(result.stdout, /same directory as the HTML file/);
@@ -380,7 +379,7 @@ test("design output prints copy-pasteable CDN URLs so agents can opt in to Daisy
   const output = createDesignOutput();
 
   assert.match(output.playbook_router.instruction, /MUST open each matching playbook before writing HTML/);
-  assert.equal(output.playbook_router.playbooks.length, 8);
+  assert.equal(output.playbook_router.playbooks.length, 9);
   assert.equal(
     output.playbook_router.playbooks.find((playbook) => playbook.id === "diagram")?.use_when,
     "Explain relationships, flows, state, architecture, and concepts with illustrations",
@@ -464,10 +463,10 @@ test("design output recommends the lavish theme by default and warns against @ap
 test("playbook index output lists known playbooks with concise descriptions", () => {
   const output = createPlaybookOutput([]);
 
-  assert.equal(output.playbooks.length, 8);
+  assert.equal(output.playbooks.length, 9);
   assert.deepEqual(
     output.playbooks.map((playbook) => playbook.id),
-    ["diagram", "table", "comparison", "plan", "code", "input", "explanation", "slides"],
+    ["diagram", "table", "comparison", "plan", "code", "input", "brainstorm", "explanation", "slides"],
   );
   assert.equal(
     output.playbooks.find((playbook) => playbook.id === "plan")?.use_when,
@@ -501,10 +500,17 @@ test("explanation playbook routes understanding of existing things and separates
   assert.ok(output.playbook.pitfalls.some((item) => /inferred reasoning as verified fact/i.test(item)));
 });
 
-test("diagram playbook defaults to hand-authored SVG and names the anti-patterns", () => {
+test("diagram playbook sends system diagrams to draw.io, small figures to inline SVG, and names the anti-patterns", () => {
   const output = createPlaybookOutput(["diagram"]);
 
-  assert.ok(output.playbook.choose.some((item) => /Default to hand-authored inline SVG/.test(item)));
+  assert.ok(output.playbook.choose.some((item) => /needs at least one visible diagram/i.test(item)));
+  assert.ok(
+    output.playbook.choose.some(
+      (item) => /Use draw\.io for architecture/.test(item) && /lavish-axi diagram/.test(item),
+    ),
+  );
+  assert.ok(output.playbook.choose.some((item) => /hand-authored inline SVG for a small conceptual figure/.test(item)));
+  assert.ok(output.playbook.pitfalls.some((item) => /Do not serve a diagram you have not looked at/.test(item)));
   assert.ok(output.playbook.choose.some((item) => /only when the user asks for an editable whiteboard/i.test(item)));
   assert.ok(output.playbook.pitfalls.some((item) => /hand-build boxes-and-arrows/i.test(item)));
   assert.ok(output.playbook.pitfalls.some((item) => /div\/flexbox/i.test(item)));
