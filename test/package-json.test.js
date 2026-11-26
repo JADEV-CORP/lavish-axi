@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("check script runs all verification commands", async () => {
@@ -39,20 +39,6 @@ test("published package root is a complete Agent Plugin", async () => {
   assert.ok(packageJson.files.includes("skills/lavish"));
 });
 
-test("release-please keeps the plugin manifest version in step with the package", async () => {
-  const config = JSON.parse(await readFile(new URL("../release-please-config.json", import.meta.url), "utf8"));
-
-  assert.deepEqual(config.packages["."]["extra-files"], [{ type: "json", path: "plugin.json", jsonpath: "$.version" }]);
-});
-
-test("lavish-design agent skill is marked internal for skills CLI discovery", async () => {
-  const skillMd = await readFile(new URL("../.agents/skills/lavish-design/SKILL.md", import.meta.url), "utf8");
-  const frontmatter = skillMd.slice(4, skillMd.indexOf("\n---\n", 4));
-
-  assert.match(frontmatter, /^name: lavish-design$/m);
-  assert.match(frontmatter, /^metadata:\n {2}internal: true$/m);
-});
-
 test("public lavish skill is not marked internal", async () => {
   const skillMd = await readFile(new URL("../skills/lavish/SKILL.md", import.meta.url), "utf8");
   const frontmatter = skillMd.slice(4, skillMd.indexOf("\n---\n", 4));
@@ -88,20 +74,16 @@ test("pnpm lock root importer matches the publish manifest", async () => {
   }
 });
 
-test("release workflow publishes from the release tag checkout", async () => {
-  const workflow = await readFile(new URL("../.github/workflows/release-please.yml", import.meta.url), "utf8");
+test("only the JADEV workflows remain, and CI runs on every pull request", async () => {
+  // Upstream's release-please, no-mistakes and generated-file guards were removed. A sync with
+  // upstream can bring them back silently, so the workflow set is pinned here.
+  const workflows = (await readdir(new URL("../.github/workflows/", import.meta.url))).sort();
+  assert.deepEqual(workflows, ["ci.yml", "jadev-release.yml"]);
 
-  assert.match(
-    workflow,
-    /uses: actions\/checkout@v6\n\s+if: \$\{\{ steps\.release\.outputs\.release_created \}\}\n\s+with:\n\s+ref: \$\{\{ steps\.release\.outputs\.tag_name \}\}/,
-  );
-});
+  for (const file of ["../release-please-config.json", "../.release-please-manifest.json"]) {
+    await assert.rejects(access(new URL(file, import.meta.url)), { code: "ENOENT" });
+  }
 
-test("release workflow keeps telemetry env during npm publish prepack", async () => {
-  const workflow = await readFile(new URL("../.github/workflows/release-please.yml", import.meta.url), "utf8");
-
-  assert.match(
-    workflow,
-    /run: npm publish --access public --provenance\n\s+if: \$\{\{ steps\.release\.outputs\.release_created \}\}\n\s+env:\n\s+LAVISH_AXI_UMAMI_HOST: https:\/\/a\.kunchenguid\.com\n\s+LAVISH_AXI_UMAMI_WEBSITE_ID: \$\{\{ vars\.LAVISH_AXI_UMAMI_WEBSITE_ID \}\}/,
-  );
+  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.doesNotMatch(ci, /paths-ignore|release-please/);
 });

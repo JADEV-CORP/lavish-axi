@@ -219,7 +219,6 @@ test("poll rejects over-limit agent reply files and stdin with an actionable err
   const env = {
     ...process.env,
     LAVISH_AXI_STATE_DIR: path.join(dir, "state"),
-    LAVISH_AXI_TELEMETRY: "0",
   };
   try {
     for (const result of [
@@ -260,7 +259,6 @@ test("poll --agent-reply-file and stdin land multiline Markdown in the transcrip
     LAVISH_AXI_PORT: String(server.port),
     LAVISH_AXI_HOST: "127.0.0.1",
     LAVISH_AXI_LINK_HOST: "127.0.0.1",
-    LAVISH_AXI_TELEMETRY: "0",
     LAVISH_AXI_NO_OPEN: "1",
   };
   try {

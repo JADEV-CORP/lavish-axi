@@ -23,10 +23,6 @@
 
 <h3 align="center">For when a rich editor is not rich enough.</h3>
 
-<p align="center">
-  <img alt="Lavish Editor demo" src="../lavish-editor-marketing/renders/lavish-editor-marketing.gif" width="960" />
-</p>
-
 > **Jadev fork.** This is Jadev's fork of lavish-axi, versioned `<upstream>-jadev.<n>`. Install, upgrade, and upstream sync are in [docs/jadev-fork.md](jadev-fork.md); `lavish-axi update` is disabled here because it would install the upstream npm release.
 
 HTML is the new markdown. Lavish is the new editor for your HTML artifacts.
@@ -59,7 +55,6 @@ The skill teaches your agent to run Lavish through `npx -y lavish-axi`, so the C
 It stays a short stub and sends the agent to `npx -y lavish-axi --help`, `reply --help`, `design`, and `playbook` for current instructions, so an installed copy cannot go stale against a newer CLI.
 Its frontmatter also includes Hermes Agent metadata, so Hermes-compatible harnesses can categorize and surface it as a first-class productivity skill.
 This installs the public `lavish` skill.
-The repository also contains an internal `lavish-design` brand skill for maintainers; default `npx skills add ... --list` and skills.sh discovery hide it unless `INSTALL_INTERNAL_SKILLS=1` is set.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
 
@@ -335,22 +330,6 @@ For flows, architecture, state, or sequence diagrams, open the diagram playbook 
 | Server clients           | `--force`                   | Allow interrupting active shared reviews. Without it, replacement or stop returns `SERVER_BUSY`.                                                                                                                                                                                                                              |
 | `lavish-axi server`      | `--verbose`                 | Log session and watcher events to stderr; can also be enabled with `LAVISH_AXI_DEBUG=1`. Detached server output is appended with UTC timestamps to `~/.lavish-axi/server.log` (or `LAVISH_AXI_STATE_DIR/server.log`) for startup, shutdown-cause, and crash diagnostics.                                                      |
 | `lavish-axi server`      | `--also-listen <host>`      | Also listen on this concrete address (repeatable). The CLI passes it when it replaces a running server, so the replacement keeps every address the old one served; see One server per port.                                                                                                                                   |
-
-## Telemetry
-
-The Jadev fork's builds omit the upstream analytics website ID, so telemetry is inactive. Keep it omitted.
-The description below applies to upstream npm releases. Installing one replaces this fork and its custom UI.
-
-The npm release sends anonymous usage telemetry to an [Umami](https://umami.is) server at `https://a.kunchenguid.com`. The host and website ID are baked into the published bundle at build time, so telemetry is on by default for `npx -y lavish-axi`.
-
-Each `lavish-axi` run sends two requests, except `lavish-axi --version` (also `-v` and `-V`), which sends none: a page view when the command starts, and a `command` event when it finishes. Both carry:
-
-- the command name (for example `open`, `poll`, or `home` when you run it with no command), but not its arguments, file paths, artifact content, or prompts
-- the Lavish version, `process.platform`, and `process.arch`
-
-The `command` event also carries a `status` field: `success`, or `error` only when the CLI itself throws. A command that fails and sets a nonzero exit code is handled by the CLI framework, so it still reports `success`. No user identifier is sent. Requests time out after 1 second, and failures are ignored, so telemetry never changes what a command does.
-
-Set `LAVISH_AXI_TELEMETRY=0` (or `false` or `off`) to turn it off. A build from source sends nothing unless `LAVISH_AXI_UMAMI_WEBSITE_ID` is set, and `LAVISH_AXI_UMAMI_HOST` overrides the host.
 
 ## Development
 

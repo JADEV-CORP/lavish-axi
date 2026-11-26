@@ -244,7 +244,6 @@ test("built CLI refuses an upgrade with an active poll, then honors explicit for
     LAVISH_AXI_STATE_DIR: f.dir,
     LAVISH_AXI_HOST: "127.0.0.1",
     LAVISH_AXI_LINK_HOST: "127.0.0.1",
-    LAVISH_AXI_TELEMETRY: "0",
     LAVISH_AXI_NO_OPEN: "1",
   };
   try {

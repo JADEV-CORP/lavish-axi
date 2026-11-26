@@ -180,9 +180,8 @@ The `home()` callback returns the rich object shown when the user runs `lavish-a
 Poll execution guidance is shared across home output, help, and `next_step` responses through `POLL_WAKE_PATH_RULES`: every harness gets the same completion-aware wake-path contract, while `detectInvokingAgent` adds an attached-turn warning when `CODEX_SANDBOX` or `CODEX_THREAD_ID` identifies Codex. The installable skill does not restate these rules; it points at `lavish-axi --help`.
 Agent-facing design guidance is single-sourced in `src/design-reference.js`: `DESIGN_PRIORITY_RULE` states the design-direction priority order exactly once, and `DESIGN_SYSTEM_HINT`, the `lavish-axi design` summary, and the design command help all embed it - never restate the rule on another surface (README carries only a one-sentence summary). The skill points at `lavish-axi design` instead of embedding the rule.
 `src/skill.js` renders the minimal installable Agent Skill, a stub pointing to the CLI commands for live guidance. It retains non-interactive `npx -y lavish-axi ...` invocation and slash-command request handling, omits live session state, and includes Hermes Agent frontmatter metadata for categorization.
-The generated skill intentionally omits a `version` frontmatter field because release-please updates `package.json` without regenerating `skills/lavish/SKILL.md`.
+The generated skill intentionally omits a `version` frontmatter field because a version bump in `package.json` does not regenerate `skills/lavish/SKILL.md`.
 `skills/lavish/SKILL.md` is the only public Agent Skill shipped through npm.
-The repository-local `.agents/skills/lavish-design/SKILL.md` brand skill is internal and must keep `metadata.internal: true` so `npx skills add ... --list` and skills.sh hide it unless `INSTALL_INTERNAL_SKILLS=1` is set.
 The bare-arg form (`lavish-axi some.html`) is normalized into `["open", "some.html"]` by `normalizeArgv`, which must let the SDK's `RESERVED_COMMANDS` (such as the built-in `update` self-updater) pass through untouched; otherwise the bare-arg rewrite turns `lavish-axi update` into `["open", "update"]` and the inherited reserved command never reaches `runAxiCli`.
 
 ### Agent Plugins packaging
@@ -193,17 +192,13 @@ Each client registers independently and a client that cannot be registered must 
 `setup plugin` registers only clients that install from a local path (VS Code, Cursor, Copilot CLI); Codex installs from marketplace sources only and is deliberately served by the SessionStart hook instead. Registration follows the same discipline as `setup hooks` - explicit invocation only (issue #43), idempotent, and path-repairing - and `isStalePluginLocation` only ever drops entries it can positively attribute to this plugin, so a user's other plugin locations survive. VS Code settings that fail to parse (they legally allow comments) are reported for manual edit, never rewritten.
 No `mcp.json` ships: the CLI itself is the agent interface, and adding one would create a second agent-facing contract to keep in sync.
 
-### Telemetry
+### Build version
 
-`src/telemetry.js` posts anonymous events to an Umami endpoint.
-The website ID and host can be baked into the bundle at build time via `LAVISH_AXI_UMAMI_HOST`/`LAVISH_AXI_UMAMI_WEBSITE_ID` env vars (consumed by `scripts/build.js` and inlined as `process.env.LAVISH_AXI_BUILD_UMAMI_*` defines).
-The build also inlines `package.json`'s version as `process.env.LAVISH_AXI_BUILD_VERSION` for the CLI/server version handshake, with source runs falling back to reading `package.json`.
-Users opt out with `LAVISH_AXI_TELEMETRY=0`.
-The client is best-effort and must never affect CLI behavior - all errors are swallowed.
+The build inlines `package.json`'s version as `process.env.LAVISH_AXI_BUILD_VERSION` for the CLI/server version handshake, with source runs falling back to reading `package.json`.
 
 ## Things to know when editing
 
-- `run()` short-circuits `--version`/`-v`/`-V` (`isVersionOnlyArgv`) before `ensureStateDir` and `initDefaultTelemetry`, because agent harnesses probe every tool's version at session start and the telemetry drain in the `finally` block costs up to a full second. Any new startup work must go after that short-circuit; `test/cli-version.test.js` guards both the latency budget and the "no telemetry request, no state dir" property.
+- `run()` short-circuits `--version`/`-v`/`-V` (`isVersionOnlyArgv`) before `ensureStateDir`, because agent harnesses probe every tool's version at session start. Any new startup work must go after that short-circuit; `test/cli-version.test.js` guards the "no state dir" property.
 - `canonicalFile` runs `realpath`, so symlinks resolve to their target before becoming session keys. Two paths that refer to the same file always collapse to one session.
 - The SDK injected into artifacts lives in `src/artifact-sdk.js` and is wrapped by `createSdkJs`.
   It executes inside an iframe sandboxed with `allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads` (no `allow-same-origin`), so it cannot read the chrome's DOM - communication is `postMessage` only - and it runs the layout audit in the iframe because the chrome cannot directly inspect the sandboxed document. `allow-popups-to-escape-sandbox` lets popups render as top-level tabs without weakening the artifact iframe. Every `/artifact/*` response also carries the matching CSP `sandbox` policy, so an escaped popup that navigates to an artifact-owned active document remains opaque-origin and cannot become a same-origin application client.

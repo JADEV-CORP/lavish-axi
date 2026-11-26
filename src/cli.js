@@ -69,7 +69,6 @@ import { resolveDesignAssetPath, serve } from "./server.js";
 import { isHtmlPath } from "./artifact-path.js";
 import { canonicalFile, sessionKey, SessionStore } from "./session-store.js";
 import { generateSharePassword } from "./share-password.js";
-import { initDefaultTelemetry } from "./telemetry.js";
 import { excalidrawLibrariesDir, loadExcalidrawLibraries } from "./whiteboard-library-store.js";
 
 const SHARE_VALUE_FLAGS = ["--password", "--token", "--site", "--update-key"];
@@ -216,8 +215,7 @@ export function isVersionOnlyArgv(argv) {
 
 export async function run(argv) {
   // `--version` sits on the agent-startup hot path (harnesses probe every tool's version
-  // at session start), so it must never pay for state-dir creation or the telemetry
-  // request drain in the `finally` below - that drain alone costs up to a full second.
+  // at session start), so it must never pay for state-dir creation.
   if (isVersionOnlyArgv(argv)) {
     process.stdout.write(`${VERSION}\n`);
     return;
@@ -226,53 +224,37 @@ export async function run(argv) {
   const normalizedArgv = normalizeArgv(argv);
   const agent = detectInvokingAgent(process.env);
   const isTopLevelHelp = argv.length === 1 && argv[0] === "--help";
-  const command = telemetryCommandName(argv);
-  const telemetry = initDefaultTelemetry({
-    app: "lavish-axi",
+  await runAxiCli({
+    description: DESCRIPTION,
     version: VERSION,
-    platform: process.platform,
-    arch: process.arch,
+    argv: isTopLevelHelp ? [] : normalizedArgv,
+    topLevelHelp: createTopLevelHelp({ agent }),
+    home: async () =>
+      createHomeOutput({
+        bin: process.argv[1] || "lavish-axi",
+        sessions: isTopLevelHelp ? [] : await visibleSessions(),
+        includeSessions: !isTopLevelHelp,
+        agent,
+      }),
+    commands: {
+      open: openCommand,
+      poll: pollCommand,
+      reply: replyCommand,
+      end: endCommand,
+      stop: stopCommand,
+      playbook: playbookCommand,
+      design: designCommand,
+      setup: setupCommand,
+      server: serverCommand,
+      export: exportCommand,
+      share: shareCommand,
+      update: updateCommand,
+      libraries: librariesCommand,
+      diagram: diagramCommand,
+      "bind-agent": bindAgentCommand,
+    },
+    getCommandHelp: (command) => getCommandHelp(command, { agent }),
   });
-  telemetry.pageview(`/${command}`, { command });
-  try {
-    await runAxiCli({
-      description: DESCRIPTION,
-      version: VERSION,
-      argv: isTopLevelHelp ? [] : normalizedArgv,
-      topLevelHelp: createTopLevelHelp({ agent }),
-      home: async () =>
-        createHomeOutput({
-          bin: process.argv[1] || "lavish-axi",
-          sessions: isTopLevelHelp ? [] : await visibleSessions(),
-          includeSessions: !isTopLevelHelp,
-          agent,
-        }),
-      commands: {
-        open: openCommand,
-        poll: pollCommand,
-        reply: replyCommand,
-        end: endCommand,
-        stop: stopCommand,
-        playbook: playbookCommand,
-        design: designCommand,
-        setup: setupCommand,
-        server: serverCommand,
-        export: exportCommand,
-        share: shareCommand,
-        update: updateCommand,
-        libraries: librariesCommand,
-        diagram: diagramCommand,
-        "bind-agent": bindAgentCommand,
-      },
-      getCommandHelp: (command) => getCommandHelp(command, { agent }),
-    });
-    telemetry.track("command", { command, status: "success" });
-  } catch (error) {
-    telemetry.track("command", { command, status: "error" });
-    throw error;
-  } finally {
-    await telemetry.close(1_000);
-  }
 }
 
 export function collapseHomeDirectory(file, home) {
@@ -297,11 +279,6 @@ export function normalizeArgv(argv) {
     return argv.some((arg) => isHtmlPath(arg)) ? ["open", ...argv] : argv;
   }
   return ["open", ...argv];
-}
-
-export function telemetryCommandName(argv) {
-  const normalized = normalizeArgv(argv);
-  return normalized[0] && !normalized[0].startsWith("-") ? normalized[0] : "home";
 }
 
 export function createHomeOutput({ bin, sessions, includeSessions = true, agent = "generic" }) {

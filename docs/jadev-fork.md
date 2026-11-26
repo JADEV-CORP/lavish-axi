@@ -13,8 +13,8 @@ The fork versions as `<upstream version>-jadev.<n>`, for example `0.1.83-jadev.1
 mistake for an npm release, and `<n>` goes up with each fork release on the same upstream base. A merge of a new
 upstream release resets it: `0.1.84-jadev.1`.
 
-Change the version in `package.json` and run `pnpm run build:plugin` so `plugin.json` follows. Do not hand-edit
-`CHANGELOG.md` or `.release-please-manifest.json`; release-please belongs to upstream.
+Change the version in `package.json` and run `pnpm run build:plugin` so `plugin.json` follows. `CHANGELOG.md` is
+this package's own and written by hand; upstream's history stays in upstream's repository.
 
 ## Install on a machine
 
@@ -203,7 +203,16 @@ artifact is never readable over the network. The artifact's own folder can be hi
 below it is checked. This lives in `hasHiddenSegment` (`src/artifact-path.js`) and the `/artifact` route; keep it
 when merging upstream changes to either.
 
-## Telemetry
+## Removed from upstream
 
-Upstream's release builds inject an analytics site id at build time. Fork builds do not set
-`LAVISH_AXI_BUILD_UMAMI_WEBSITE_ID`, so the telemetry client is a no-op and nothing is sent. Keep it that way.
+The package is kept lean. These upstream parts are gone from the repository and the tarball:
+
+- Telemetry: `src/telemetry.js` and its build-time Umami settings. The CLI sends no usage data and reads no
+  `LAVISH_AXI_TELEMETRY` or `LAVISH_AXI_UMAMI_*` variable.
+- The marketing video project (`lavish-editor-marketing/`) and its GIF.
+- Upstream's release and PR tooling: release-please (`release-please.yml`, its config and manifest),
+  `no-mistakes-required.yml` and `guard-generated-files.yml`. CI is `ci.yml`, releases are `jadev-release.yml`.
+- Maintainer-only material: `task-evidence/` and the internal `lavish-design` brand skill under `.agents/`.
+
+An upstream merge that touches any of these stops on a modify/delete conflict: keep the deletion (`git rm`).
+`test/package-json.test.js` fails if an upstream workflow comes back.

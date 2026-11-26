@@ -55,7 +55,6 @@ import {
   shouldRestartServer,
   startPollWaitReporter,
   stopCommand,
-  telemetryCommandName,
   VERSION,
 } from "../src/cli.js";
 import { DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "../src/design-reference.js";
@@ -118,7 +117,7 @@ test("home help names LAVISH_AXI_ALLOWED_HOSTS for the 403 forbidden host case",
   assert.match(hostHelp, /`lavish-axi stop`/);
 });
 
-test("CLI version tracks package.json so release-please bumps reach the published binary", async () => {
+test("CLI version tracks package.json so version bumps reach the published binary", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(VERSION, packageJson.version);
 });
@@ -788,19 +787,6 @@ test("theme-aware Mermaid snippet serializes rapid theme-change renders", async 
   await Promise.resolve();
 });
 
-test("Mermaid after evidence embeds the shipped theme-aware snippet", async () => {
-  const evidence = await readFile(new URL("../task-evidence/mermaid-theme/after.html", import.meta.url), "utf8");
-  const start = evidence.indexOf('    <script type="module">');
-  const closingScript = evidence.indexOf("    </script>", start);
-
-  assert.notEqual(start, -1);
-  assert.notEqual(closingScript, -1);
-  assert.equal(
-    evidence.slice(start, closingScript + "    </script>".length).replace(/^ {4}/gm, ""),
-    createDesignOutput().whiteboard_tooling.mermaid_cdn_snippet,
-  );
-});
-
 test("playbook detail output returns focused Lavish-native guidance", () => {
   const output = createPlaybookOutput(["input"]);
 
@@ -1038,7 +1024,7 @@ test("export command writes a portable HTML file next to the artifact", async ()
       [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "export", artifact],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_TELEMETRY: "0" },
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir },
         encoding: "utf8",
       },
     );
@@ -1066,7 +1052,7 @@ test("export command treats --out value as an option operand, not the source fil
       [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "export", "--out", output, artifact],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_TELEMETRY: "0" },
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir },
         encoding: "utf8",
       },
     );
@@ -1685,7 +1671,6 @@ test("share command publishes the artifact to ht-ml.app and returns the public u
         env: {
           ...process.env,
           LAVISH_AXI_STATE_DIR: dir,
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_HTML_APP_API_URL: `http://127.0.0.1:${htmlApp.port}`,
         },
       },
@@ -1730,7 +1715,6 @@ test("share command refuses a whitespace-only password instead of quietly publis
         env: {
           ...process.env,
           LAVISH_AXI_STATE_DIR: dir,
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_HTML_APP_API_URL: `http://127.0.0.1:${htmlApp.port}`,
         },
       },
@@ -2919,15 +2903,6 @@ test("setup rejects an unknown action and names both supported ones", async () =
   }
 });
 
-test("telemetry command names are anonymous and do not include file paths", () => {
-  assert.equal(telemetryCommandName(["report.html"]), "open");
-  assert.equal(telemetryCommandName(["poll", "/tmp/secret/report.html"]), "poll");
-  assert.equal(telemetryCommandName(["end", "/tmp/secret/report.html"]), "end");
-  assert.equal(telemetryCommandName(["playbook", "diagram"]), "playbook");
-  assert.equal(telemetryCommandName(["design"]), "design");
-  assert.equal(telemetryCommandName([]), "home");
-});
-
 test("server spawn options detach without inheriting invalid streams", () => {
   const options = createServerSpawnOptions();
 
@@ -3383,7 +3358,6 @@ test("opening an artifact names that session as the one to reload across a versi
           ...process.env,
           LAVISH_AXI_PORT: String(recorder.port),
           LAVISH_AXI_STATE_DIR: stateDir,
-          LAVISH_AXI_TELEMETRY: "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -3681,7 +3655,7 @@ test("update is refused in the Jadev fork instead of installing the upstream npm
         {
           cwd: fileURLToPath(new URL("..", import.meta.url)),
           encoding: "utf8",
-          env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir, LAVISH_AXI_TELEMETRY: "0" },
+          env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir },
         },
       );
       assert.notEqual(result.status, 0, args.join(" "));
