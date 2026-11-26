@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 // TOON for the context data an artifact attaches to a prompt (#3834): the official encoder's default
 // output (2-space indent, comma delimiter, no key folding) in functions only, because the artifact
 // SDK inlines this module with serializeModuleHelpers. test/toon-encode.test.js compares every case

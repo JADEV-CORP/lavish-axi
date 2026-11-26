@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";

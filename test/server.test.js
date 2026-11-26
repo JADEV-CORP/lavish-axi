@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { on, once } from "node:events";
