@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
@@ -43,6 +42,7 @@ import * as artifactRevisions from "./artifact-revisions.js";
 import { createAgentNudger } from "./agent-nudge.js";
 import * as findInPage from "./find-in-page.js";
 import * as mermaidNode from "./mermaid-node.js";
+import * as queueAll from "./queue-all.js";
 import * as tableCellHelpers from "./table-cell.js";
 import * as toonEncode from "./toon-encode.js";
 import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
@@ -3664,6 +3664,7 @@ export function createSdkJs(
   const revisionHelperSource = serializeModuleHelpers(artifactRevisions);
   const findHelperSource = serializeModuleHelpers(findInPage);
   const toonHelperSource = serializeModuleHelpers(toonEncode);
+  const queueAllHelperSource = serializeModuleHelpers(queueAll);
   const revisionNumber = Number(artifactRevision);
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : 0;
   const loadToken = String(artifactLoadToken || "").slice(0, 200);
@@ -3704,6 +3705,7 @@ ${tableHelperSource.declarations}
 ${revisionHelperSource.declarations}
 ${findHelperSource.declarations}
 ${toonHelperSource.declarations}
+${queueAllHelperSource.declarations}
 (${createArtifactSdk.toString()})(deriveQueueKey, isNativeInteractiveControl, mermaidHelpers, artifactRevision, artifactLoadToken, key, ${JSON.stringify(sdkOptions)});
 })();`;
 }

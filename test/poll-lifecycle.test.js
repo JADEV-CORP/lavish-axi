@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 // "Some sessions keep disconnecting the poll after sending the agent message" (#3834). Each case
 // pins what happens to the listener after an agent reply: poll --agent-reply must keep listening
 // through review-tab churn, and only a real absence past the grace may return browser_disconnected.

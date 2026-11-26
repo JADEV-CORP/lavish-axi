@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 JADEV-CORP. All rights reserved. Proprietary and confidential. -->
+<!-- Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE. -->
 
 # Implementation invariants
 

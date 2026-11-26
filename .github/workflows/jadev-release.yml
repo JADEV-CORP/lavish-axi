@@ -1,0 +1,38 @@
+name: JADEV release
+
+# Push a tag such as lavish-axi-v0.1.98-jadev.2 on main: the checks run, the package is packed,
+# and a GitHub release carries the .tgz that `npm i -g <release asset url>` installs.
+on:
+  push:
+    tags: ["lavish-axi-v*-jadev.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.repository == 'JADEV-CORP/lavish-axi'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Tag matches package.json
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          test "lavish-axi-v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} does not match ${version}"; exit 1; }
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+      - run: pnpm run check
+      - run: npm pack
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/lavish-axi-${VERSION}.tgz"
+          gh release create "${GITHUB_REF_NAME}" "lavish-axi-${VERSION}.tgz" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Install: \`npm i -g ${url}\`. Changes: see docs/jadev-fork.md."

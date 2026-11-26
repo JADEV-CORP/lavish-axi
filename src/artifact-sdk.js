@@ -3,6 +3,22 @@
 import { readArtifactRevisions } from "./artifact-revisions.js";
 import { findTextMatches, findTextNodeIndex, isFindHotkeyEvent } from "./find-in-page.js";
 import * as mermaidHelpers from "./mermaid-node.js";
+import {
+  appendNote,
+  batchSummaryPrompt,
+  copyAllText,
+  fallbackAnswerPrompt,
+  formatAnswerLines,
+  hasOwnNoteField,
+  isQueueAllOff,
+  queueAllButtonLabel,
+  queueAllStatusText,
+  questionSubmitter,
+  questionTitle,
+  readQuestionFields,
+  summarizeQuestions,
+  topLevelQuestionScopes,
+} from "./queue-all.js";
 import { tableCellTarget } from "./table-cell.js";
 import { encodeToon } from "./toon-encode.js";
 
@@ -500,6 +516,9 @@ export function createArtifactSdk(
   let hotPinSelector = "";
   let queuedAckSequence = 0;
   const pendingQueuedAcks = new Map();
+  // Every prompt the page queues, so Queue all can tell whether a question's own control queued.
+  let queuedPromptCount = 0;
+  let queueAllAckAnchor = null;
   let outlinedRevision = "";
   let overlayFrame = 0;
   // The element each note was queued from, by its selector. A selector is unique only for the
@@ -1410,10 +1429,15 @@ export function createArtifactSdk(
   // An answer the artifact queues gets a check beside the control that sent it, once the chrome
   // says the answer is in the queue (#3241). Only the ack id crosses back, never the answer.
   function queuePrompt(prompt, options = {}) {
-    const item = promptItem(prompt, options);
+    // A reviewer note on the question this prompt answers goes with it (see Queue all below).
+    const note = options.tag === "queue-all" ? "" : noteForElement(options.element || document.activeElement);
+    const item = promptItem(appendNote(prompt, note), options);
     if (options.element) rememberQueuedAnchor(item, options.element);
+    queuedPromptCount += 1;
     const ack = "q" + ++queuedAckSequence;
-    pendingQueuedAcks.set(ack, options.element || document.activeElement || document.body);
+    // During Queue all the bar's status line confirms the batch, instead of a check chasing each
+    // question's button down the page.
+    pendingQueuedAcks.set(ack, queueAllAckAnchor || options.element || document.activeElement || document.body);
     if (pendingQueuedAcks.size > 20) pendingQueuedAcks.delete(pendingQueuedAcks.keys().next().value);
     postArtifactMessage("lavish:queuePrompt", { prompt: { ...item, _lavishAck: ack } });
   }
@@ -2392,6 +2416,7 @@ export function createArtifactSdk(
         activeCardContext && activeCardContext.tag !== "text" && text.trim()
           ? { selector: String(activeCardContext.selector || ""), text: text.slice(0, 4000) }
           : null,
+      notes: notesState(),
       fields: lavishQuestionControls().map((entry) => ({
         key: entry.key,
         index: entry.index,
@@ -2413,6 +2438,7 @@ export function createArtifactSdk(
 
   function restoreReviewState(state) {
     if (!state || typeof state !== "object") return;
+    restoreNotes(state.notes);
     const fields = Array.isArray(state.fields) ? state.fields : [];
     if (fields.length) {
       const entries = lavishQuestionControls();
@@ -2471,8 +2497,12 @@ export function createArtifactSdk(
   // The editor's theme preset accent as a light-dark() pair, or "" for Lavish's own rose.
   let chromeAccent = "";
   let shadowHost = null;
-  let shadowHostThemed = false;
-  let shadowHostAccented = false;
+  let queueAllHost = null;
+  // Reviewer notes: one per question key, and one for the whole page (see Queue all below).
+  let pageNote = "";
+  const questionNotes = new Map();
+  // Note boxes, keyed by the question element: two questions may share an ID.
+  const noteHosts = new Map();
 
   let pageAccentStyle = null;
   function applyPageAccent(color) {
@@ -2517,24 +2547,32 @@ export function createArtifactSdk(
       : "";
   }
 
-  function applyChromeTheme() {
-    if (!shadowHost) return;
+  // The annotation card, the Queue all bar and the note boxes follow the editor's theme and
+  // accent. A host only loses a property it was given, so a host that never got one is untouched.
+  const hostThemeState = new WeakMap();
+  function applyHostTheme(host) {
+    if (!host) return;
+    const state = hostThemeState.get(host) || { themed: false, accented: false };
     if (chromeAccent) {
-      shadowHost.style.setProperty("--primary", chromeAccent);
-      shadowHost.style.setProperty("--primary-hover", chromeAccent);
-      shadowHostAccented = true;
-    } else if (shadowHostAccented) {
-      shadowHost.style.removeProperty("--primary");
-      shadowHost.style.removeProperty("--primary-hover");
-      shadowHostAccented = false;
+      host.style.setProperty("--primary", chromeAccent);
+      host.style.setProperty("--primary-hover", chromeAccent);
+      state.accented = true;
+    } else if (state.accented) {
+      host.style.removeProperty("--primary");
+      host.style.removeProperty("--primary-hover");
+      state.accented = false;
     }
     if (chromeTheme) {
-      shadowHost.setAttribute("data-theme", chromeTheme);
-      shadowHostThemed = true;
-    } else if (shadowHostThemed) {
-      shadowHost.removeAttribute("data-theme");
-      shadowHostThemed = false;
+      host.setAttribute("data-theme", chromeTheme);
+      state.themed = true;
+    } else if (state.themed) {
+      host.removeAttribute("data-theme");
+      state.themed = false;
     }
+    hostThemeState.set(host, state);
+  }
+  function applyChromeTheme() {
+    for (const host of [shadowHost, queueAllHost, ...noteHosts.values()]) applyHostTheme(host);
   }
 
   function ensureShadow() {
@@ -2909,6 +2947,7 @@ export function createArtifactSdk(
       window.scrollTo(Number(msg.x) || 0, Number(msg.y) || 0);
     }
     if (msg.type === "lavish:restoreReviewState") restoreReviewState(msg.state);
+    if (msg.type === "lavish:copyResult" && typeof msg.id === "string") handleCopyResult(msg);
     if (msg.type === "lavish:revealElement") revealElement(msg.selector);
     if (msg.type === "lavish:find") {
       const direction = msg.direction === 1 || msg.direction === -1 ? msg.direction : 0;
@@ -3702,5 +3741,523 @@ export function createArtifactSdk(
     document.addEventListener("DOMContentLoaded", reportArtifactRevisions, { once: true });
   } else {
     reportArtifactRevisions();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queue all. Any page with a `data-lavish-question` gets one bar at its end: a note for the
+  // whole page, Copy, Queue all and Queue all and send. It stays docked to the bottom of the
+  // viewport while the page scrolls and rests after the last question, so the reviewer never
+  // depends on the author writing a page-level button. A question without its own multi-line
+  // field gets an "Add note" toggle, so a proper note is always possible. Notes ride on the
+  // prompt they belong to and survive a live reload. `<html data-lavish-queue-all="off">` turns
+  // the bar off; `data-lavish-note="off"` on <html> or on a question turns the notes off.
+  // ---------------------------------------------------------------------------
+
+  let queueAllShadow = null;
+  let queueAllRefreshTimer = 0;
+  let queueAllLastResult = "";
+  let copySequence = 0;
+  const pendingCopies = new Map();
+
+  // Typing in a note or the bar is Lavish's business: these composed events would otherwise reach
+  // the page's own handlers, retargeted to a Lavish host inside the author's form.
+  const LAVISH_UI_PRIVATE_EVENTS = [
+    "keydown",
+    "keypress",
+    "keyup",
+    "beforeinput",
+    "input",
+    "compositionstart",
+    "compositionupdate",
+    "compositionend",
+  ];
+  const LAVISH_UI_TOKENS =
+    'color-scheme:light dark;--card:light-dark(oklch(1 0 0 / .95),oklch(0.212 0.019 322.12 / .95));--field:light-dark(oklch(1 0 0),oklch(0.145 0.008 326));--muted:light-dark(oklch(0.96 0.003 325.6),oklch(0.263 0.024 320.12));--muted-foreground:light-dark(oklch(0.542 0.034 322.5),oklch(0.711 0.019 323.02));--foreground:light-dark(oklch(0.145 0.008 326),oklch(0.985 0 0));--primary:light-dark(oklch(0.514 0.222 16.935),oklch(0.455 0.188 13.697));--primary-hover:light-dark(oklch(0.455 0.188 13.697),oklch(0.514 0.222 16.935));--primary-foreground:oklch(0.969 0.015 12.422);--border-color:light-dark(oklch(0.922 0.005 325.62),oklch(1 0 0 / 12%));font-family:"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif';
+  const LAVISH_UI_BASE =
+    ':host([data-theme="light"]){color-scheme:light}:host([data-theme="dark"]){color-scheme:dark}*{box-sizing:border-box}:focus-visible{outline:2px solid var(--primary);outline-offset:2px}' +
+    "textarea{display:block;width:100%;min-height:2.6em;max-height:40vh;resize:vertical;field-sizing:content;padding:8px 10px;border:1px solid var(--border-color);border-radius:0;background:var(--field);color:var(--foreground);font:inherit;font-size:14px;line-height:1.45}" +
+    "textarea::placeholder{color:var(--muted-foreground)}textarea:focus{border-color:var(--primary);outline:none}";
+
+  const QUEUE_ALL_CSS =
+    ":host{all:initial;display:block;position:sticky;bottom:0;z-index:2147483000;margin-top:32px;width:100%;flex-basis:100%;grid-column:1/-1;" +
+    LAVISH_UI_TOKENS +
+    "}" +
+    LAVISH_UI_BASE +
+    ".bar{display:flex;flex-direction:column;gap:8px;padding:12px 16px;background:var(--card);color:var(--foreground);border-top:1px solid var(--border-color);box-shadow:0 -8px 24px rgba(0,0,0,.08);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:14px;line-height:1.4}" +
+    ".row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px}" +
+    ".text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 240px}.title{font-weight:700}.status{color:var(--muted-foreground);font-size:13px}" +
+    ".open{display:inline;padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}" +
+    ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}" +
+    "button.act{border:1px solid transparent;border-radius:0;padding:9px 14px;font-family:inherit;font-weight:700;font-size:13px;line-height:1.1;cursor:pointer;white-space:nowrap}" +
+    ".primary{background:var(--primary);color:var(--primary-foreground)}.primary:hover{background:var(--primary-hover)}" +
+    ".secondary{background:var(--muted);color:var(--foreground);border-color:var(--border-color)}.secondary:hover{border-color:var(--muted-foreground)}" +
+    ".ghost{background:transparent;color:var(--foreground);border-color:var(--border-color)}.ghost:hover{background:var(--muted)}" +
+    "button:disabled{opacity:.5;cursor:not-allowed}" +
+    ".note textarea{min-height:2.6em}.note.is-collapsed textarea{max-height:2.6em;overflow:hidden}" +
+    ".manual{display:flex;flex-direction:column;gap:4px}.manual[hidden]{display:none}.manual span{font-size:12px;color:var(--muted-foreground)}" +
+    ".short{display:none}" +
+    // On a phone the bar is one compact block, so it never takes a third of the screen.
+    "@media (max-width:560px){.bar{padding:8px 12px;gap:6px}.title{display:none}.status{font-size:12px}.actions{width:100%;margin-left:0;flex-wrap:nowrap;gap:6px}.actions .act{flex:1 1 auto;padding:8px 6px;font-size:12px}.long{display:none}.short{display:inline}}" +
+    "@media print{:host{display:none}}";
+
+  const NOTE_CSS =
+    ":host{all:initial;display:block;margin:8px 0 0;" +
+    LAVISH_UI_TOKENS +
+    "}" +
+    LAVISH_UI_BASE +
+    ".toggle{padding:2px 0;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}.toggle:hover{color:var(--foreground)}" +
+    ".hint{margin-top:4px;font-size:12px;color:var(--muted-foreground)}[hidden]{display:none!important}@media print{:host{display:none}}";
+
+  function questionKey(scope) {
+    return String(scope?.getAttribute?.("data-lavish-question") || "").trim() || "Question";
+  }
+
+  function notesOff(scope) {
+    return (
+      isQueueAllOff(document.documentElement.getAttribute("data-lavish-note")) ||
+      isQueueAllOff(scope?.getAttribute?.("data-lavish-note"))
+    );
+  }
+
+  function queueAllQuestions() {
+    return topLevelQuestionScopes(document).map((scope) => {
+      const key = questionKey(scope);
+      const fields = readQuestionFields(scope);
+      const lines = formatAnswerLines(fields);
+      const values = fields.map((field) => field.value).join("; ");
+      const note = String(questionNotes.get(key) || "").trim();
+      return {
+        scope,
+        key,
+        title: questionTitle(scope),
+        lines,
+        values,
+        note,
+        answered: lines.length > 0 || Boolean(note),
+      };
+    });
+  }
+
+  function queueAllWanted() {
+    if (isQueueAllOff(document.documentElement.getAttribute("data-lavish-queue-all"))) return false;
+    // The author built a page-level control and marked it: theirs wins, no second bar.
+    if (document.querySelector("body [data-lavish-queue-all]")) return false;
+    return topLevelQuestionScopes(document).length > 0;
+  }
+
+  // The note that rides on a queued prompt: the one of the question the prompt came from.
+  function noteForElement(element) {
+    const scope = element?.closest?.("[data-lavish-question]");
+    if (!scope) return "";
+    const top = topLevelQuestionScopes(document).find((candidate) => candidate.contains(scope));
+    return String(questionNotes.get(questionKey(top || scope)) || "").trim();
+  }
+
+  function setQuestionNote(key, text) {
+    if (String(text || "").trim()) questionNotes.set(key, String(text).slice(0, 8000));
+    else questionNotes.delete(key);
+    scheduleReviewStateReport();
+    queueAllLastResult = "";
+    scheduleQueueAllRefresh();
+  }
+
+  function notesState() {
+    const notes = {};
+    for (const [key, text] of questionNotes) notes[key] = text;
+    if (pageNote.trim()) notes.__page = pageNote.slice(0, 8000);
+    return notes;
+  }
+
+  function restoreNotes(notes) {
+    if (!notes || typeof notes !== "object") return;
+    for (const [key, text] of Object.entries(notes)) {
+      if (typeof text !== "string" || !text.trim()) continue;
+      if (key === "__page") pageNote = text;
+      else questionNotes.set(key, text);
+    }
+    for (const [scope, host] of noteHosts) renderNoteHost(host, questionKey(scope));
+    const area = queueAllShadow?.querySelector(".note textarea");
+    if (area && pageNote && !area.value) area.value = pageNote;
+    renderQueueAllStatus();
+  }
+
+  // One "Add note" toggle per question without a multi-line field of its own.
+  function mountQuestionNotes() {
+    const scopes = topLevelQuestionScopes(document);
+    const keys = new Set();
+    for (const scope of scopes) {
+      const key = questionKey(scope);
+      keys.add(scope);
+      const existing = noteHosts.get(scope);
+      if (notesOff(scope) || hasOwnNoteField(scope)) {
+        if (existing) {
+          existing.remove();
+          noteHosts.delete(scope);
+        }
+        continue;
+      }
+      if (existing && existing.isConnected && scope.contains(existing)) continue;
+      const host = document.createElement("div");
+      host.setAttribute("data-lavish-ui", "question-note");
+      const shadowRoot = host.attachShadow({ mode: "open" });
+      for (const type of LAVISH_UI_PRIVATE_EVENTS) {
+        shadowRoot.addEventListener(type, (event) => event.stopPropagation());
+      }
+      const style = document.createElement("style");
+      style.textContent = NOTE_CSS;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "toggle";
+      toggle.textContent = "Add note";
+      const area = document.createElement("textarea");
+      area.rows = 2;
+      area.placeholder = "Your note on this question: context, a condition, another idea";
+      area.setAttribute("aria-label", "Note on " + key);
+      const hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = "Goes with this answer, and with Queue all.";
+      toggle.addEventListener("click", () => {
+        area.hidden = false;
+        hint.hidden = false;
+        toggle.hidden = true;
+        area.focus();
+      });
+      area.addEventListener("input", () => setQuestionNote(key, area.value));
+      shadowRoot.append(style, toggle, area, hint);
+      // In a card, above the row that holds the send button; in a plain form, after everything,
+      // so an inline button keeps its line.
+      const submitter = questionSubmitter(scope);
+      const row = submitter && submitter.parentElement !== scope ? submitter.parentElement : null;
+      if (row && row.parentElement && scope.contains(row)) row.parentElement.insertBefore(host, row);
+      else scope.appendChild(host);
+      noteHosts.set(scope, host);
+      applyHostTheme(host);
+      renderNoteHost(host, key);
+    }
+    for (const [scope, host] of noteHosts) {
+      if (!keys.has(scope)) {
+        host.remove();
+        noteHosts.delete(scope);
+      }
+    }
+  }
+
+  function renderNoteHost(host, key) {
+    const root = host.shadowRoot;
+    if (!root) return;
+    const text = questionNotes.get(key) || "";
+    const area = root.querySelector("textarea");
+    const toggle = root.querySelector(".toggle");
+    const hint = root.querySelector(".hint");
+    const open = Boolean(text) || (area && root.activeElement === area);
+    if (area && text && area.value !== text) area.value = text;
+    if (area) area.hidden = !open;
+    if (hint) hint.hidden = !open;
+    if (toggle) toggle.hidden = open;
+  }
+
+  function mountQueueAllBar() {
+    if (queueAllHost) return;
+    const host = document.createElement("div");
+    host.setAttribute("data-lavish-ui", "queue-all");
+    queueAllHost = host;
+    queueAllShadow = host.attachShadow({ mode: "open" });
+    for (const type of LAVISH_UI_PRIVATE_EVENTS) {
+      queueAllShadow.addEventListener(type, (event) => event.stopPropagation());
+    }
+    const style = document.createElement("style");
+    style.textContent = QUEUE_ALL_CSS;
+    const bar = document.createElement("section");
+    bar.className = "bar";
+    bar.setAttribute("aria-label", "Queue all answers");
+    bar.innerHTML =
+      '<div class="note is-collapsed"><textarea rows="1" aria-label="Note for the agent on the whole page" placeholder="Note for the agent on the whole page (optional): a new idea, a condition, what you would do instead"></textarea></div>' +
+      '<div class="manual" hidden><span>The browser blocked the clipboard: the answers are selected below, press Cmd+C or Ctrl+C.</span><textarea readonly rows="6" aria-label="Answers to copy"></textarea></div>' +
+      '<div class="row"><div class="text"><span class="title">Your answers</span><span class="status" role="status" aria-live="polite"></span></div>' +
+      '<div class="actions">' +
+      '<button type="button" class="act ghost" data-act="copy" title="Copy every answer and note as text">Copy</button>' +
+      '<button type="button" class="act secondary" data-act="queue" title="Queue every answer; you can still add a message before sending"><span class="long">Queue all answers</span><span class="short">Queue</span></button>' +
+      '<button type="button" class="act primary" data-act="send" title="Queue every answer and send them to the agent now"><span class="long">Queue all and send</span><span class="short">Send all</span></button>' +
+      "</div></div>";
+    const noteBox = bar.querySelector(".note");
+    const noteArea = /** @type {HTMLTextAreaElement | null} */ (bar.querySelector(".note textarea"));
+    if (noteArea && pageNote) noteArea.value = pageNote;
+    noteArea?.addEventListener("focus", () => noteBox?.classList.remove("is-collapsed"));
+    noteArea?.addEventListener("blur", () => {
+      if (!noteArea.value.trim()) noteBox?.classList.add("is-collapsed");
+    });
+    noteArea?.addEventListener("input", () => {
+      pageNote = noteArea.value.slice(0, 8000);
+      queueAllLastResult = "";
+      scheduleReviewStateReport();
+      renderQueueAllStatus();
+    });
+    bar.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("button") : null;
+      if (!target) return;
+      const act = target.getAttribute("data-act");
+      if (act === "queue") runQueueAll(false);
+      else if (act === "send") runQueueAll(true);
+      else if (act === "copy") copyQueueAllAnswers();
+      else if (act === "open") focusQuestion(target.getAttribute("data-key") || "");
+    });
+    queueAllShadow.append(style, bar);
+    (document.body || document.documentElement).appendChild(host);
+    applyHostTheme(host);
+  }
+
+  function renderQueueAllStatus() {
+    if (!queueAllShadow) return;
+    const questions = queueAllQuestions();
+    const summary = summarizeQuestions(questions);
+    const status = queueAllShadow.querySelector(".status");
+    const queueButton = queueAllShadow.querySelector('[data-act="queue"]');
+    const sendButton = queueAllShadow.querySelector('[data-act="send"]');
+    const longLabel = queueButton?.querySelector(".long");
+    if (longLabel) longLabel.textContent = queueAllButtonLabel(summary);
+    const sendable = summary.answered > 0 || Boolean(pageNote.trim());
+    for (const button of [queueButton, sendButton]) if (button) button.disabled = !sendable;
+    if (!status) return;
+    status.textContent = queueAllLastResult ? queueAllLastResult + " " : "";
+    const text = queueAllStatusText(summary);
+    const openAt = text.indexOf("Open: ");
+    if (openAt < 0 || summary.missing.length > 6) {
+      status.append(text);
+      return;
+    }
+    // Each open question is a link that scrolls to it.
+    status.append(text.slice(0, openAt + 6));
+    summary.missing.forEach((key, index) => {
+      if (index) status.append(", ");
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "open";
+      link.setAttribute("data-act", "open");
+      link.setAttribute("data-key", key);
+      link.textContent = key;
+      status.append(link);
+    });
+    status.append(".");
+  }
+
+  function focusQuestion(key) {
+    const question = queueAllQuestions().find((entry) => entry.key === key);
+    if (!question) return;
+    question.scope.scrollIntoView({ block: "center", behavior: "smooth" });
+    const first = question.scope.querySelector("input:not([type=hidden]), select, textarea, button");
+    if (first && typeof first.focus === "function") first.focus({ preventScroll: true });
+  }
+
+  // Runs each question's own Queue answer control, so the prompt is the one the author wrote, and
+  // queuePrompt adds the question's note to it. A question whose control queued nothing (no
+  // handler, no button, or only a note) still goes, as plain text. The note for the whole page
+  // rides on the closing summary.
+  function runQueueAll(send) {
+    const returnFocus = /** @type {HTMLElement | null} */ (queueAllShadow?.activeElement || null);
+    const questions = queueAllQuestions();
+    const queued = [];
+    const open = [];
+    const keepOnPage = (event) => event.preventDefault();
+    document.addEventListener("submit", keepOnPage, true);
+    // The status line confirms the batch, so no floating check: document.body draws none.
+    queueAllAckAnchor = document.body;
+    try {
+      for (const question of questions) {
+        const { scope, key, lines, values, note } = question;
+        const invalid = scope.tagName === "FORM" && typeof scope.checkValidity === "function" && !scope.checkValidity();
+        if ((!lines.length && !note) || invalid) {
+          open.push(key);
+          continue;
+        }
+        const before = queuedPromptCount;
+        if (lines.length) {
+          const submitter = questionSubmitter(scope);
+          // A handler that reads document.activeElement then points at this question, not the bar.
+          if (submitter && typeof submitter.focus === "function") submitter.focus({ preventScroll: true });
+          try {
+            if (scope.tagName === "FORM" && typeof scope.requestSubmit === "function") {
+              const usable = submitter && submitter.form === scope && submitter.type === "submit";
+              if (usable) scope.requestSubmit(submitter);
+              else scope.requestSubmit();
+            } else if (submitter && typeof submitter.click === "function") {
+              submitter.click();
+            }
+          } catch {
+            // A page handler that throws still gets the plain-text answer below.
+          }
+        }
+        if (queuedPromptCount === before) {
+          queuePrompt(lines.length ? fallbackAnswerPrompt(key, lines) : `Answer to ${key}: no option chosen.`, {
+            tag: "answer",
+            text: (key + ": " + (lines[0] || "note")).slice(0, 120),
+            element: scope,
+            data: { question: key, answer: lines },
+          });
+        }
+        queued.push({ key, answer: values, note: Boolean(note) });
+      }
+      if (queued.length || pageNote.trim()) {
+        queuePrompt(batchSummaryPrompt(queued, open, pageNote), {
+          tag: "queue-all",
+          text:
+            "Queue all: " +
+            queued.length +
+            " of " +
+            questions.length +
+            " answered" +
+            (pageNote.trim() ? ", with a note" : ""),
+          // Pinned on the bar, where the batch came from, not on the page's top corner.
+          element: queueAllHost || document.body,
+          queueKey: "lavish-queue-all",
+        });
+      }
+    } finally {
+      document.removeEventListener("submit", keepOnPage, true);
+      queueAllAckAnchor = null;
+      // Pressing Queue all walked focus through every question's button: give it back.
+      if (returnFocus && typeof returnFocus.focus === "function") returnFocus.focus({ preventScroll: true });
+    }
+    const sent = queued.length || pageNote.trim();
+    if (send && sent) {
+      sendQueuedPrompts();
+      clearSentNotes(queued.map((entry) => entry.key));
+    }
+    queueAllLastResult = sent
+      ? (queued.length === 1 ? "1 answer " : queued.length + " answers ") + (send ? "sent." : "queued.")
+      : "Nothing to queue yet: answer a question or write a note first.";
+    renderQueueAllStatus();
+  }
+
+  // Sent notes are done: they must not ride on the next prompt from the same question.
+  function clearSentNotes(keys) {
+    for (const key of keys) questionNotes.delete(key);
+    pageNote = "";
+    for (const [scope, host] of noteHosts) {
+      const area = host.shadowRoot?.querySelector("textarea");
+      if (area && !questionNotes.has(questionKey(scope))) area.value = "";
+      renderNoteHost(host, questionKey(scope));
+    }
+    const pageArea = queueAllShadow?.querySelector(".note textarea");
+    if (pageArea) pageArea.value = "";
+    queueAllShadow?.querySelector(".note")?.classList.add("is-collapsed");
+    scheduleReviewStateReport();
+  }
+
+  // Copy goes three ways, so it works wherever the page runs: a copy inside this click, the
+  // chrome's clipboard (the sandboxed frame may be refused it), and, when both fail, the text
+  // shown selected for Cmd+C.
+  function copyQueueAllAnswers() {
+    const text = copyAllText(queueAllQuestions(), pageNote, document.title);
+    const manual = queueAllShadow?.querySelector(".manual");
+    if (manual) manual.hidden = true;
+    if (!text) {
+      queueAllLastResult = "Nothing to copy yet.";
+      renderQueueAllStatus();
+      return;
+    }
+    const copiedHere = copyInThisFrame(text);
+    const id = "c" + ++copySequence;
+    pendingCopies.set(id, { text, copiedHere });
+    if (pendingCopies.size > 10) pendingCopies.delete(pendingCopies.keys().next().value);
+    postArtifactMessage("lavish:copyText", { id, text });
+    queueAllLastResult = copiedHere ? "Answers copied." : "Copying...";
+    renderQueueAllStatus();
+    // No answer from the chrome (an old Lavish, or a page opened elsewhere): the local result stands.
+    window.setTimeout(() => {
+      if (!pendingCopies.has(id)) return;
+      pendingCopies.delete(id);
+      if (!copiedHere) showManualCopy(text);
+    }, 1500);
+  }
+
+  function copyInThisFrame(text) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("data-lavish-ui", "copy");
+    area.setAttribute("aria-hidden", "true");
+    area.style.cssText = "position:fixed;left:-10000px;top:0;opacity:0";
+    const focused = /** @type {HTMLElement | null} */ (document.activeElement);
+    (document.body || document.documentElement).appendChild(area);
+    area.select();
+    let copied;
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    }
+    area.remove();
+    if (focused && typeof focused.focus === "function") focused.focus({ preventScroll: true });
+    return copied;
+  }
+
+  function handleCopyResult(msg) {
+    const pending = pendingCopies.get(msg.id);
+    if (!pending) return;
+    pendingCopies.delete(msg.id);
+    if (msg.ok || pending.copiedHere) {
+      queueAllLastResult = "Answers copied.";
+      renderQueueAllStatus();
+      return;
+    }
+    showManualCopy(pending.text);
+  }
+
+  function showManualCopy(text) {
+    const manual = queueAllShadow?.querySelector(".manual");
+    const area = manual?.querySelector("textarea");
+    if (!manual || !area) return;
+    manual.hidden = false;
+    area.value = text;
+    area.focus();
+    area.select();
+    queueAllLastResult = "Select and copy the answers above.";
+    renderQueueAllStatus();
+  }
+
+  function refreshQueueAll() {
+    queueAllRefreshTimer = 0;
+    if (!document.body) return;
+    mountQuestionNotes();
+    if (!queueAllWanted()) {
+      if (queueAllHost) {
+        queueAllHost.remove();
+        queueAllHost = null;
+        queueAllShadow = null;
+      }
+      return;
+    }
+    mountQueueAllBar();
+    // Content the page adds later goes above the bar: the bar stays last.
+    if (queueAllHost && document.body.lastElementChild !== queueAllHost) {
+      const tail = document.body.lastElementChild;
+      if (!(tail && tail.matches("script, template, style"))) document.body.appendChild(queueAllHost);
+    }
+    renderQueueAllStatus();
+  }
+
+  function scheduleQueueAllRefresh() {
+    if (queueAllRefreshTimer) return;
+    queueAllRefreshTimer = window.setTimeout(refreshQueueAll, 150);
+  }
+
+  for (const type of ["change", "input"]) {
+    document.addEventListener(type, (event) => {
+      const el = event.target;
+      if (el instanceof Element && el.closest("[data-lavish-question]")) {
+        queueAllLastResult = "";
+        scheduleQueueAllRefresh();
+      }
+    });
+  }
+  new MutationObserver((records) => {
+    // Lavish's own hosts coming and going are not news.
+    const own = (node) => node === queueAllHost || (node instanceof Element && node.hasAttribute("data-lavish-ui"));
+    if (records.every((record) => [...record.addedNodes, ...record.removedNodes].every(own))) return;
+    scheduleQueueAllRefresh();
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", refreshQueueAll, { once: true });
+  } else {
+    refreshQueueAll();
   }
 }

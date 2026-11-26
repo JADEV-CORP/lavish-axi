@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import path from "node:path";

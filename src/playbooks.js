@@ -9,8 +9,10 @@ export const PLAYBOOKS = [
     id: "diagram",
     use_when: "Explain relationships, flows, state, architecture, and concepts with illustrations",
     choose: [
-      "Default to hand-authored inline SVG: it gives proportion, emphasis, spatial metaphor, and annotation-ready structure that generated layouts cannot.",
-      "Use Mermaid only when the user asks for an editable whiteboard: rendered Mermaid in a `.mermaid` container becomes an Excalidraw whiteboard in the Lavish browser.",
+      "When the page explains a system, a flow, a process, a sequence or a structure, it needs at least one visible diagram near the top. A page that describes architecture only in prose is not finished.",
+      "Use draw.io for architecture, infrastructure, data flow, process and sequence diagrams, and for any diagram the reader may want to edit later: write a .drawio file next to the page (or a .mmd Mermaid file for sequence, class or ER diagrams), run `lavish-axi diagram <file>`, look at the preview_png it prints, then paste the <img> tag it prints. The page then shows a static SVG that follows light and dark mode and loads with no script, and draw.io reopens that SVG for editing.",
+      "Use hand-authored inline SVG for a small conceptual figure, three or four shapes, that needs exact proportion, emphasis or per-node annotation.",
+      "Use Mermaid in a `.mermaid` container only when the user asks for an editable whiteboard: it becomes an Excalidraw whiteboard in the Lavish browser.",
       "For large systems, draw a small overview illustration and put detail in module cards below it, instead of one dense auto-laid graph.",
     ],
     structure: [
@@ -27,12 +29,18 @@ export const PLAYBOOKS = [
       "Keep labels to a few words and put prose beside the figure in HTML - SVG text does not wrap, so short labels are also the overflow discipline.",
       "Keep figures self-contained: no external images, fonts, or scripts, so exports render offline.",
       "Render-verify before serving: screenshot the artifact in light, dark, and a narrow viewport - the layout audit deliberately skips SVG interiors.",
+      'draw.io files: put adaptiveColors="auto" on <mxGraphModel> so colors follow dark mode; style nodes with rounded=1;whiteSpace=wrap;html=1 and edges with edgeStyle=orthogonalEdgeStyle; keep one fill color per kind of thing and say what each color means in a legend or the caption.',
+      "draw.io layout: write nodes and edges without coordinates and pass `--layout horizontalFlow` (or verticalFlow, horizontalTree, verticalTree, radialTree, organic); the positions are written back into the .drawio, so later hand edits keep them.",
+      "--layout suits chains and trees. It widens boxes to fit one-line labels, so for a fan-out (one box feeding several) place the boxes by hand in columns, and pin each edge with exitX=1;exitY=0.5;entryX=0;entryY=0.5 so it never cuts through another box.",
+      "Keep the .drawio (or .mmd) beside the page and its .drawio.svg: the source is what a person edits, and `lavish-axi diagram` regenerates the SVG after every edit.",
       "When the user asked for a whiteboard, initialize Mermaid theme-aware with the `lavish-axi design` snippet rather than hardcoding one theme; to show flowchart nodes as icons from the user's Excalidraw libraries, follow `whiteboard_tooling.library_icons` there.",
     ],
     pitfalls: [
       "Do not cram every file or function into one figure when a layered explanation would be clearer.",
       "Do not hand-build boxes-and-arrows from div/flexbox: inline SVG owns figures, HTML owns the prose around them.",
       "Do not reach for Mermaid to save authoring effort - it surrenders position, size, and emphasis to the engine.",
+      "Do not serve a diagram you have not looked at: open preview_png (or screenshot the page) and fix overlapping labels, crossing edges and cut-off text first.",
+      "Do not link the .drawio file from the page or load the draw.io viewer script: the page shows the .drawio.svg only, so it stays fast and renders offline.",
       "Do not present unverified architecture claims as facts. Cite the files or commands that support them.",
     ],
     lavish_notes: [
@@ -198,6 +206,9 @@ export const PLAYBOOKS = [
       "For a tracked batch, give every candidate item a short, stable, visible ID and let the reviewer select or disposition items with editable native controls.",
       "Keep reversible selection state local in the artifact until the user explicitly submits that question.",
       "Pair each question with a Submit or Queue answer control that sends exactly one prompt for the final answer.",
+      "Wrap every question in its own data-lavish-question scope. Lavish then adds a Queue all bar at the end of the page by itself: it runs each question's own Queue answer control, sends the plain answer for a question whose control queues nothing, and adds a closing summary that names the questions left open. Do not hand-build a page-level Queue all or Send all button.",
+      "Lavish gives every question without its own textarea an Add note toggle, and the Queue all bar a note for the whole page; notes ride on the prompts they belong to. When a comment matters, give the question its own textarea instead of a one-line input.",
+      "If a question's send control is not a submit button or a button whose label says queue, submit, send or answer, mark it data-lavish-submit so Queue all finds it.",
       "Lavish draws a Queued check beside that control once the answer is in the queue, so do not build a separate queued confirmation.",
       "Show selected state separately from queued state so the user trusts what will be sent back.",
     ],
@@ -211,10 +222,12 @@ export const PLAYBOOKS = [
       "Pass options such as tag, text, selector, target, data, queueKey, or element when they help the agent understand exactly what the user chose.",
       "For a tracked batch, queue the final selected set once in a concise, bounded data.items array; include each item's stable ID, concise label, and requested disposition, and explicitly tell the agent to account for every submitted ID before reporting completion.",
       "Call window.lavish.sendQueuedPrompts() only when the control should immediately send committed feedback instead of waiting for the user to press Send.",
+      'Opt out of the Queue all bar with <html data-lavish-queue-all="off">, or keep your own page-level control by marking it data-lavish-queue-all; either way the bar stays away.',
       "Make queued prompts specific enough that the agent can act without asking a follow-up question.",
       "Keep native browser controls accessible and readable on mobile.",
     ],
     pitfalls: [
+      "Do not leave a question outside a data-lavish-question scope: Queue all cannot see it, and its answer is lost when the reviewer queues everything at once.",
       "Do not queue one prompt per radio change, checkbox toggle, dropdown change, or choice-button click when the user can still change their mind.",
       "Do not create controls whose queued prompt is unclear or too vague to execute.",
       "Do not hide the difference between selected locally and queued for the agent.",
@@ -307,6 +320,38 @@ export const PLAYBOOKS = [
       "A custom choice UI should make option buttons update local state, then use a separate Queue answer button with data-lavish-action to queue the final selected value.",
       "Use window.lavish.queuePrompt for user intent, not internal analytics or UI-only state changes.",
       "End input paths with an obvious way for the user to send feedback back to the agent.",
+    ],
+  },
+  {
+    id: "brainstorm",
+    use_when:
+      "Think a problem through with the user: generate and weigh options, challenge a plan, or settle a direction over several rounds",
+    choose: [
+      "Use this when the answer is not known yet and the user wants to think it through with you: a direction to pick, ideas to sort, a plan to challenge.",
+      "Pair it with the input playbook for the answer controls and the diagram playbook for the map; this playbook sets the shape of the session.",
+    ],
+    structure: [
+      "Open with the problem in one sentence and what a good outcome looks like, then one diagram of the current situation made with `lavish-axi diagram`.",
+      "Give three to five real options as cards with short IDs (O1, O2): what it is, what it costs, its main risk, and a fit score out of 100 with the weights stated once. Mark one Recommended and say why in one line.",
+      "Make each option its own data-lavish-question with Go, Maybe and No, so every option can be answered or argued; Lavish adds a note box to each and a Queue all bar at the end.",
+      "Always end with an open question, 'Something else?', holding only a textarea, so the reviewer can add an idea you did not list.",
+      "Name the round in the header (Round 1, Round 2). From round 2, open with what changed and which answers drove it, and mark new or changed cards with the revision registry.",
+      "Keep parked ideas in a short list under the options instead of deleting them, so a later round can bring one back.",
+    ],
+    design_rules: [
+      "One screen per round: more than five options, or more than a few minutes of reading, means a second round.",
+      "Write options as outcomes the user gets, not as features you would build.",
+      "Use numbers only where you have a source, and label estimates as estimates.",
+      "Use a textarea, not a one-line input, for any field that asks for reasoning.",
+    ],
+    pitfalls: [
+      "Do not present one real option and two straw men.",
+      "Do not ask the reviewer to rank everything: ask for Go, Maybe or No and a reason.",
+      "Do not lose the reviewer's words: quote their note when a later round acts on it.",
+      "Do not build a page-level Queue all, Send all or note field: Lavish adds them.",
+    ],
+    lavish_notes: [
+      "After the reviewer sends, reply in the panel with one line per option ID saying what you will do, then build the next round from the answers and notes.",
     ],
   },
   {

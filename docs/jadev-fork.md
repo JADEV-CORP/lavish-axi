@@ -1,4 +1,4 @@
-<!-- Copyright (c) 2026 JADEV-CORP. All rights reserved. Proprietary and confidential. -->
+<!-- Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE. -->
 
 # Jadev fork
 
@@ -74,6 +74,62 @@ that created it must, with `delete_scheduled_task`. Prefer `--t3-thread`.
 What is not automatic yet: T3 Code does not tell the processes it runs which thread they belong to, so the first
 review of each conversation needs the agent's one `--t3-thread` step. If T3 Code exported the calling thread's id to
 provider processes, Lavish could link that first review too.
+
+## Queue all
+
+Every page with at least one `data-lavish-question` scope gets a bar at its end: **Copy**, **Queue all answers** and
+**Queue all and send**, with a count of answered questions and a link to each open one. It sticks to the bottom of the
+viewport while the page scrolls, rests after the last question, and shrinks to one row on a phone. Agents no longer
+have to remember a page-level button, and a page that forgot one still gets it.
+
+Queue all runs each question's own Queue answer control (a form's submit, a `data-lavish-submit` element, or a button
+whose label says queue, submit, send or answer), so the prompt is the one the author wrote. A question whose control
+queues nothing, for example a form with no handler, still goes as plain text, and the page does not navigate. Each
+answer keeps its question's queue key, so pressing Queue all twice replaces the first batch instead of doubling it.
+A closing `queue-all` prompt lists the queued and the open question IDs so the agent can account for every one.
+
+The bar also holds a note for the whole page, and every question without its own textarea gets an **Add note**
+toggle. Notes are multi-line, ride on the prompt they belong to (the question's own button or Queue all), and survive a
+live reload. The closing summary lists one short line per answer, so a summary pasted on its own still says what was
+answered. **Copy** works three ways: a copy inside the click, the chrome's clipboard (the sandboxed frame can be
+refused it; the chrome only copies right after a real click), and, when both fail, the text shown selected for Cmd+C.
+
+`<html data-lavish-queue-all="off">` turns the bar off; `data-lavish-note="off"` on `<html>` or on a question turns the
+notes off. A page that keeps its own page-level control marks it
+`data-lavish-queue-all` and the bar stays away. The helpers live in `src/queue-all.js`, the bar in the page SDK.
+
+## Diagrams with draw.io
+
+`lavish-axi diagram <file.drawio>` renders a diagram for a page with the draw.io desktop app (open source, Apache-2.0)
+already on the machine. It writes `<name>.drawio.svg` next to the source: a static image, no script at view time, with
+colors that follow light and dark mode and the diagram embedded, so draw.io reopens the SVG for editing. It also writes
+a PNG preview under the state directory (`diagram-previews/`) for the agent to look at before serving the page, and
+prints the `<img>` tag to paste.
+
+`--layout horizontalFlow` (or another draw.io layout) lets the agent write nodes and edges without coordinates; the
+positions are written back into the `.drawio`, so later hand edits keep them. A `.mmd` Mermaid file becomes an editable
+`.drawio` first. One diagram takes 1 to 5 seconds, mostly draw.io starting. Lavish finds draw.io through
+`LAVISH_AXI_DRAWIO`, `PATH`, then the usual install folder; install it with `brew install --cask drawio`,
+`winget install JGraph.Draw`, or the Linux packages on github.com/jgraph/drawio-desktop.
+
+The diagram playbook now asks for at least one visible diagram on any page that explains a system or a flow, sends
+architecture, process and sequence diagrams to draw.io, and keeps hand-written inline SVG for small figures.
+
+## Opening beside the chat
+
+Inside T3 Code (`T3CODE_THREAD_ID` set), `lavish-axi <file>` does not open an external browser. No command can put a
+page in T3's preview panel from outside, but the agent can: the output's `open_in` and `next_step` tell it to call
+`preview_open`, which shows the review in a tab beside the conversation. VS Code is opt-in, because every VS Code terminal
+sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"` to `terminal.integrated.env.osx` (or
+`.windows`, `.linux`) and Copilot's agent chat is told to call `openBrowserPage` instead (VS Code 1.109 or later, with
+`workbench.browser.enableChatTools` on). An agent without that tool runs the same command with `--external`;
+`LAVISH_AXI_OPEN=external` makes that the default. Detection lives in `src/review-host.js`.
+
+## Brainstorm playbook
+
+`lavish-axi playbook brainstorm` shapes a thinking session: the problem in one sentence and a diagram of today, three to
+five real options with IDs and fit scores, Go / Maybe / No on each with a note, an open "Something else?" question, and
+numbered rounds that open with what changed.
 
 ## Polls survive a server restart
 

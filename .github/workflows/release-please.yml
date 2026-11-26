@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   release-please:
+    # Upstream's npm release. The JADEV fork releases through jadev-release.yml.
+    if: github.repository == 'kunchenguid/lavish-axi'
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4

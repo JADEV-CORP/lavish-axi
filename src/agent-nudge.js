@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 import crypto from "node:crypto";
 import { link, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";

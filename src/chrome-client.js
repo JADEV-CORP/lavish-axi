@@ -1189,9 +1189,33 @@ async function copyText(text) {
   helper.style.opacity = "0";
   document.body.appendChild(helper);
   helper.select();
-  document.execCommand("copy");
+  let copied;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
   helper.remove();
-  return true;
+  return copied;
+}
+
+// The sandboxed artifact frame can be refused the clipboard, so its Copy controls ask the chrome.
+// Only right after a real click (user activation reaches the chrome from the frame), so a page
+// cannot fill the clipboard without one. The text is bounded, and only the result goes back.
+const ARTIFACT_COPY_LIMIT = 200_000;
+async function copyForArtifact(msg) {
+  const id = typeof msg.id === "string" && /^c\d{1,9}$/.test(msg.id) ? msg.id : "";
+  const text = typeof msg.text === "string" ? msg.text : "";
+  const activated = Boolean(navigator.userActivation?.isActive);
+  let ok = false;
+  if (id && text && text.length <= ARTIFACT_COPY_LIMIT && activated) {
+    try {
+      ok = await copyText(text);
+    } catch {
+      ok = false;
+    }
+  }
+  if (id) postToFrame({ type: "lavish:copyResult", id, ok });
 }
 
 // One transcript entry, as the server serialized it (src/chat-messages.js). An agent entry's
@@ -1640,7 +1664,8 @@ function setReviewState(state) {
   lastReviewState = state;
   // The artifact reported a card, so its anchor exists: whatever miss was recorded is answered.
   if (state?.card) unrestorableDraftMiss = null;
-  if (!state || (!state.card && !(Array.isArray(state.fields) && state.fields.length))) {
+  const hasNotes = Boolean(state?.notes && typeof state.notes === "object" && Object.keys(state.notes).length);
+  if (!state || (!state.card && !(Array.isArray(state.fields) && state.fields.length) && !hasNotes)) {
     try {
       sessionStorage.removeItem(reviewStateStorageKey);
     } catch {
@@ -5734,6 +5759,7 @@ window.addEventListener("message", (event) => {
     pulseSheetDock();
   }
   if (msg.type === "lavish:addMark") addMark(msg.prompt);
+  if (msg.type === "lavish:copyText") copyForArtifact(msg);
   if (msg.type === "lavish:snapshot") {
     completeSnapshotRequest(msg.snapshot_request_id, msg.snapshot || "");
   }

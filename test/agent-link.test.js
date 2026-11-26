@@ -1,5 +1,4 @@
-// Copyright (c) 2026 JADEV-CORP. All rights reserved.
-// Proprietary and confidential. Unauthorized copying is prohibited.
+// Portions copyright (c) 2026 JADEV-CORP. MIT License, see LICENSE.
 // Automatic agent links (#3834): a session created inside T3 Code links to the thread of the
 // conversation that created it, ending a session removes its link, and nothing else is reused.
 import assert from "node:assert/strict";
