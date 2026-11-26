@@ -122,3 +122,51 @@ test("lavish data refuses an unknown flag and a missing file argument", async ()
     assert.equal(missing.status, 2);
   });
 });
+
+test("poll output tells the agent a page question waits for its answer", async () => {
+  const { createPollOutput } = await import("../src/cli.js");
+  const output = createPollOutput({
+    file: "/p.html",
+    response: {
+      status: "feedback",
+      prompts: [
+        { prompt: "Which plan?", tag: "ask", target: { type: "ask", ask_id: "ask-0000abcd", expires_at: "x" } },
+      ],
+    },
+  });
+  assert.match(output.next_step, /questions the page itself asked you \(tag "ask"\)/);
+  assert.match(output.next_step, /lavish reply \/p\.html --ask <target\.ask_id> --agent-reply/);
+  const plain = createPollOutput({ file: "/p.html", response: { status: "feedback", prompts: [{ prompt: "x" }] } });
+  assert.doesNotMatch(plain.next_step, /--ask/);
+});
+
+test("lavish reply --ask answers the page's question and refuses one that is closed", async () => {
+  await withPage(async ({ base, absolute, env, chromePost }) => {
+    const poll = fetch(`${base}/api/poll?file=${encodeURIComponent(absolute)}&timeoutMs=3000`);
+    let asked;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      asked = await chromePost("asks", { question: "Which plan?" });
+      if (asked.status !== 409) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(asked.status, 200);
+    const { ask } = await asked.json();
+    await poll;
+
+    const answered = await runCli(["reply", absolute, "--ask", ask.id, "--agent-reply", "Plan B."], env);
+    assert.equal(answered.status, 0, answered.stdout);
+    assert.match(answered.stdout, new RegExp(`answered_ask: ${ask.id}`));
+
+    const again = await runCli(["reply", absolute, "--ask", ask.id, "--agent-reply", "Plan C."], env);
+    assert.equal(again.status, 1);
+    assert.match(again.stdout, /ASK_CLOSED/);
+    assert.match(again.stdout, /already answered\. Nothing was posted/);
+
+    const unknown = await runCli(["reply", absolute, "--ask", "ask-ffffffff", "--agent-reply", "Hi"], env);
+    assert.match(unknown.stdout, /ASK_NOT_FOUND/);
+
+    const malformed = await runCli(["reply", absolute, "--ask", "plan", "--agent-reply", "Hi"], env);
+    assert.equal(malformed.status, 2);
+    assert.match(malformed.stdout, /question id such as ask-1a2b3c4d/);
+  });
+});

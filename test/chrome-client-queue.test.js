@@ -11201,3 +11201,119 @@ test("a server refusal reaches the page with its code", async () => {
   assert.equal(result.code, "STORE_FULL");
   assert.equal(result.error, "A page can store up to 5 MB.");
 });
+
+function askHarness(askResponse) {
+  const asks = [];
+  return {
+    asks,
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/asks")) {
+        asks.push(JSON.parse(init.body));
+        return askResponse;
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  };
+}
+
+const ASK_ACCEPTED = {
+  ok: true,
+  json: async () => ({ status: "asked", ask: { id: "ask-0000abcd", expires_at: "2026-11-26T10:05:00.000Z" } }),
+};
+
+test("a page question is sent at once and the agent reply that names it answers the page", async () => {
+  const { asks, fetchImpl } = askHarness(ASK_ACCEPTED);
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl });
+  pageAppRequest(chrome, {
+    id: "r1",
+    op: "ask",
+    question: "Which plan?",
+    context: "plans[2]: A,B",
+    timeout_ms: 60000,
+    attachments: [{ id: "f.pdf", name: "brief.pdf", path: "/etc/passwd" }],
+  });
+  await flushPromises();
+  assert.deepEqual(asks, [
+    {
+      question: "Which plan?",
+      context: "plans[2]: A,B",
+      timeout_ms: 60000,
+      attachments: [{ id: "f.pdf", name: "brief.pdf" }],
+    },
+  ]);
+  const waiting = pageAppResults(chrome).at(-1);
+  assert.equal(waiting.pending, true);
+  assert.equal(waiting.ask_id, "ask-0000abcd");
+  assert.equal(waiting.wait_ms, 75000);
+
+  // Another reply, then the one that names the question.
+  chrome.webSocket().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Earlier note done." }),
+  });
+  assert.equal(pageAppResults(chrome).length, 1);
+  chrome.webSocket().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Plan B.", ask_id: "ask-0000abcd" }),
+  });
+  assert.deepEqual(pageAppResults(chrome).at(-1), {
+    type: "lavish:pageAppResult",
+    id: "r1",
+    nonce: "doc-nonce",
+    ok: true,
+    value: "Plan B.",
+  });
+});
+
+test("a page question the server refuses fails fast with the server's code", async () => {
+  const { fetchImpl } = askHarness({
+    ok: false,
+    status: 409,
+    json: async () => ({ code: "NO_AGENT", error: "No agent is listening to this page." }),
+  });
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "Which plan?" });
+  await flushPromises();
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.code, "NO_AGENT");
+  assert.equal(result.error, "No agent is listening to this page.");
+});
+
+test("a replaced, timed-out, or ended page question rejects with its own code", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: askHarness(ASK_ACCEPTED).fetchImpl,
+  });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "First?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.webSocket().listeners.get("ask-closed")({
+    data: JSON.stringify({ ask_id: "ask-0000abcd", status: "superseded" }),
+  });
+  assert.equal(pageAppResults(chrome).at(-1).code, "ASK_SUPERSEDED");
+
+  pageAppRequest(chrome, { id: "r2", op: "ask", question: "Second?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.runTimers(60000);
+  assert.equal(pageAppResults(chrome).at(-1).code, "ASK_TIMEOUT");
+
+  pageAppRequest(chrome, { id: "r3", op: "ask", question: "Third?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.webSocket().listeners.get("ended")({ data: "{}" });
+  assert.equal(pageAppResults(chrome).at(-1).code, "SESSION_ENDED");
+  pageAppRequest(chrome, { id: "r4", op: "ask", question: "Fourth?" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "SESSION_ENDED");
+});
+
+test("an answer that arrives in a chat-sync settles the page question too", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: askHarness(ASK_ACCEPTED).fetchImpl,
+  });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "Which plan?" });
+  await flushPromises();
+  chrome.webSocket().listeners.get("chat-sync")({
+    data: JSON.stringify({ chat: [{ role: "agent", text: "Plan A.", ask_id: "ask-0000abcd" }], chat_revision: 9 }),
+  });
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, true);
+  assert.equal(result.value, "Plan A.");
+});

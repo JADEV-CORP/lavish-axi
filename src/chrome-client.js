@@ -85,6 +85,11 @@ const PAGE_APP_LIMITS = {
   downloadNameMaxChars: 200,
   ...(sessionData.pageAppLimits && typeof sessionData.pageAppLimits === "object" ? sessionData.pageAppLimits : {}),
 };
+// Page questions this tab is waiting on, by ask id. Declared up here because ending the session,
+// which can happen during boot, rejects them.
+/** @type {Map<string, { reply: (result: Record<string, unknown>) => void, timer: ReturnType<typeof setTimeout> }>} */
+const pageAsks = new Map();
+const pageAskTimestamps = [];
 
 function formatByteLimit(bytes) {
   if (bytes >= 1024 * 1024) return Math.round(bytes / (1024 * 1024)) + " MB";
@@ -4505,6 +4510,7 @@ async function endSession(terminal = null) {
 function markSessionEnded() {
   if (ended) return;
   ended = true;
+  failAllPageAsks("SESSION_ENDED", "This review has ended, so the agent cannot answer.");
   renderAgentStatus();
   setSuggestions([]);
   pendingAcknowledgements.clear();
@@ -5946,8 +5952,107 @@ function handlePageAppRequest(msg) {
   const op = String(msg.op || "");
   let work;
   if (op.startsWith("store.")) work = pageStoreRequest(op.slice(6), msg);
+  else if (op === "ask") work = askFromPage(msg, reply);
   else work = Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "This Lavish does not know that request." });
-  work.then(reply, (error) => fail("FAILED", error instanceof Error ? error.message : String(error)));
+  work.then(
+    (result) => {
+      if (result) reply(result);
+    },
+    (error) => fail("FAILED", error instanceof Error ? error.message : String(error)),
+  );
+}
+
+// ---- Ask the agent (`window.lavish.ask`). The question goes to the server at once; the answer is the
+// agent reply that names it (`ask_id` on the reply), which arrives on the live stream. ----
+const PAGE_ASK_RATE_MAX = 6;
+const PAGE_ASK_RATE_WINDOW_MS = 60_000;
+
+/** @returns {Promise<Record<string, unknown> | null>} the final result now, or null when it comes later */
+async function askFromPage(msg, reply) {
+  const question = typeof msg.question === "string" ? msg.question : "";
+  const context = typeof msg.context === "string" ? msg.context : "";
+  if (!question.trim() || question.length > PAGE_APP_LIMITS.askQuestionMaxChars) {
+    return {
+      ok: false,
+      code: "INVALID",
+      error: "A question is 1 to " + PAGE_APP_LIMITS.askQuestionMaxChars + " characters.",
+    };
+  }
+  if (context.length > PAGE_APP_LIMITS.askContextMaxChars) {
+    return { ok: false, code: "TOO_LARGE", error: "The question's data is too large." };
+  }
+  if (ended) return { ok: false, code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." };
+  const requested = Number(msg.timeout_ms);
+  const timeoutMs = Number.isFinite(requested)
+    ? Math.min(PAGE_APP_LIMITS.askMaxTimeoutMs, Math.max(PAGE_APP_LIMITS.askMinTimeoutMs, Math.floor(requested)))
+    : PAGE_APP_LIMITS.askDefaultTimeoutMs;
+  // A page stuck in a loop must not flood the agent's conversation.
+  const now = Date.now();
+  while (pageAskTimestamps.length && now - pageAskTimestamps[0] > PAGE_ASK_RATE_WINDOW_MS) pageAskTimestamps.shift();
+  if (pageAskTimestamps.length >= PAGE_ASK_RATE_MAX) {
+    return { ok: false, code: "RATE_LIMITED", error: "Too many questions in a minute. Wait a moment and ask again." };
+  }
+  pageAskTimestamps.push(now);
+  const response = await fetch("/api/" + key + "/asks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      question,
+      context,
+      timeout_ms: timeoutMs,
+      attachments: sanitizeAttachmentRefs(msg.attachments),
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      ok: false,
+      code: String(data.code || "FAILED"),
+      error: String(data.error || "The question was not sent."),
+    };
+  }
+  const askId = String(data.ask?.id || "");
+  if (!askId) return { ok: false, code: "FAILED", error: "The question was not sent." };
+  // The page now waits for the agent, a little past the deadline so the chrome's own timeout wins.
+  reply({ pending: true, wait_ms: timeoutMs + 15_000, ask_id: askId });
+  pageAsks.set(askId, {
+    reply,
+    timer: setTimeout(
+      () =>
+        settlePageAsk(askId, {
+          ok: false,
+          code: "ASK_TIMEOUT",
+          error: "The agent did not answer in time. Ask again, or check that your agent is still running lavish poll.",
+        }),
+      timeoutMs,
+    ),
+  });
+  // A fast agent can answer before this tab has even heard the question was queued.
+  settleAnsweredPageAsks(displayedChat);
+  return null;
+}
+
+function settlePageAsk(askId, result) {
+  const entry = pageAsks.get(askId);
+  if (!entry) return;
+  pageAsks.delete(askId);
+  clearTimeout(entry.timer);
+  entry.reply(result);
+}
+
+// Answers found in the transcript, for asks this tab is still waiting on (a reconnect can bring the
+// reply as part of a chat-sync instead of its own agent-reply event).
+function settleAnsweredPageAsks(chat) {
+  if (!pageAsks.size) return;
+  for (const entry of Array.isArray(chat) ? chat : []) {
+    if (entry?.role === "agent" && typeof entry.ask_id === "string" && pageAsks.has(entry.ask_id)) {
+      settlePageAsk(entry.ask_id, { ok: true, value: String(entry.text || "") });
+    }
+  }
+}
+
+function failAllPageAsks(code, error) {
+  for (const askId of [...pageAsks.keys()]) settlePageAsk(askId, { ok: false, code, error });
 }
 
 // Storage requests run one at a time, in the order the page made them, so a set followed by a get
@@ -7850,12 +7955,23 @@ events.set("agent-reply", (data) => {
     ...(data.at ? { at: String(data.at) } : {}),
   };
   if (addChat(entry, true, { enter: true })) displayedChat.push(entry);
+  if (typeof data.ask_id === "string") settlePageAsk(data.ask_id, { ok: true, value: entry.text });
   noteAgentReply(entry.text);
   notify(agentShortName + " replied: " + replySummary(entry.text));
 });
 events.set("chat-sync", (data) => {
   rememberChatAckIds(data.ack_ids);
   syncChat(data.chat || [], data.chat_revision);
+  settleAnsweredPageAsks(data.chat);
+});
+events.set("ask-closed", (data) => {
+  if (data.status === "superseded") {
+    settlePageAsk(String(data.ask_id || ""), {
+      ok: false,
+      code: "ASK_SUPERSEDED",
+      error: "A newer question from this page replaced this one.",
+    });
+  }
 });
 // Between two poll rounds (#3782) the agent is about to poll again, so the editor keeps showing it
 // listening for a moment; if it does not come back in time, it is shown as gone, as before.

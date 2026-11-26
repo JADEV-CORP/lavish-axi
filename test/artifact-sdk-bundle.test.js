@@ -1825,3 +1825,44 @@ test("the served SDK bundle exposes ask, files.pick and download beside store", 
   assert.equal(typeof sdk.api.download, "function");
   assert.deepEqual(Object.keys(sdk.api.store).sort(), ["delete", "get", "list", "set"]);
 });
+
+test("the served SDK bundle asks one question at a time and resolves the agent's answer", async () => {
+  const sdk = bootSdk();
+  const answer = sdk.api.ask("Which plan?", { data: { plans: ["A", "B"] }, timeoutMs: 1 });
+  const request = sdk.posted.at(-1);
+  assert.equal(request.op, "ask");
+  assert.equal(request.question, "Which plan?");
+  assert.equal(request.context, "plans[2]: A,B");
+  // Clamped to the shortest wait a page may ask for.
+  assert.equal(request.timeout_ms, 10000);
+  await assert.rejects(sdk.api.ask("Another?"), { code: "ASK_BUSY" });
+
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    pending: true,
+    wait_ms: 25000,
+  });
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    ok: true,
+    value: "Plan B.",
+  });
+  assert.equal(await answer, "Plan B.");
+
+  // The page may ask again once the answer is in.
+  const next = sdk.api.ask("And the price?");
+  const second = sdk.posted.at(-1);
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: second.id,
+    nonce: second.nonce,
+    ok: false,
+    code: "NO_AGENT",
+    error: "No agent is listening to this page.",
+  });
+  await assert.rejects(next, { code: "NO_AGENT", message: "No agent is listening to this page." });
+});
