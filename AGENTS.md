@@ -130,6 +130,8 @@ Each line is the rule. [docs/invariants.md](docs/invariants.md) has the failure 
 - The layout audit fails open. An empty completed pass means repaired. A failed run publishes `complete: false` and no findings. [Things to know when editing](docs/invariants.md#things-to-know-when-editing).
 - The layout audit is severe-only. Scroll dimensions alone are never proof, diagram surfaces are excluded, and a finding needs the same severe root in two samples. [Things to know when editing](docs/invariants.md#things-to-know-when-editing).
 
+- Page apps go SDK to chrome to server, validated at each hop. `/api/:key/page-store` and `/api/:key/asks` are same-origin guarded, page data never enters `state.json`, picked documents are never served back, and download and files.pick need user activation. [Page apps](docs/invariants.md#page-apps-jadev-fork).
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

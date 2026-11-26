@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+### Added
+
+- **Page storage.** `window.lavish.store` keeps JSON per page file in the state directory, through reloads and server restarts (1 MB a value, 5 MB a page). `lavish data <page>` prints it for the agent; `--clear --yes` deletes it.
+- **Ask the agent from the page.** `await window.lavish.ask(question, { data })` sends the question at once and resolves with the agent's reply. Poll marks it as a prompt tagged `ask`, and `lavish reply <page> --ask <id>` answers it. With no agent listening it fails at once with `NO_AGENT`.
+- **Files in and out.** `window.lavish.files.pick()` lets the reviewer choose images, PDFs or text files; the agent gets their local paths when the page queues them. `window.lavish.download(name, content)` saves a file through the browser after a click.
+
 ## 1.0.0 (2026-11-26)
 
 First release of `@jadev-corp/lavish` on npm. It is based on [lavish-axi](https://github.com/kunchenguid/lavish-axi) 0.1.98 by Kun Chen, under the MIT license. Upstream's release history is in [its changelog](https://github.com/kunchenguid/lavish-axi/blob/main/CHANGELOG.md). Every change this build makes to upstream is described in [docs/jadev-fork.md](docs/jadev-fork.md).
