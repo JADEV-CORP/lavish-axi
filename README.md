@@ -89,7 +89,7 @@ Use `terminal.integrated.env.windows` or `.linux` on those systems. `lavish <pag
 
 ## Privacy
 
-Pages, answers, notes, stored page data and versions stay on your machine, in `~/.lavish-axi`. This build sends no telemetry. Its only outside call is a version check against the npm registry, which `LAVISH_AXI_UPDATE_CHECK=0` turns off. Sharing a page on the web is a separate, explicit command (`lavish share`). A company can turn both off for a machine with `lavish policy --share off --update-check off`.
+Pages, answers, notes, stored page data and versions stay on your machine, in `~/.lavish-axi`. This build sends no telemetry. Its only outside call is a version check against the npm registry, which `LAVISH_AXI_UPDATE_CHECK=0` turns off. Sharing a page on the web is a separate, explicit command (`lavish share`). A company can turn both off for each user: run `lavish policy --share off --update-check off` as that user.
 
 ## More
 
