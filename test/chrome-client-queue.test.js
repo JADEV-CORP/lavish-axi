@@ -11203,6 +11203,28 @@ test("a server refusal reaches the page with its code", async () => {
   assert.equal(result.error, "A page can store up to 5 MB.");
 });
 
+test("a page that floods store writes is told to slow down, and reads still pass", async () => {
+  let writes = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/page-store") && /"op":"(set|delete)"/.test(String(init.body))) writes += 1;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  for (let i = 0; i < 60; i += 1)
+    pageAppRequest(chrome, { id: "r" + (100 + i), op: "store.set", key: "k", json: String(i) });
+  pageAppRequest(chrome, { id: "r999", op: "store.get", key: "k" });
+  await flushPromises();
+  const results = pageAppResults(chrome);
+  const limited = results.filter((result) => result.code === "RATE_LIMITED");
+  // A burst of 40 passes; the bucket refills at 20 a second, so a fast loop of 60 loses most of the rest.
+  assert.ok(limited.length >= 10 && limited.length <= 20, String(limited.length));
+  assert.equal(writes, 60 - limited.length);
+  for (let i = 0; i < 10; i += 1) await flushPromises();
+  assert.equal(pageAppResults(chrome).find((result) => result.id === "r999")?.ok, true);
+});
+
 function askHarness(askResponse) {
   const asks = [];
   return {

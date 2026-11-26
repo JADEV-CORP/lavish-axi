@@ -221,7 +221,7 @@ call rejects with `UNAVAILABLE`. A page opened without Lavish has no `window.lav
   restarts. Keys are 1 to 256 characters without control characters; one value is at most 1 MB of JSON; a page
   holds at most 5 MB and 10,000 keys. `get` resolves `undefined` for a missing key, `delete` resolves whether
   the key existed, `list` resolves the sorted keys. Codes: `KEY_INVALID`, `VALUE_INVALID`, `VALUE_TOO_LARGE`,
-  `STORE_FULL`. `lavish data <page>` prints what a page stored (`--json` for one JSON document), and
+  `STORE_FULL`, and `RATE_LIMITED` past 20 writes a second (bursts of 40 pass). `lavish data <page>` prints what a page stored (`--json` for one JSON document), and
   `lavish data <page> --clear --yes` deletes it; `--clear` alone only reports what would go.
 - **Ask the agent.** `ask(question, { data, timeoutMs, attachments })` sends the question at once as a prompt
   tagged `ask`, shows it in the conversation, and resolves with the text of the agent reply that answers it.

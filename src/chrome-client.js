@@ -6298,6 +6298,24 @@ const PAGE_STORE_QUEUE_MAX = 256;
 let pageStoreChain = Promise.resolve();
 let pageStoreWaiting = 0;
 
+// Every write rewrites the page's data file, so a page that loops store.set or store.delete
+// would churn the disk. A token bucket keeps normal use instant and refuses a flood.
+const PAGE_STORE_WRITES_PER_SECOND = 20;
+const PAGE_STORE_WRITE_BURST = 40;
+let pageStoreWriteTokens = PAGE_STORE_WRITE_BURST;
+let pageStoreWriteRefilledAt = 0;
+
+function takePageStoreWriteToken(now = Date.now()) {
+  if (pageStoreWriteRefilledAt) {
+    const refill = ((now - pageStoreWriteRefilledAt) / 1000) * PAGE_STORE_WRITES_PER_SECOND;
+    pageStoreWriteTokens = Math.min(PAGE_STORE_WRITE_BURST, pageStoreWriteTokens + refill);
+  }
+  pageStoreWriteRefilledAt = now;
+  if (pageStoreWriteTokens < 1) return false;
+  pageStoreWriteTokens -= 1;
+  return true;
+}
+
 function pageStoreKeyError(name) {
   if (typeof name !== "string" || name.length === 0) return "A storage key must be a non-empty string.";
   if (name.length > PAGE_APP_LIMITS.storeKeyMaxChars) {
@@ -6338,6 +6356,13 @@ function pageStoreRequest(op, msg) {
     }
   } else {
     return Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "Unknown storage request." });
+  }
+  if ((op === "set" || op === "delete") && !takePageStoreWriteToken()) {
+    return Promise.resolve({
+      ok: false,
+      code: "RATE_LIMITED",
+      error: "Too many changes at once. Try again in a moment.",
+    });
   }
   if (pageStoreWaiting >= PAGE_STORE_QUEUE_MAX) {
     return Promise.resolve({
