@@ -3679,8 +3679,10 @@ test("older Jadev CLIs adopt newer fork servers without replacing them", () => {
   assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.91" }), true);
 });
 
-test("the fork carries a jadev prerelease version so it is never mistaken for an npm release", () => {
-  assert.match(VERSION, /^\d+\.\d+\.\d+-jadev\.\d+$/);
+test("the CLI reports the package's own semver version", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(VERSION, packageJson.version);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
 });
 
 test("poll and reply help describe the optional reply sections", () => {

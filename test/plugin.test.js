@@ -17,12 +17,14 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  PLUGIN_NAME,
   PLUGIN_SCHEMA_URL,
   computeVsCodePluginLocationsUpdate,
   createPluginManifest,
   createPluginManifestJson,
   isStalePluginLocation,
   linkCursorLocalPlugin,
+  normalizeAuthor,
   normalizeRepositoryUrl,
   readPluginManifest,
   resolveCursorLocalPluginsDir,
@@ -97,11 +99,29 @@ test("generated manifest tracks package.json rather than restating it", async ()
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const manifest = createPluginManifest(packageJson);
 
-  assert.equal(manifest.name, packageJson.name);
   assert.equal(manifest.version, packageJson.version);
   assert.equal(manifest.description, packageJson.description);
   assert.equal(manifest.license, packageJson.license);
   assert.deepEqual(manifest.keywords, packageJson.keywords);
+  assert.deepEqual(manifest.author, packageJson.author);
+  assert.equal(manifest.repository, "https://github.com/JADEV-CORP/lavish-axi");
+});
+
+test("the plugin keeps its lavish-axi name so earlier registrations are repaired, not duplicated", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+  assert.equal(packageJson.name, "@jadev-corp/lavish");
+  assert.equal(PLUGIN_NAME, "lavish-axi");
+  assert.equal(createPluginManifest(packageJson).name, PLUGIN_NAME);
+});
+
+test("normalizeAuthor keeps only the fields the manifest schema allows", () => {
+  assert.deepEqual(normalizeAuthor({ name: "JADEV-CORP", url: "https://github.com/JADEV-CORP", extra: 1 }), {
+    name: "JADEV-CORP",
+    url: "https://github.com/JADEV-CORP",
+  });
+  assert.deepEqual(normalizeAuthor("JADEV-CORP"), { name: "JADEV-CORP" });
+  assert.equal(normalizeAuthor(undefined), undefined);
 });
 
 test("committed plugin.json stays in sync with package.json", async () => {

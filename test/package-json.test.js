@@ -57,9 +57,21 @@ test("build copies local design assets for published artifact injection", async 
 test("package metadata matches the GitHub repository used for npm provenance", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-  assert.equal(packageJson.repository.url, "git+https://github.com/kunchenguid/lavish-axi.git");
-  assert.equal(packageJson.bugs.url, "https://github.com/kunchenguid/lavish-axi/issues");
-  assert.equal(packageJson.homepage, "https://github.com/kunchenguid/lavish-axi#readme");
+  assert.equal(packageJson.repository.url, "git+https://github.com/JADEV-CORP/lavish-axi.git");
+  assert.equal(packageJson.bugs.url, "https://github.com/JADEV-CORP/lavish-axi/issues");
+  assert.equal(packageJson.homepage, "https://github.com/JADEV-CORP/lavish-axi#readme");
+});
+
+test("the package publishes as @jadev-corp/lavish with lavish and the lavish-axi alias", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+  assert.equal(packageJson.name, "@jadev-corp/lavish");
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/, "our own semver line, no -jadev.N suffix");
+  assert.deepEqual(packageJson.bin, { lavish: "dist/cli.mjs", "lavish-axi": "dist/cli.mjs" });
+  assert.deepEqual(packageJson.publishConfig, { access: "public" });
+  assert.equal(packageJson.license, "MIT");
+  assert.equal(packageJson.author.name, "JADEV-CORP");
+  assert.ok(packageJson.files.includes("CHANGELOG.md"));
 });
 
 test("pnpm lock root importer matches the publish manifest", async () => {
