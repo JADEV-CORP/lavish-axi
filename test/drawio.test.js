@@ -32,9 +32,14 @@ async function tempDir(t) {
 test("draw.io is looked up in the override, on PATH, then in the usual install folder", () => {
   const mac = drawioCandidates({ LAVISH_AXI_DRAWIO: "/custom/drawio", PATH: "/a:/b", HOME: "/Users/x" }, "darwin");
   assert.equal(mac[0], "/custom/drawio");
-  assert.ok(mac.includes(path.join("/a", "drawio")));
+  // Candidates follow the platform asked about, not the one running the test.
+  assert.ok(mac.includes("/a/drawio"));
   assert.ok(mac.includes("/Applications/draw.io.app/Contents/MacOS/draw.io"));
-  assert.ok(mac.indexOf(path.join("/a", "drawio")) < mac.indexOf("/Applications/draw.io.app/Contents/MacOS/draw.io"));
+  assert.ok(mac.indexOf("/a/drawio") < mac.indexOf("/Applications/draw.io.app/Contents/MacOS/draw.io"));
+
+  const windows = drawioCandidates({ PATH: "C:\\tools;D:\\bin" }, "win32");
+  assert.ok(windows.includes("C:\\tools\\draw.io.exe"));
+  assert.ok(windows.includes("D:\\bin\\drawio.exe"));
 
   const linux = drawioCandidates({ PATH: "" }, "linux");
   assert.ok(linux.includes("/opt/drawio/drawio"));
@@ -55,14 +60,17 @@ test("sources are .drawio, .xml and Mermaid files, never the rendered SVG", () =
 });
 
 test("outputs sit next to the source; a Mermaid file gets an editable .drawio first", () => {
-  const plain = diagramPaths("/w/flow.drawio", { previewDir: "/state/p" });
-  assert.equal(plain.drawio, "/w/flow.drawio");
-  assert.equal(plain.svg, "/w/flow.drawio.svg");
-  assert.match(plain.preview, /^\/state\/p\/flow-[0-9a-f]{10}\.png$/);
+  // Built with path.join so the expectations hold on Windows as well.
+  const source = path.join(path.sep, "w", "flow.drawio");
+  const plain = diagramPaths(source, { previewDir: path.join(path.sep, "state", "p") });
+  assert.equal(plain.drawio, source);
+  assert.equal(plain.svg, path.join(path.sep, "w", "flow.drawio.svg"));
+  assert.equal(path.dirname(plain.preview), path.join(path.sep, "state", "p"));
+  assert.match(path.basename(plain.preview), /^flow-[0-9a-f]{10}\.png$/);
   assert.equal(plain.isMermaid, false);
 
-  const mermaid = diagramPaths("/w/seq.mmd", { out: "/out/x.svg" });
-  assert.equal(mermaid.drawio, "/w/seq.drawio");
+  const mermaid = diagramPaths(path.join(path.sep, "w", "seq.mmd"), { out: "/out/x.svg" });
+  assert.equal(mermaid.drawio, path.join(path.sep, "w", "seq.drawio"));
   assert.equal(mermaid.svg, path.resolve("/out/x.svg"));
   assert.equal(mermaid.preview, "");
   assert.equal(mermaid.isMermaid, true);

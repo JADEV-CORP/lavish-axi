@@ -32,22 +32,24 @@ const MIN_READABLE_SCALE = 85;
 
 /** Where draw.io usually lives, most specific first. */
 export function drawioCandidates(env = process.env, platform = process.platform) {
+  // Resolve for the platform asked about, not the one running: tests and tooling can ask for any.
+  const host = platform === "win32" ? path.win32 : path.posix;
   const candidates = [];
   if (env.LAVISH_AXI_DRAWIO) candidates.push(env.LAVISH_AXI_DRAWIO);
   const exe = platform === "win32" ? ["drawio.exe", "draw.io.exe"] : ["drawio"];
-  for (const dir of String(env.PATH || env.Path || "").split(path.delimiter)) {
-    if (dir) for (const name of exe) candidates.push(path.join(dir, name));
+  for (const dir of String(env.PATH || env.Path || "").split(host.delimiter)) {
+    if (dir) for (const name of exe) candidates.push(host.join(dir, name));
   }
   if (platform === "darwin") {
     candidates.push("/Applications/draw.io.app/Contents/MacOS/draw.io");
-    if (env.HOME) candidates.push(path.join(env.HOME, "Applications/draw.io.app/Contents/MacOS/draw.io"));
+    if (env.HOME) candidates.push(host.join(env.HOME, "Applications/draw.io.app/Contents/MacOS/draw.io"));
   } else if (platform === "win32") {
     for (const root of [
       env.ProgramFiles,
       env["ProgramFiles(x86)"],
-      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs"),
+      env.LOCALAPPDATA && host.join(env.LOCALAPPDATA, "Programs"),
     ]) {
-      if (root) candidates.push(path.join(root, "draw.io", "draw.io.exe"));
+      if (root) candidates.push(host.join(root, "draw.io", "draw.io.exe"));
     }
   } else {
     candidates.push("/opt/drawio/drawio", "/usr/bin/drawio", "/snap/bin/drawio");
