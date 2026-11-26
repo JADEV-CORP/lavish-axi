@@ -6854,6 +6854,8 @@ function paletteCommands() {
     { label: "Show revisions", control: revisionsButton, when: !revisionsWrap.hidden },
     { label: "Show layout issues", control: warningsButton, when: !warningsWrap.hidden },
     { label: "Reload artifact", control: reloadArtifactButton },
+    // The Versions panel lives in src/versions-client.js; its menu item is the control.
+    { label: "Show versions", control: document.getElementById("openVersions") },
     { label: "Copy DOM snapshot", control: copySnapshotButton },
     { label: "Copy the artifact path", control: copyPathButton },
     { label: "Export standalone HTML", control: exportArtifactButton },
@@ -7760,6 +7762,9 @@ events.set("agent-presence", (data) => {
   setAgentPresence(data.mode === "external-listener" ? "external" : data.state);
 });
 events.set("layout-warnings", (data) => setLayoutWarnings(data.warnings || []));
+// A new saved version. The Versions panel is its own script (src/versions-client.js) and hears it
+// through the document, so it needs nothing else from this file.
+events.set("versions", (data) => document.dispatchEvent(new CustomEvent("lavish:versions", { detail: data })));
 events.set("ended", () => markSessionEnded());
 connectLiveEvents();
 

@@ -21,22 +21,36 @@ export function isValidGalleryKey(key) {
 }
 
 // "~/dev/app/.lavish/plan.html" for a file under the home folder, the path itself otherwise.
+// `home` may list several spellings of the home folder: session paths are real paths, so a home
+// reached through a symlink is matched by its real path too.
+/**
+ * @param {string} file
+ * @param {string | string[]} [home]
+ */
 export function shortPath(file, home = homedir()) {
   const normalized = String(file || "").replaceAll("\\", "/");
-  const normalizedHome = String(home || "").replaceAll("\\", "/");
-  if (normalizedHome && normalized === normalizedHome) return "~";
-  if (normalizedHome && normalized.startsWith(`${normalizedHome}/`)) {
-    return `~/${normalized.slice(normalizedHome.length + 1)}`;
+  for (const candidate of Array.isArray(home) ? home : [home]) {
+    const normalizedHome = String(candidate || "").replaceAll("\\", "/");
+    if (!normalizedHome) continue;
+    if (normalized === normalizedHome) return "~";
+    if (normalized.startsWith(`${normalizedHome}/`)) return `~/${normalized.slice(normalizedHome.length + 1)}`;
   }
   return normalized;
 }
 
+// Folder names that say what a folder holds, not which project it belongs to.
+const GENERIC_FOLDERS = new Set(
+  "artifacts build docs doc dist html out output outputs page pages public report reports review reviews site temp tmp www".split(
+    " ",
+  ),
+);
+
 // The project a page belongs to: its folder, or the folder above when the page sits in a hidden
-// working folder such as `.lavish/`.
+// working folder such as `.lavish/` or in a generic one such as `docs/`.
 export function projectLabel(file) {
   const folder = path.dirname(String(file || ""));
   const name = path.basename(folder);
-  if (name.startsWith(".")) {
+  if (name.startsWith(".") || GENERIC_FOLDERS.has(name.toLowerCase())) {
     const above = path.basename(path.dirname(folder));
     if (above && above !== path.sep && above !== ".") return above;
   }
@@ -138,7 +152,7 @@ export function createPageHeadReader(extractHead) {
 /**
  * The gallery's rows. Nothing here carries the full path: `path` is shortened with ~.
  * @param {any[]} sessions every session in state.json
- * @param {{ pins?: string[], listening?: Set<string>, readHead: (file: string) => Promise<{ missing: boolean, title: string, mtimeMs: number }>, home?: string }} options
+ * @param {{ pins?: string[], listening?: Set<string>, readHead: (file: string) => Promise<{ missing: boolean, title: string, mtimeMs: number }>, home?: string | string[] }} options
  */
 export async function buildGalleryEntries(sessions, { pins = [], listening = new Set(), readHead, home = homedir() }) {
   const pinned = new Set(pins);

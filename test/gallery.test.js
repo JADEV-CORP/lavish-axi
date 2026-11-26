@@ -23,11 +23,13 @@ test("shortPath writes the home folder as ~ and leaves other paths alone", () =>
   assert.equal(shortPath("/Users/sam", "/Users/sam"), "~");
   assert.equal(shortPath("/Users/samuel/plan.html", "/Users/sam"), "/Users/samuel/plan.html");
   assert.equal(shortPath("C:\\Users\\sam\\plan.html", "C:\\Users\\sam"), "~/plan.html");
+  assert.equal(shortPath("/private/home/sam/a.html", ["/home/sam", "/private/home/sam"]), "~/a.html");
 });
 
 test("projectLabel names the folder, skipping a hidden working folder", () => {
   assert.equal(projectLabel("/Users/sam/dev/app/.lavish/plan.html"), "app");
-  assert.equal(projectLabel("/Users/sam/dev/app/docs/plan.html"), "docs");
+  assert.equal(projectLabel("/Users/sam/dev/app/docs/plan.html"), "app");
+  assert.equal(projectLabel("/Users/sam/dev/app/design/plan.html"), "design");
   assert.equal(projectLabel("/plan.html"), "");
 });
 
