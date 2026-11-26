@@ -157,10 +157,11 @@
 
       function edit(row) {
         editing = row.id;
-        for (const name of ["item", "category", "amount", "status"]) form.elements[name].value = row[name];
+        // namedItem, because the elements collection has its own item() method.
+        for (const name of ["item", "category", "amount", "status"]) form.elements.namedItem(name).value = row[name];
         document.getElementById("form-title").textContent = `Edit ${row.item}`;
         document.getElementById("cancel").hidden = false;
-        form.elements.item.focus();
+        form.elements.namedItem("item").focus();
       }
 
       function reset() {

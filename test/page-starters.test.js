@@ -73,6 +73,8 @@ test("each starter is wired to the feature it shows", () => {
   assert.match(page.dashboard, /store\.set\("rows", rows\)/);
   assert.match(page.dashboard, /window\.lavish\.download\("budget\.csv", csv, "text\/csv"\)/);
   assert.match(page.dashboard, /<table class="table">/);
+  // form.elements.item is HTMLFormControlsCollection's item() method, never the field named "item".
+  assert.doesNotMatch(page.dashboard, /elements\.item\b/);
 
   assert.match(page.report, /aria-label="Key numbers"/);
   assert.ok(commentNaming("lavish diagram ").test(page.report), "the diagram slot names the command");
