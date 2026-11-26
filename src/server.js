@@ -45,6 +45,8 @@ import * as mermaidNode from "./mermaid-node.js";
 import * as queueAll from "./queue-all.js";
 import * as tableCellHelpers from "./table-cell.js";
 import * as toonEncode from "./toon-encode.js";
+import * as pageApps from "./page-apps.js";
+import { createPageStore, pageStoreError } from "./page-store.js";
 import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
 import { createExcalidrawLibraryCache, excalidrawLibrariesDir } from "./whiteboard-library-store.js";
 import { parseLibraryIconDirectives } from "./whiteboard-libraries.js";
@@ -91,6 +93,7 @@ import { canonicalFile, SessionStore, sessionKey } from "./session-store.js";
 import { AsyncMutex } from "./async-mutex.js";
 import { generateSharePassword } from "./share-password.js";
 import {
+  ACCEPTED_FILE_TYPES,
   ACCEPTED_IMAGE_MIME,
   isValidAttachmentKey,
   removeAttachment,
@@ -401,6 +404,10 @@ export async function serve({
   // The agent normally polls again within seconds, so presence says "between rounds" and the editor
   // waits a moment before calling it gone. A new poll clears it.
   const betweenRounds = new Set();
+  // When each of those rounds ended. A page question (POST /api/:key/asks) counts a session between
+  // rounds as listened to only this long, the same grace the editor gives before it says the agent
+  // is gone.
+  const roundEndedAt = new Map();
   // The last agent a poll reported for each session, kept after the poll ends so replies keep
   // their name. In memory only: a restarted server learns it again from the next poll.
   const agentIds = new Map();
@@ -470,6 +477,8 @@ export async function serve({
     );
   });
   events.on("layout-warnings", (key, warnings) => broadcastLiveEvent("layout-warnings", key, { warnings }));
+  // A page question that ended without an answer (replaced by a newer one): the chrome tells the page.
+  events.on("ask-closed", (key, data) => broadcastLiveEvent("ask-closed", key, data));
   events.on("ended", (key, endedBy) => broadcastLiveEvent("ended", key, { ended_by: endedBy || null }));
   // Every end path emits "ended", so an ended review never keeps its agent link (#3834). A crash
   // before this runs is caught by the startup sweep below.
@@ -844,6 +853,14 @@ export async function serve({
   // the sweeper's reference snapshot and its delete (D5), and `queuePrompts` cannot
   // interleave with a concurrent poll.
 
+  // Page apps (docs/jadev-fork.md, Page apps): one set of limits for the SDK, the chrome, and these
+  // routes. Picked files reuse the attachment store, so its own limits apply to them.
+  const pageLimits = pageApps.pageAppLimits({
+    pickMaxFiles: attachmentConfig.maxPerPrompt,
+    pickMaxBytes: attachmentConfig.maxBytes,
+  });
+  const pageStore = createPageStore(attachmentStateRoot, { limits: pageLimits, log: writeLog });
+
   const defaultJsonParser = express.json({ limit: "2mb" });
   const whiteboardJsonParser = express.json({ limit: "20mb" });
   app.use((req, res, next) => {
@@ -975,11 +992,13 @@ export async function serve({
     }
   });
 
-  async function publishAgentReply(key, text, { requireOpen = false } = {}) {
+  // Throws ASK_NOT_FOUND / ASK_CLOSED (with statusCode) when `askId` names no open page question;
+  // nothing is posted then.
+  async function publishAgentReply(key, text, { requireOpen = false, askId = "" } = {}) {
     const current = await store.findByKey(key);
     const artifactHtml = current?.file ? await readFile(current.file, "utf8").catch(() => "") : "";
     const revisionId = artifactRevisions.newestRevisionIdInHtml(artifactHtml);
-    const session = await store.addAgentReply(key, text, { requireOpen, revisionId });
+    const session = await store.addAgentReply(key, text, { requireOpen, revisionId, askId });
     if (!session || (requireOpen && session.status === "ended")) return session;
     const lastEntry = session.chat?.at(-1);
     const entry = serializeChat([
@@ -997,6 +1016,8 @@ export async function serve({
     const takeover = req.query.takeover === "1";
     const agentReply =
       req.method === "POST" && req.body?.agent_reply !== undefined ? String(req.body.agent_reply) : null;
+    // The page question the reply answers (`lavish poll --ask <id>`); meaningful only with a reply.
+    const askId = agentReply !== null && typeof req.body?.ask_id === "string" ? req.body.ask_id : "";
     if (takeover && req.method !== "POST") {
       res.status(405).json({ error: "poll takeover requires POST" });
       return;
@@ -1055,36 +1076,55 @@ export async function serve({
         res.status(403).json({ error: "cross-origin poll takeover rejected" });
         return;
       }
-      const { holder, previousPresence, conflict, missing } = await pollOwnershipLock.runExclusive(async () => {
-        const currentHolder = activePolls.get(key);
-        if (currentHolder && !takeover) return { conflict: listenerConflict(currentHolder, "LISTENER_ACTIVE") };
-        const nextHolder = { key, owner, startedAt: Date.now(), replaced: false, replace: null };
-        claimedHolder = nextHolder;
-        betweenRounds.delete(key);
-        const priorPresence = presenceSignature(key, activePolls, deliveredFeedback);
-        if (currentHolder) {
-          // Install the successor before releasing the old response so its cleanup cannot emit a
-          // transient "waiting" state or clear the successor's listener ownership.
-          currentHolder.replaced = true;
-          activePolls.set(key, nextHolder);
-          currentHolder.replace?.();
-        } else {
-          activePolls.set(key, nextHolder);
-        }
-        // Attaching a fresh round retires the prior delivery marker; releasing a poll never does.
-        deliveredFeedback.delete(key);
-        if (agentReply !== null) {
-          const session = await publishAgentReply(key, agentReply);
-          if (!session) {
-            activePolls.delete(key);
-            return { missing: true };
+      const { holder, previousPresence, conflict, missing, askError } = await pollOwnershipLock.runExclusive(
+        async () => {
+          const currentHolder = activePolls.get(key);
+          if (currentHolder && !takeover) return { conflict: listenerConflict(currentHolder, "LISTENER_ACTIVE") };
+          // A reply naming a question that is not open is refused before this poll displaces anyone.
+          const askProblem = askId ? await store.askReplyError(key, askId) : null;
+          if (askProblem) return { askError: askProblem };
+          const nextHolder = { key, owner, startedAt: Date.now(), replaced: false, replace: null };
+          claimedHolder = nextHolder;
+          betweenRounds.delete(key);
+          roundEndedAt.delete(key);
+          const priorPresence = presenceSignature(key, activePolls, deliveredFeedback);
+          if (currentHolder) {
+            // Install the successor before releasing the old response so its cleanup cannot emit a
+            // transient "waiting" state or clear the successor's listener ownership.
+            currentHolder.replaced = true;
+            activePolls.set(key, nextHolder);
+            currentHolder.replace?.();
+          } else {
+            activePolls.set(key, nextHolder);
           }
-        }
-        return { holder: nextHolder, previousPresence: priorPresence };
-      });
+          // Attaching a fresh round retires the prior delivery marker; releasing a poll never does.
+          deliveredFeedback.delete(key);
+          if (agentReply !== null) {
+            let session;
+            try {
+              session = await publishAgentReply(key, agentReply, { askId });
+            } catch (error) {
+              // The question closed between the check above and the write (another reply answered it).
+              if (!String(error?.code || "").startsWith("ASK_")) throw error;
+              activePolls.delete(key);
+              return { askError: error };
+            }
+            if (!session) {
+              activePolls.delete(key);
+              return { missing: true };
+            }
+          }
+          return { holder: nextHolder, previousPresence: priorPresence };
+        },
+      );
       if (conflict) {
         detachRequestClose();
         res.status(409).json(conflict);
+        return;
+      }
+      if (askError) {
+        detachRequestClose();
+        res.status(askError.statusCode || 409).json(askErrorBody(askError));
         return;
       }
       if (missing) {
@@ -1195,7 +1235,10 @@ export async function serve({
             await restoreClosedFeedback(key, responseResult);
             return;
           }
-          if (roundEnded && responseResult.status === "waiting") betweenRounds.add(key);
+          if (roundEnded && responseResult.status === "waiting") {
+            betweenRounds.add(key);
+            roundEndedAt.set(key, Date.now());
+          }
           finishFeedbackDelivery(key, responseResult);
           const agentResponse = agentFacingFeedback(responseResult);
           if (streamHeartbeat) {
@@ -1498,6 +1541,7 @@ export async function serve({
     try {
       const session = await publishAgentReply(req.params.key, String(req.body?.text || ""), {
         requireOpen: true,
+        askId: typeof req.body?.ask_id === "string" ? req.body.ask_id : "",
       });
       if (!session) {
         res.status(404).json({ error: "session not found" });
@@ -1507,7 +1551,95 @@ export async function serve({
         res.status(409).json({ status: "ended", ended_by: session.ended_by });
         return;
       }
-      res.json({ status: "sent" });
+      const answered = session.chat?.at(-1)?.ask_id;
+      res.json({ status: "sent", ...(answered ? { ask_id: answered } : {}) });
+    } catch (error) {
+      if (String(error?.code || "").startsWith("ASK_")) {
+        res.status(error.statusCode || 409).json(askErrorBody(error));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // Ask the agent from the page (`window.lavish.ask`, src/page-asks.js). Only the chrome may call it:
+  // the frame asks the chrome, which forwards the question. The question goes out at once as a
+  // prompt tagged "ask", and the agent's next reply answers it. A page whose agent is not
+  // listening is told so right away instead of waiting for nothing.
+  app.post("/api/:key/asks", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page question rejected" });
+        return;
+      }
+      const key = req.params.key;
+      const session = await store.findByKey(key);
+      if (!session) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      if (session.status === "ended") {
+        res.status(409).json({ code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." });
+        return;
+      }
+      const question = typeof req.body?.question === "string" ? req.body.question : "";
+      const context = typeof req.body?.context === "string" ? req.body.context : "";
+      if (!question.trim() || question.length > pageLimits.askQuestionMaxChars) {
+        res.status(400).json({
+          code: "INVALID",
+          error: `A question is 1 to ${pageLimits.askQuestionMaxChars} characters.`,
+        });
+        return;
+      }
+      if (context.length > pageLimits.askContextMaxChars) {
+        res.status(400).json({ code: "TOO_LARGE", error: "The question's data is too large." });
+        return;
+      }
+      const requested = Number(req.body?.timeout_ms);
+      const timeoutMs = Number.isFinite(requested)
+        ? Math.min(pageLimits.askMaxTimeoutMs, Math.max(pageLimits.askMinTimeoutMs, Math.floor(requested)))
+        : pageLimits.askDefaultTimeoutMs;
+      const roundEnd = roundEndedAt.get(key);
+      const listening =
+        activePolls.has(key) ||
+        deliveredFeedback.has(key) ||
+        (betweenRounds.has(key) && roundEnd !== undefined && Date.now() - roundEnd <= ASK_BETWEEN_ROUNDS_GRACE_MS);
+      if (!listening) {
+        res.status(409).json({
+          code: "NO_AGENT",
+          error: "No agent is listening to this page. Ask your agent to run lavish poll on it, then try again.",
+        });
+        return;
+      }
+      const result = await store.createAsk(
+        key,
+        { question, context, timeoutMs, attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [] },
+        {
+          resolveAttachment: (sessionKeyValue, id) => resolveAttachment(attachmentStateRoot, sessionKeyValue, id),
+          maxPerPrompt: attachmentConfig.maxPerPrompt,
+          maxPromptBytes: attachmentConfig.maxPromptBytes,
+        },
+      );
+      if (!result) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      if (result.ended) {
+        res.status(409).json({ code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." });
+        return;
+      }
+      if (result.rejected) {
+        res.status(400).json({
+          code: "FILES_REJECTED",
+          error: "Some files could not be sent with the question.",
+          rejected: result.rejected,
+        });
+        return;
+      }
+      for (const id of result.superseded) events.emit("ask-closed", key, { ask_id: id, status: "superseded" });
+      events.emit("feedback", key, result.session.ended_by);
+      events.emit("chat-sync", key, result.session);
+      res.json({ status: "asked", ask: result.ask, superseded: result.superseded });
     } catch (error) {
       next(error);
     }
@@ -1681,6 +1813,7 @@ export async function serve({
           chromeLoadToken: chromeLoad.chrome_load_token,
           attachmentMaxBytes: attachmentConfig.maxBytes,
           attachmentMaxCount: attachmentConfig.maxPerPrompt,
+          pageAppLimits: pageLimits,
           agentId: agentIds.get(session.key) || "",
           updateAvailable: updateChecker?.current() || null,
           agentNudgeAvailable: await agentNudger.available(session.key),
@@ -1891,6 +2024,7 @@ export async function serve({
         createSdkJs(String(req.query.key || ""), verified.artifact_revision, verified.artifact_load_token, {
           maxAttachmentCount: attachmentConfig.maxPerPrompt,
           maxAttachmentBytes: attachmentConfig.maxBytes,
+          pageAppLimits: pageLimits,
         }),
       );
     } catch (error) {
@@ -2117,6 +2251,11 @@ export async function serve({
       // queued references (the sweep alone never evicts referenced files). The
       // eviction grace keeps a just-uploaded ready card off the reclaim list so it
       // survives until the user sends it.
+      // `?kind=file` is the chrome uploading what the reviewer chose through window.lavish.files.pick:
+      // it also admits PDF and UTF-8 text, named by `?name=` only for the text extension. Every other
+      // upload stays images only.
+      const kind = req.query.kind === "file" ? "file" : "image";
+      const nameHint = typeof req.query.name === "string" ? req.query.name.slice(0, 255) : "";
       const attachment = await store.runExclusive(async () => {
         const referenced = await store.referencedAttachmentIds();
         return writeAttachment(attachmentStateRoot, req.params.key, buffer, {
@@ -2126,6 +2265,8 @@ export async function serve({
           ttlMs: attachmentConfig.ttlMs,
           referenced,
           evictionGraceMs: attachmentConfig.evictionGraceMs,
+          kind,
+          nameHint,
         });
       });
       res.json({ status: "stored", attachment });
@@ -2172,6 +2313,76 @@ export async function serve({
       });
       res.json({ status });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  // Page storage (`window.lavish.store`). Only this server's chrome may call it: the artifact frame
+  // asks the chrome, which validates the request and forwards it here, where it is validated again.
+  app.post("/api/:key/page-store", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page storage request rejected" });
+        return;
+      }
+      const session = await store.findByKey(req.params.key);
+      if (!session) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      const op = String(req.body?.op || "");
+      const name = req.body?.key;
+      if (op === "get") {
+        res.json(await pageStore.get(session.key, name));
+      } else if (op === "set") {
+        res.json(await pageStore.set(session.key, session.file, name, req.body?.value));
+      } else if (op === "delete") {
+        res.json(await pageStore.delete(session.key, session.file, name));
+      } else if (op === "list") {
+        res.json(await pageStore.list(session.key, typeof req.body?.prefix === "string" ? req.body.prefix : ""));
+      } else {
+        throw pageStoreError("INVALID", "unknown page storage operation");
+      }
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page>`: what a page stored, for the agent. Header-less CLI requests pass; a
+  // present foreign Origin or Referer does not, like the poll control routes.
+  app.get("/api/:key/page-data", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json(await pageStore.read(req.params.key));
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page> --clear --yes`. The global origin guard already refuses a foreign page.
+  app.post("/api/:key/page-data/clear", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json({ status: "cleared", ...(await pageStore.clear(req.params.key)) });
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -3118,6 +3329,18 @@ function clearFeedbackDelivery(key, activePolls, deliveredFeedback, events) {
   }
 }
 
+// How long after a poll round ends a page question still counts the agent as listening (#3782).
+const ASK_BETWEEN_ROUNDS_GRACE_MS = 60_000;
+
+function askErrorBody(error) {
+  return {
+    status: "error",
+    code: error.code,
+    error: error.message,
+    ...(error.ask_status ? { ask_status: error.ask_status } : {}),
+  };
+}
+
 export function computePresence(key, activePolls, deliveredFeedback) {
   if (deliveredFeedback.has(key)) return "working";
   return activePolls.has(key) ? "listening" : "waiting";
@@ -3526,6 +3749,8 @@ export function createChromeHtml(
     attachmentMaxBytes = 0,
     attachmentMaxCount = 0,
     attachmentAcceptedMime = ACCEPTED_IMAGE_MIME,
+    pageAppLimits = pageApps.pageAppLimits(),
+    fileAcceptedTypes = ACCEPTED_FILE_TYPES,
     agentId = "",
     agentNudgeAvailable = false,
     /** @type {{ version: string, current: string } | null} */
@@ -3565,6 +3790,8 @@ export function createChromeHtml(
     attachmentMaxBytes,
     attachmentMaxCount,
     attachmentAcceptedMime: acceptedMime,
+    pageAppLimits,
+    fileAcceptedTypes,
     updateAvailable,
     // The legend's swatches are server-owned, not artifact-owned. The chrome
     // derives every swatch from this palette by registry position, so an
@@ -3651,13 +3878,13 @@ function serializeModuleHelpers(module) {
  * @param {string} key
  * @param {number} [artifactRevision]
  * @param {string} [artifactLoadToken]
- * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[] }} [options]
+ * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[], pageAppLimits?: Record<string, number> }} [options]
  */
 export function createSdkJs(
   key,
   artifactRevision = 0,
   artifactLoadToken = "",
-  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME } = {},
+  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME, pageAppLimits = undefined } = {},
 ) {
   const mermaidHelperSource = serializeModuleHelpers(mermaidNode);
   const tableHelperSource = serializeModuleHelpers(tableCellHelpers);
@@ -3665,6 +3892,7 @@ export function createSdkJs(
   const findHelperSource = serializeModuleHelpers(findInPage);
   const toonHelperSource = serializeModuleHelpers(toonEncode);
   const queueAllHelperSource = serializeModuleHelpers(queueAll);
+  const pageAppHelperSource = serializeModuleHelpers(pageApps);
   const revisionNumber = Number(artifactRevision);
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : 0;
   const loadToken = String(artifactLoadToken || "").slice(0, 200);
@@ -3676,6 +3904,7 @@ export function createSdkJs(
     maxAttachmentCount: Number.isFinite(maxAttachmentCount) ? maxAttachmentCount : undefined,
     maxAttachmentBytes: Number.isFinite(maxAttachmentBytes) ? maxAttachmentBytes : undefined,
     acceptedImageMime: acceptedImageMime.map(String),
+    pageAppLimits: pageApps.pageAppLimits(pageAppLimits),
   };
   return `(() => {
 const key=${JSON.stringify(key)};
@@ -3706,6 +3935,7 @@ ${revisionHelperSource.declarations}
 ${findHelperSource.declarations}
 ${toonHelperSource.declarations}
 ${queueAllHelperSource.declarations}
+${pageAppHelperSource.declarations}
 (${createArtifactSdk.toString()})(deriveQueueKey, isNativeInteractiveControl, mermaidHelpers, artifactRevision, artifactLoadToken, key, ${JSON.stringify(sdkOptions)});
 })();`;
 }

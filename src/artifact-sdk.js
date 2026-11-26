@@ -19,6 +19,7 @@ import {
   summarizeQuestions,
   topLevelQuestionScopes,
 } from "./queue-all.js";
+import { createPageApps, pageAppLimits } from "./page-apps.js";
 import { tableCellTarget } from "./table-cell.js";
 import { encodeToon } from "./toon-encode.js";
 
@@ -484,7 +485,7 @@ export function deriveAttachmentNoticeState(state = {}) {
  * @param {number} [artifactRevision]
  * @param {string} [artifactLoadToken]
  * @param {string} [sessionKey]
- * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[] }} [options]
+ * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[], pageAppLimits?: Record<string, number> }} [options]
  */
 export function createArtifactSdk(
   deriveQueueKey,
@@ -558,6 +559,17 @@ export function createArtifactSdk(
       ? crypto.randomUUID()
       : "n" + Math.random().toString(36).slice(2) + Date.now().toString(36);
   let attachmentLocalCounter = 0;
+  // Page apps (src/page-apps.js): storage, ask the agent, files in and out, over one request
+  // channel to the chrome. Results are bound to this document by their own nonce, like uploads.
+  const pageApps = createPageApps({
+    post: postArtifactMessage,
+    nonce:
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "p" + Math.random().toString(36).slice(2) + Date.now().toString(36),
+    limits: pageAppLimits(options.pageAppLimits),
+    encodeToon,
+  });
   // The controller for the currently open card, so upload results routed from the
   // chrome reach the right chips. Only one card is ever open at a time.
   let activeAttachments = null;
@@ -2925,6 +2937,11 @@ export function createArtifactSdk(
       }),
     setDocumentMeta,
     snapshot,
+    // Page apps: see src/page-apps.js and the input playbook.
+    store: pageApps.api.store,
+    ask: pageApps.api.ask,
+    files: pageApps.api.files,
+    download: pageApps.api.download,
   };
 
   window.addEventListener("message", (event) => {
@@ -2932,6 +2949,7 @@ export function createArtifactSdk(
     // without the source check the artifact could post to itself and drive the SDK.
     if (event.source !== parent) return;
     const msg = event.data || {};
+    if (pageApps.handleResult(msg)) return;
     if (msg.type === "lavish:setAnnotationMode") setAnnotationMode(msg.enabled);
     if (msg.type === "lavish:attachmentResult") {
       if (!isTrustedAttachmentResult(event, { parentWindow: parent, nonce: ATTACHMENT_NONCE })) return;

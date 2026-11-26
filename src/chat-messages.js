@@ -437,6 +437,7 @@ function promptAnchor(prompt, kind) {
   const target = prompt.target && typeof prompt.target === "object" ? prompt.target : null;
   if (target?.type === "marks") return marksAnchor(target);
   if (kind === "message") return null;
+  if (kind === "ask") return { kind: "ask", label: "page question" };
   const selector = bound(prompt.selector, SELECTOR_MAX);
   if (kind === "whiteboard") {
     const index = Number(target?.diagramIndex);
@@ -514,7 +515,9 @@ export function chatEntryForPrompt(prompt, at) {
         ? "whiteboard"
         : tag === "layout-warnings"
           ? "layout-warnings"
-          : "annotation";
+          : tag === "ask"
+            ? "ask"
+            : "annotation";
   const promptId = normalizePromptId(prompt.prompt_id);
   const anchor = promptAnchor(prompt, kind);
   if (!text && attachments.length === 0 && !promptId && !anchor) return null;
@@ -522,6 +525,8 @@ export function chatEntryForPrompt(prompt, at) {
   if (promptId) entry.prompt_id = promptId;
   if (anchor) entry.anchor = anchor;
   if (attachments.length) entry.attachments = attachments;
+  // A question the page asked the agent (window.lavish.ask): the id lets the reply name it.
+  if (kind === "ask" && typeof prompt.target?.ask_id === "string") entry.ask_id = prompt.target.ask_id;
   return entry;
 }
 

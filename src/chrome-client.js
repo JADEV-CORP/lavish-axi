@@ -71,6 +71,45 @@ const uploadTimestamps = [];
 let uploadedBytesTotal = 0;
 let uploadsInFlight = 0;
 
+// Page apps (src/page-apps.js): the limits every hop applies, from the server. The defaults only
+// cover an unwired harness; the server checks everything again.
+const PAGE_APP_LIMITS = {
+  storeKeyMaxChars: 256,
+  storeValueMaxBytes: 1024 * 1024,
+  askQuestionMaxChars: 4000,
+  askContextMaxChars: 64 * 1024,
+  askMinTimeoutMs: 10_000,
+  askMaxTimeoutMs: 30 * 60_000,
+  askDefaultTimeoutMs: 5 * 60_000,
+  downloadMaxBytes: 50 * 1024 * 1024,
+  downloadNameMaxChars: 200,
+  ...(sessionData.pageAppLimits && typeof sessionData.pageAppLimits === "object" ? sessionData.pageAppLimits : {}),
+};
+// What `window.lavish.files.pick` may offer: the server's list (ACCEPTED_FILE_TYPES), narrowed by
+// the page's own `accept`. The server checks every upload's bytes again.
+const FILE_ACCEPTED_TYPES = (
+  Array.isArray(sessionData.fileAcceptedTypes) && sessionData.fileAcceptedTypes.length
+    ? sessionData.fileAcceptedTypes
+    : [
+        { ext: "png", mime: "image/png" },
+        { ext: "jpg", mime: "image/jpeg" },
+        { ext: "jpeg", mime: "image/jpeg" },
+        { ext: "webp", mime: "image/webp" },
+        { ext: "pdf", mime: "application/pdf" },
+        { ext: "txt", mime: "text/plain" },
+        { ext: "csv", mime: "text/csv" },
+        { ext: "md", mime: "text/markdown" },
+        { ext: "json", mime: "application/json" },
+      ]
+)
+  .filter((type) => type && typeof type.ext === "string" && typeof type.mime === "string")
+  .map((type) => ({ ext: type.ext.toLowerCase(), mime: type.mime.toLowerCase() }));
+// Page questions this tab is waiting on, by ask id. Declared up here because ending the session,
+// which can happen during boot, rejects them.
+/** @type {Map<string, { reply: (result: Record<string, unknown>) => void, timer: ReturnType<typeof setTimeout> }>} */
+const pageAsks = new Map();
+const pageAskTimestamps = [];
+
 function formatByteLimit(bytes) {
   if (bytes >= 1024 * 1024) return Math.round(bytes / (1024 * 1024)) + " MB";
   if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
@@ -847,6 +886,17 @@ function bubbleAttachmentsHtml(entry) {
     entry.attachments
       .slice(0, BUBBLE_THUMBNAIL_LIMIT)
       .map((attachment) => {
+        // A picked document is not served back: it shows as a named chip, not a thumbnail.
+        if (!/\.(png|jpg|webp)$/.test(String(attachment.id))) {
+          const label = escapeHtml(attachment.name || "file");
+          return (
+            '<span class="bubble-file" title="' +
+            label +
+            '"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><span>' +
+            label +
+            "</span></span>"
+          );
+        }
         const alt = escapeHtml(attachment.name || "image");
         return (
           '<img class="bubble-attachment" src="/api/' +
@@ -4490,6 +4540,7 @@ async function endSession(terminal = null) {
 function markSessionEnded() {
   if (ended) return;
   ended = true;
+  failAllPageAsks("SESSION_ENDED", "This review has ended, so the agent cannot answer.");
   renderAgentStatus();
   setSuggestions([]);
   pendingAcknowledgements.clear();
@@ -5781,6 +5832,7 @@ window.addEventListener("message", (event) => {
     ).catch(() => {});
   }
   if (msg.type === "lavish:uploadAttachment") uploadAttachment(msg);
+  if (msg.type === "lavish:pageApp") handlePageAppRequest(msg);
   // There is deliberately no attachment-delete message. See removeAttachment's
   // removal note below: the iframe cannot be trusted to decide a delete, and the
   // chrome cannot see every live reference, so reclamation is the sweeper's job.
@@ -5908,6 +5960,412 @@ async function uploadAttachment(message, reportResult = postToFrame, signal) {
   } finally {
     uploadsInFlight -= 1;
   }
+}
+
+// ---- Page apps (docs/jadev-fork.md, Page apps). The artifact frame cannot reach the server, so
+// `window.lavish.store`, `ask`, `files.pick` and `download` ask the chrome. Everything in the request
+// is untrusted: the chrome checks it, answers only the document that asked (its load token and
+// nonce), and the server checks it again. ----
+const PAGE_APP_ID_RE = /^r\d{1,9}$/;
+
+function handlePageAppRequest(msg) {
+  const id = typeof msg.id === "string" && PAGE_APP_ID_RE.test(msg.id) ? msg.id : "";
+  const nonce = typeof msg.nonce === "string" && msg.nonce.length > 0 && msg.nonce.length <= 100 ? msg.nonce : "";
+  if (!id || !nonce) return;
+  const askingLoad = artifactLoadToken;
+  // A result goes only to the document that asked: after a reload, the old request has no one to answer.
+  const reply = (result) => {
+    if (askingLoad !== artifactLoadToken) return;
+    postToFrame({ type: "lavish:pageAppResult", id, nonce, ...result });
+  };
+  const fail = (code, error) => reply({ ok: false, code, error });
+  const op = String(msg.op || "");
+  /** @type {Promise<any>} */
+  let work;
+  try {
+    if (op.startsWith("store.")) work = pageStoreRequest(op.slice(6), msg);
+    else if (op === "ask") work = askFromPage(msg, reply);
+    else if (op === "files.pick") work = pickFilesForPage(msg, reply);
+    else if (op === "download") work = Promise.resolve(downloadForPage(msg));
+    else work = Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "This Lavish does not know that request." });
+  } catch (error) {
+    work = Promise.reject(error);
+  }
+  work.then(
+    (result) => {
+      if (result) reply(result);
+    },
+    (error) => fail("FAILED", error instanceof Error ? error.message : String(error)),
+  );
+}
+
+// ---- Ask the agent (`window.lavish.ask`). The question goes to the server at once; the answer is the
+// agent reply that names it (`ask_id` on the reply), which arrives on the live stream. ----
+const PAGE_ASK_RATE_MAX = 6;
+const PAGE_ASK_RATE_WINDOW_MS = 60_000;
+
+/** @returns {Promise<Record<string, unknown> | null>} the final result now, or null when it comes later */
+async function askFromPage(msg, reply) {
+  const question = typeof msg.question === "string" ? msg.question : "";
+  const context = typeof msg.context === "string" ? msg.context : "";
+  if (!question.trim() || question.length > PAGE_APP_LIMITS.askQuestionMaxChars) {
+    return {
+      ok: false,
+      code: "INVALID",
+      error: "A question is 1 to " + PAGE_APP_LIMITS.askQuestionMaxChars + " characters.",
+    };
+  }
+  if (context.length > PAGE_APP_LIMITS.askContextMaxChars) {
+    return { ok: false, code: "TOO_LARGE", error: "The question's data is too large." };
+  }
+  if (ended) return { ok: false, code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." };
+  const requested = Number(msg.timeout_ms);
+  const timeoutMs = Number.isFinite(requested)
+    ? Math.min(PAGE_APP_LIMITS.askMaxTimeoutMs, Math.max(PAGE_APP_LIMITS.askMinTimeoutMs, Math.floor(requested)))
+    : PAGE_APP_LIMITS.askDefaultTimeoutMs;
+  // A page stuck in a loop must not flood the agent's conversation.
+  const now = Date.now();
+  while (pageAskTimestamps.length && now - pageAskTimestamps[0] > PAGE_ASK_RATE_WINDOW_MS) pageAskTimestamps.shift();
+  if (pageAskTimestamps.length >= PAGE_ASK_RATE_MAX) {
+    return { ok: false, code: "RATE_LIMITED", error: "Too many questions in a minute. Wait a moment and ask again." };
+  }
+  pageAskTimestamps.push(now);
+  const response = await fetch("/api/" + key + "/asks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      question,
+      context,
+      timeout_ms: timeoutMs,
+      attachments: sanitizeAttachmentRefs(msg.attachments),
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      ok: false,
+      code: String(data.code || "FAILED"),
+      error: String(data.error || "The question was not sent."),
+    };
+  }
+  const askId = String(data.ask?.id || "");
+  if (!askId) return { ok: false, code: "FAILED", error: "The question was not sent." };
+  // The page now waits for the agent, a little past the deadline so the chrome's own timeout wins.
+  reply({ pending: true, wait_ms: timeoutMs + 15_000, ask_id: askId });
+  pageAsks.set(askId, {
+    reply,
+    timer: setTimeout(
+      () =>
+        settlePageAsk(askId, {
+          ok: false,
+          code: "ASK_TIMEOUT",
+          error: "The agent did not answer in time. Ask again, or check that your agent is still running lavish poll.",
+        }),
+      timeoutMs,
+    ),
+  });
+  // A fast agent can answer before this tab has even heard the question was queued.
+  settleAnsweredPageAsks(displayedChat);
+  return null;
+}
+
+function settlePageAsk(askId, result) {
+  const entry = pageAsks.get(askId);
+  if (!entry) return;
+  pageAsks.delete(askId);
+  clearTimeout(entry.timer);
+  entry.reply(result);
+}
+
+// Answers found in the transcript, for asks this tab is still waiting on (a reconnect can bring the
+// reply as part of a chat-sync instead of its own agent-reply event).
+function settleAnsweredPageAsks(chat) {
+  if (!pageAsks.size) return;
+  for (const entry of Array.isArray(chat) ? chat : []) {
+    if (entry?.role === "agent" && typeof entry.ask_id === "string" && pageAsks.has(entry.ask_id)) {
+      settlePageAsk(entry.ask_id, { ok: true, value: String(entry.text || "") });
+    }
+  }
+}
+
+function failAllPageAsks(code, error) {
+  for (const askId of [...pageAsks.keys()]) settlePageAsk(askId, { ok: false, code, error });
+}
+
+// ---- Files in (`window.lavish.files.pick`). The picker opens here, in the chrome, after a click in
+// the page: the reviewer chooses, the chrome uploads to the attachment store under the same budget
+// as every other upload, and the page receives only ids, names, sizes and types. The bytes never
+// enter the page; the agent gets local paths when the page queues the ids. ----
+let pagePickOpen = false;
+
+function acceptedFileLabel() {
+  return [...new Set(FILE_ACCEPTED_TYPES.map((type) => type.ext.toUpperCase()))].join(", ");
+}
+
+/** The accepted types the page's `accept` tokens name (all of them when it named none). */
+function narrowPickTypes(tokens) {
+  const list = (Array.isArray(tokens) ? tokens : [])
+    .filter((token) => typeof token === "string" && token.length <= 100)
+    .slice(0, 20)
+    .map((token) => token.toLowerCase());
+  if (!list.length) return FILE_ACCEPTED_TYPES;
+  return FILE_ACCEPTED_TYPES.filter((type) =>
+    list.some(
+      (token) =>
+        token === "." + type.ext ||
+        token === type.mime ||
+        (token.endsWith("/*") && type.mime.startsWith(token.slice(0, -1))),
+    ),
+  );
+}
+
+function pickedFileType(file, types) {
+  const name = String(file?.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  return types.find((type) => type.ext === ext) || null;
+}
+
+/** @returns {Promise<Record<string, unknown>>} */
+async function pickFilesForPage(msg, reply) {
+  if (!navigator.userActivation?.isActive) {
+    return {
+      ok: false,
+      code: "NEEDS_CLICK",
+      error: "Choosing files needs a click on the page first. Call files.pick() from a button's click handler.",
+    };
+  }
+  if (pagePickOpen) return { ok: false, code: "BUSY", error: "A file picker is already open." };
+  const types = narrowPickTypes(msg.accept);
+  if (!types.length) {
+    return {
+      ok: false,
+      code: "FILE_TYPE",
+      error: "None of those file types can be sent. Lavish takes " + acceptedFileLabel() + ".",
+    };
+  }
+  const input = /** @type {HTMLInputElement} */ (document.createElement("input"));
+  input.type = "file";
+  input.multiple = msg.multiple === true;
+  input.accept = [...new Set(types.flatMap((type) => ["." + type.ext, type.mime]))].join(",");
+  input.style.display = "none";
+  document.body.appendChild(input);
+  pagePickOpen = true;
+  // The reviewer may take their time: the page waits without a deadline from here.
+  reply({ pending: true, wait_ms: 0 });
+  /** @type {File[]} */
+  let files;
+  try {
+    files = await new Promise((resolve) => {
+      input.addEventListener("change", () => resolve([...(input.files || [])]), { once: true });
+      input.addEventListener("cancel", () => resolve([]), { once: true });
+      input.click();
+    });
+  } finally {
+    pagePickOpen = false;
+    input.remove();
+  }
+  if (!files.length) return { ok: true, value: [] };
+  if (files.length > attachmentMaxCount) {
+    return { ok: false, code: "TOO_MANY", error: "Choose up to " + attachmentMaxCount + " files at once." };
+  }
+  for (const file of files) {
+    if (!pickedFileType(file, types)) {
+      return {
+        ok: false,
+        code: "FILE_TYPE",
+        error: file.name + " is not a type this page takes (" + acceptedFileLabel() + ").",
+      };
+    }
+    if (attachmentMaxBytes > 0 && file.size > attachmentMaxBytes) {
+      return {
+        ok: false,
+        code: "FILE_TOO_LARGE",
+        error: file.name + " is larger than the " + formatByteLimit(attachmentMaxBytes) + " limit.",
+      };
+    }
+  }
+  const picked = [];
+  for (const file of files) {
+    const uploaded = await uploadPickedFile(file);
+    if ("error" in uploaded) return { ok: false, code: uploaded.code, error: file.name + ": " + uploaded.error };
+    picked.push({
+      id: uploaded.id,
+      name: String(file.name).slice(0, 200),
+      size: file.size,
+      type: file.type || pickedFileType(file, types)?.mime || "",
+    });
+  }
+  return { ok: true, value: picked };
+}
+
+/** @returns {Promise<{ id: string } | { code: string, error: string }>} */
+async function uploadPickedFile(file) {
+  const now = Date.now();
+  while (uploadTimestamps.length && now - uploadTimestamps[0] > UPLOAD_RATE_WINDOW_MS) uploadTimestamps.shift();
+  if (uploadTimestamps.length >= UPLOAD_RATE_MAX) {
+    return { code: "RATE_LIMITED", error: "Too many uploads. Wait a moment and retry." };
+  }
+  if (uploadedBytesTotal + file.size > UPLOAD_SESSION_BYTE_QUOTA) {
+    return {
+      code: "QUOTA",
+      error: "Upload limit reached for this review (" + formatByteLimit(UPLOAD_SESSION_BYTE_QUOTA) + ").",
+    };
+  }
+  if (uploadsInFlight >= UPLOAD_MAX_IN_FLIGHT) {
+    return { code: "BUSY", error: "Too many uploads in flight. Wait a moment and retry." };
+  }
+  uploadTimestamps.push(now);
+  uploadedBytesTotal += file.size;
+  uploadsInFlight += 1;
+  try {
+    const response = await fetch(
+      "/api/" + key + "/attachments?kind=file&name=" + encodeURIComponent(String(file.name).slice(0, 255)),
+      { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file },
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const code = response.status === 415 ? "FILE_TYPE" : response.status === 413 ? "FILE_TOO_LARGE" : "UPLOAD_FAILED";
+      return { code, error: String(data.error || "Upload failed.") };
+    }
+    const id = String(data.attachment?.id || "");
+    return id ? { id } : { code: "UPLOAD_FAILED", error: "Upload failed." };
+  } catch (error) {
+    return { code: "UPLOAD_FAILED", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    uploadsInFlight -= 1;
+  }
+}
+
+// ---- Files out (`window.lavish.download`). The sandboxed frame may be refused a download, so the
+// chrome saves it through the browser's own flow, only right after a click in the page (user
+// activation reaches the chrome from the frame), so a page cannot drop files on its own. ----
+function downloadForPage(msg) {
+  const name =
+    typeof msg.name === "string"
+      ? msg.name
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .replace(/[\\/:*?"<>|]/g, "_")
+          .replace(/^[\s.]+|[\s.]+$/g, "")
+      : "";
+  if (!name || name.length > PAGE_APP_LIMITS.downloadNameMaxChars) {
+    return {
+      ok: false,
+      code: "NAME_INVALID",
+      error: "A download needs a file name of up to " + PAGE_APP_LIMITS.downloadNameMaxChars + " characters.",
+    };
+  }
+  const bytes = msg.bytes;
+  if (Object.prototype.toString.call(bytes) !== "[object ArrayBuffer]") {
+    return { ok: false, code: "INVALID", error: "A download needs its bytes." };
+  }
+  if (bytes.byteLength > PAGE_APP_LIMITS.downloadMaxBytes) {
+    return {
+      ok: false,
+      code: "TOO_LARGE",
+      error: "A download is limited to " + formatByteLimit(PAGE_APP_LIMITS.downloadMaxBytes) + ".",
+    };
+  }
+  const rawType = typeof msg.mime === "string" ? msg.mime.trim().toLowerCase() : "";
+  const type =
+    /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}(;\s*charset=[a-z0-9_-]{1,40})?$/.test(rawType)
+      ? rawType
+      : "application/octet-stream";
+  if (!navigator.userActivation?.isActive) {
+    return {
+      ok: false,
+      code: "NEEDS_CLICK",
+      error: "Saving a file needs a click on the page first. Call download() from a button's click handler.",
+    };
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const link = /** @type {HTMLAnchorElement} */ (document.createElement("a"));
+  link.href = url;
+  link.download = name;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // The browser has the bytes once the download starts; free the URL a little later.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { ok: true, value: { name, bytes: bytes.byteLength } };
+}
+
+// Storage requests run one at a time, in the order the page made them, so a set followed by a get
+// reads its own write. A page that piles up more than this many waits is told to slow down.
+const PAGE_STORE_QUEUE_MAX = 256;
+let pageStoreChain = Promise.resolve();
+let pageStoreWaiting = 0;
+
+function pageStoreKeyError(name) {
+  if (typeof name !== "string" || name.length === 0) return "A storage key must be a non-empty string.";
+  if (name.length > PAGE_APP_LIMITS.storeKeyMaxChars) {
+    return "A storage key is limited to " + PAGE_APP_LIMITS.storeKeyMaxChars + " characters.";
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) return "A storage key cannot contain control characters.";
+  return "";
+}
+
+/** @returns {Promise<{ ok: boolean, value?: unknown, code?: string, error?: string }>} */
+function pageStoreRequest(op, msg) {
+  let body;
+  if (op === "list") {
+    const prefix = typeof msg.prefix === "string" ? msg.prefix : "";
+    if (prefix.length > PAGE_APP_LIMITS.storeKeyMaxChars) {
+      return Promise.resolve({ ok: false, code: "KEY_INVALID", error: "The list prefix is too long." });
+    }
+    body = JSON.stringify({ op, prefix });
+  } else if (op === "get" || op === "delete" || op === "set") {
+    const keyError = pageStoreKeyError(msg.key);
+    if (keyError) return Promise.resolve({ ok: false, code: "KEY_INVALID", error: keyError });
+    if (op === "set") {
+      const json = typeof msg.json === "string" ? msg.json : "";
+      // A UTF-16 length past the byte limit is past it in UTF-8 too; the server measures exactly.
+      if (!json || json.length > PAGE_APP_LIMITS.storeValueMaxBytes) {
+        return Promise.resolve({ ok: false, code: "VALUE_TOO_LARGE", error: "The value is too large to store." });
+      }
+      try {
+        JSON.parse(json);
+      } catch {
+        return Promise.resolve({ ok: false, code: "VALUE_INVALID", error: "The value is not JSON." });
+      }
+      // The value travels as JSON, not as a string inside JSON, so it is not escaped twice on the way.
+      body = '{"op":"set","key":' + JSON.stringify(msg.key) + ',"value":' + json + "}";
+    } else {
+      body = JSON.stringify({ op, key: msg.key });
+    }
+  } else {
+    return Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "Unknown storage request." });
+  }
+  if (pageStoreWaiting >= PAGE_STORE_QUEUE_MAX) {
+    return Promise.resolve({
+      ok: false,
+      code: "BUSY",
+      error: "Too many storage requests at once. Wait for some to finish.",
+    });
+  }
+  pageStoreWaiting += 1;
+  const run = pageStoreChain.then(async () => {
+    const response = await fetch("/api/" + key + "/page-store", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { ok: false, code: String(data.code || "FAILED"), error: String(data.error || "Storage failed.") };
+    }
+    return { ok: true, value: data };
+  });
+  pageStoreChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run.finally(() => {
+    pageStoreWaiting -= 1;
+  });
 }
 
 // There is intentionally no eager attachment delete here. Removing a chip used to
@@ -7734,12 +8192,23 @@ events.set("agent-reply", (data) => {
     ...(data.at ? { at: String(data.at) } : {}),
   };
   if (addChat(entry, true, { enter: true })) displayedChat.push(entry);
+  if (typeof data.ask_id === "string") settlePageAsk(data.ask_id, { ok: true, value: entry.text });
   noteAgentReply(entry.text);
   notify(agentShortName + " replied: " + replySummary(entry.text));
 });
 events.set("chat-sync", (data) => {
   rememberChatAckIds(data.ack_ids);
   syncChat(data.chat || [], data.chat_revision);
+  settleAnsweredPageAsks(data.chat);
+});
+events.set("ask-closed", (data) => {
+  if (data.status === "superseded") {
+    settlePageAsk(String(data.ask_id || ""), {
+      ok: false,
+      code: "ASK_SUPERSEDED",
+      error: "A newer question from this page replaced this one.",
+    });
+  }
 });
 // Between two poll rounds (#3782) the agent is about to poll again, so the editor keeps showing it
 // listening for a moment; if it does not come back in time, it is shown as gone, as before.

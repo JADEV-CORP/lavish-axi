@@ -201,6 +201,8 @@ function bootSdk({
   const sandbox = {
     parent: { postMessage: (message) => posted.push(message) },
     navigator: { platform },
+    TextEncoder,
+    Blob,
     CSS: { escape: (value) => String(value) },
     Element: class Element {},
     MutationObserver: class MutationObserver {
@@ -1791,4 +1793,129 @@ test("setDocumentMeta forwards null to restore, omits unset fields and drops non
     messages.map((entry) => JSON.parse(JSON.stringify({ title: entry.title, icon: entry.icon }))),
     [{ title: null }, {}, {}],
   );
+});
+
+test("the served SDK bundle relays page storage through the chrome and resolves its answer", async () => {
+  const sdk = bootSdk();
+  const saved = sdk.api.store.set("draft", { lines: 2 });
+  const request = sdk.posted.at(-1);
+  assert.equal(request.type, "lavish:pageApp");
+  assert.equal(request.op, "store.set");
+  assert.equal(request.json, '{"lines":2}');
+  assert.equal(request.artifact_load_token, "load-token");
+  assert.equal(typeof request.nonce, "string");
+
+  sdk.sendChromeMessage({ type: "lavish:pageAppResult", id: request.id, nonce: request.nonce, ok: true });
+  assert.equal(await saved, undefined);
+
+  const read = sdk.api.store.get("draft");
+  const get = sdk.posted.at(-1);
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: get.id,
+    nonce: get.nonce,
+    ok: true,
+    value: { found: true, value: { lines: 2 } },
+  });
+  assert.deepEqual(await read, { lines: 2 });
+});
+
+test("the served SDK bundle exposes ask, files.pick and download beside store", () => {
+  const sdk = bootSdk();
+  assert.equal(typeof sdk.api.ask, "function");
+  assert.equal(typeof sdk.api.files.pick, "function");
+  assert.equal(typeof sdk.api.download, "function");
+  assert.deepEqual(Object.keys(sdk.api.store).sort(), ["delete", "get", "list", "set"]);
+});
+
+test("the served SDK bundle asks one question at a time and resolves the agent's answer", async () => {
+  const sdk = bootSdk();
+  const answer = sdk.api.ask("Which plan?", { data: { plans: ["A", "B"] }, timeoutMs: 1 });
+  const request = sdk.posted.at(-1);
+  assert.equal(request.op, "ask");
+  assert.equal(request.question, "Which plan?");
+  assert.equal(request.context, "plans[2]: A,B");
+  // Clamped to the shortest wait a page may ask for.
+  assert.equal(request.timeout_ms, 10000);
+  await assert.rejects(sdk.api.ask("Another?"), { code: "ASK_BUSY" });
+
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    pending: true,
+    wait_ms: 25000,
+  });
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    ok: true,
+    value: "Plan B.",
+  });
+  assert.equal(await answer, "Plan B.");
+
+  // The page may ask again once the answer is in.
+  const next = sdk.api.ask("And the price?");
+  const second = sdk.posted.at(-1);
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: second.id,
+    nonce: second.nonce,
+    ok: false,
+    code: "NO_AGENT",
+    error: "No agent is listening to this page.",
+  });
+  await assert.rejects(next, { code: "NO_AGENT", message: "No agent is listening to this page." });
+});
+
+test("the served SDK bundle saves a download through the chrome with a clean name and its bytes", async () => {
+  const sdk = bootSdk();
+  const saved = sdk.api.download("q3/report.csv", "a,b\n1,2\n", "text/csv");
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = sdk.posted.at(-1);
+  assert.equal(request.type, "lavish:pageApp");
+  assert.equal(request.op, "download");
+  assert.equal(request.name, "q3_report.csv");
+  assert.equal(request.mime, "text/csv");
+  assert.equal(new TextDecoder().decode(request.bytes), "a,b\n1,2\n");
+  sdk.sendChromeMessage({ type: "lavish:pageAppResult", id: request.id, nonce: request.nonce, ok: true });
+  assert.equal(await saved, undefined);
+
+  const blob = sdk.api.download("logo.svg", new Blob(["<svg/>"], { type: "image/svg+xml" }));
+  await new Promise((resolve) => setImmediate(resolve));
+  const blobRequest = sdk.posted.at(-1);
+  assert.equal(blobRequest.mime, "image/svg+xml");
+  sdk.sendChromeMessage({ type: "lavish:pageAppResult", id: blobRequest.id, nonce: blobRequest.nonce, ok: true });
+  await blob;
+
+  await assert.rejects(sdk.api.download("...", "x"), { code: "NAME_INVALID" });
+  await assert.rejects(sdk.api.download("x.bin", /** @type {any} */ (42)), { code: "INVALID" });
+});
+
+test("the served SDK bundle asks the chrome for a file picker and returns plain handles", async () => {
+  const sdk = bootSdk();
+  const picked = sdk.api.files.pick({ accept: "image/*, .CSV, nonsense", multiple: true });
+  const request = sdk.posted.at(-1);
+  assert.equal(request.op, "files.pick");
+  assert.deepEqual([...request.accept], ["image/*", ".csv"]);
+  assert.equal(request.multiple, true);
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    pending: true,
+    wait_ms: 0,
+  });
+  sdk.sendChromeMessage({
+    type: "lavish:pageAppResult",
+    id: request.id,
+    nonce: request.nonce,
+    ok: true,
+    value: [{ id: "a".repeat(64) + ".csv", name: "q3.csv", size: 12, type: "text/csv", extra: "dropped" }],
+  });
+  // Built in the SDK's realm, so compare plain copies.
+  assert.deepEqual(JSON.parse(JSON.stringify(await picked)), [
+    { id: "a".repeat(64) + ".csv", name: "q3.csv", size: 12, type: "text/csv" },
+  ]);
 });
