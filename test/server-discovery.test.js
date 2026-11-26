@@ -72,7 +72,6 @@ function cliEnv(dir, port, host) {
     LAVISH_AXI_HOST: host,
     LAVISH_AXI_STATE_DIR: dir,
     LAVISH_AXI_NO_OPEN: "1",
-    LAVISH_AXI_TELEMETRY: "0",
     LAVISH_AXI_IDLE_TIMEOUT_MS: "60000",
   };
 }
@@ -944,7 +943,7 @@ test(
         assert.equal(shutdowns, 2, "expected the initial replacement plus exactly one retry");
         assert.match(output, /SERVER_ERROR/);
         assert.ok(output.includes(otherHost), `expected the missing address in ${output}`);
-        assert.match(output, /lavish-axi stop/);
+        assert.match(output, /lavish stop/);
       } finally {
         await new Promise((resolve) => loopbackOnly.close(() => resolve(undefined)));
         await shutdownAt(otherHost, port);
@@ -1337,7 +1336,6 @@ os.networkInterfaces = () => ({ ...networkInterfaces(), blackhole: [{ address: "
           ...process.env,
           NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
           LAVISH_AXI_STATE_DIR: dir,
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_HOST: "127.0.0.1",
         },
         stdio: ["ignore", "pipe", "pipe"],

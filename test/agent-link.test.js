@@ -179,7 +179,7 @@ test("Nudge agent sends one message naming the review through t3 thread send", a
     const sends = t3.calls.filter((call) => call.args[1] === "send");
     assert.equal(sends.length, 1);
     assert.deepEqual(sends[0].args, ["thread", "send", CHILD_THREAD, "-"]);
-    assert.match(sends[0].input, /lavish-axi poll/);
+    assert.match(sends[0].input, /lavish poll/);
     assert.ok(sends[0].input.includes(files[0]));
     assert.equal((await nudger.send(session)).status, "recently-sent");
 

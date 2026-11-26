@@ -96,7 +96,7 @@ test("a degraded bind stays quiet while the requested address is still unavailab
   });
 });
 
-// Runs `lavish-axi open` once against a fake control channel that reports `healthBody`, and
+// Runs `lavish open` once against a fake control channel that reports `healthBody`, and
 // returns how many times the CLI asked it to shut down. Each run starts a real server, so one call
 // takes a few seconds.
 async function countShutdowns(dir, artifact, healthBody) {
@@ -125,7 +125,6 @@ async function countShutdowns(dir, artifact, healthBody) {
         LAVISH_AXI_HOST: "127.0.0.1",
         LAVISH_AXI_STATE_DIR: dir,
         LAVISH_AXI_NO_OPEN: "1",
-        LAVISH_AXI_TELEMETRY: "0",
         // The real server this spawns can take the port once the fake closes; let it idle out
         // instead of outliving the test.
         LAVISH_AXI_IDLE_TIMEOUT_MS: "1000",
@@ -172,9 +171,11 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
   });
 });
 
-// Fork channel: a newer -jadev.N server is adopted, a plain upstream release is replaced. Kept apart
-// from the test above so each stays well inside its timeout (four runs together took about 19 s of 20).
-test("a stale fork server is adopted by channel, an upstream release is replaced", { timeout: 20_000 }, async () => {
+// Semver precedence decides, with no separate fork channel: a network-stale server newer than this
+// CLI is replaced once for the network and then adopted, and a 0.1.98-jadev.N server from before the
+// npm package is older, so it is replaced for its version too. Kept apart from the test above so
+// each stays well inside its timeout (four runs together took about 19 s of 20).
+test("a newer stale server is adopted, a 0.1.98-jadev.N server is replaced", { timeout: 20_000 }, async () => {
   await withTempDir(async (dir) => {
     const artifact = await writeArtifact(dir);
 
@@ -182,18 +183,17 @@ test("a stale fork server is adopted by channel, an upstream release is replaced
       await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
-        version: "999.0.0-jadev.1",
+        version: "999.0.0",
         network_stale: true,
         network_stale_reason: "confirmed address change",
       }),
       1,
     );
-    // A plain upstream release is a different channel and still requires replacement by the fork.
     assert.equal(
       await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
-        version: "999.0.0",
+        version: "0.1.98-jadev.2",
         network_stale: true,
         network_stale_reason: "confirmed address change",
       }),
@@ -479,7 +479,6 @@ test("a clean detached-server shutdown exits 0 without an error in server.log", 
         LAVISH_AXI_STATE_DIR: dir,
         LAVISH_AXI_HOST: "127.0.0.1",
         LAVISH_AXI_NO_OPEN: "1",
-        LAVISH_AXI_TELEMETRY: "0",
         LAVISH_AXI_IDLE_TIMEOUT_MS: "off",
       },
       stdio: ["ignore", fd, fd],
@@ -529,7 +528,6 @@ test("a detached server crash writes a timestamped line to server.log", async ()
           LAVISH_AXI_STATE_DIR: dir,
           LAVISH_AXI_HOST: "127.0.0.1",
           LAVISH_AXI_NO_OPEN: "1",
-          LAVISH_AXI_TELEMETRY: "0",
         },
         stdio: ["ignore", fd, fd],
       });
@@ -575,7 +573,6 @@ net.Server.prototype.emit = function (event, ...args) {
           LAVISH_AXI_STATE_DIR: dir,
           LAVISH_AXI_HOST: "127.0.0.1",
           LAVISH_AXI_NO_OPEN: "1",
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_IDLE_TIMEOUT_MS: "off",
         },
         stdio: ["ignore", fd, fd],
@@ -624,7 +621,6 @@ test("an uncaught server exception is timestamped before deterministic exit", { 
         LAVISH_AXI_STATE_DIR: dir,
         LAVISH_AXI_HOST: "127.0.0.1",
         LAVISH_AXI_NO_OPEN: "1",
-        LAVISH_AXI_TELEMETRY: "0",
         LAVISH_AXI_IDLE_TIMEOUT_MS: "off",
       },
       stdio: ["ignore", fd, fd],

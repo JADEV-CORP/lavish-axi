@@ -10,7 +10,7 @@ export const PLAYBOOKS = [
     use_when: "Explain relationships, flows, state, architecture, and concepts with illustrations",
     choose: [
       "When the page explains a system, a flow, a process, a sequence or a structure, it needs at least one visible diagram near the top. A page that describes architecture only in prose is not finished.",
-      "Use draw.io for architecture, infrastructure, data flow, process and sequence diagrams, and for any diagram the reader may want to edit later: write a .drawio file next to the page (or a .mmd Mermaid file for sequence, class or ER diagrams), run `lavish-axi diagram <file>`, look at the preview_png it prints, then paste the <img> tag it prints. The page then shows a static SVG that follows light and dark mode and loads with no script, and draw.io reopens that SVG for editing.",
+      "Use draw.io for architecture, infrastructure, data flow, process and sequence diagrams, and for any diagram the reader may want to edit later: write a .drawio file next to the page (or a .mmd Mermaid file for sequence, class or ER diagrams), run `lavish diagram <file>`, look at the preview_png it prints, then paste the <img> tag it prints. The page then shows a static SVG that follows light and dark mode and loads with no script, and draw.io reopens that SVG for editing.",
       "Use hand-authored inline SVG for a small conceptual figure, three or four shapes, that needs exact proportion, emphasis or per-node annotation.",
       "Use Mermaid in a `.mermaid` container only when the user asks for an editable whiteboard: it becomes an Excalidraw whiteboard in the Lavish browser.",
       "For large systems, draw a small overview illustration and put detail in module cards below it, instead of one dense auto-laid graph.",
@@ -32,8 +32,8 @@ export const PLAYBOOKS = [
       'draw.io files: put adaptiveColors="auto" on <mxGraphModel> so colors follow dark mode; style nodes with rounded=1;whiteSpace=wrap;html=1 and edges with edgeStyle=orthogonalEdgeStyle; keep one fill color per kind of thing and say what each color means in a legend or the caption.',
       "draw.io layout: write nodes and edges without coordinates and pass `--layout horizontalFlow` (or verticalFlow, horizontalTree, verticalTree, radialTree, organic); the positions are written back into the .drawio, so later hand edits keep them.",
       "--layout suits chains and trees. It widens boxes to fit one-line labels, so for a fan-out (one box feeding several) place the boxes by hand in columns, and pin each edge with exitX=1;exitY=0.5;entryX=0;entryY=0.5 so it never cuts through another box.",
-      "Keep the .drawio (or .mmd) beside the page and its .drawio.svg: the source is what a person edits, and `lavish-axi diagram` regenerates the SVG after every edit.",
-      "When the user asked for a whiteboard, initialize Mermaid theme-aware with the `lavish-axi design` snippet rather than hardcoding one theme; to show flowchart nodes as icons from the user's Excalidraw libraries, follow `whiteboard_tooling.library_icons` there.",
+      "Keep the .drawio (or .mmd) beside the page and its .drawio.svg: the source is what a person edits, and `lavish diagram` regenerates the SVG after every edit.",
+      "When the user asked for a whiteboard, initialize Mermaid theme-aware with the `lavish design` snippet rather than hardcoding one theme; to show flowchart nodes as icons from the user's Excalidraw libraries, follow `whiteboard_tooling.library_icons` there.",
     ],
     pitfalls: [
       "Do not cram every file or function into one figure when a layered explanation would be clearer.",
@@ -331,7 +331,7 @@ export const PLAYBOOKS = [
       "Pair it with the input playbook for the answer controls and the diagram playbook for the map; this playbook sets the shape of the session.",
     ],
     structure: [
-      "Open with the problem in one sentence and what a good outcome looks like, then one diagram of the current situation made with `lavish-axi diagram`.",
+      "Open with the problem in one sentence and what a good outcome looks like, then one diagram of the current situation made with `lavish diagram`.",
       "Give three to five real options as cards with short IDs (O1, O2): what it is, what it costs, its main risk, and a fit score out of 100 with the weights stated once. Mark one Recommended and say why in one line.",
       "Make each option its own data-lavish-question with Go, Maybe and No, so every option can be answered or argued; Lavish adds a note box to each and a Queue all bar at the end.",
       "Always end with an open question, 'Something else?', holding only a textarea, so the reviewer can add an idea you did not list.",

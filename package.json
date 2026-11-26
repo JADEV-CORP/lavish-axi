@@ -1,20 +1,21 @@
 {
-  "name": "lavish-axi",
-  "version": "0.1.98-jadev.2",
+  "name": "@jadev-corp/lavish",
+  "version": "1.0.0",
   "packageManager": "pnpm@11.1.1",
-  "description": "HTML is the new markdown. Lavish is the new editor for your HTML artifacts.",
+  "description": "Your agent asks on an HTML page, you answer in one click, and it gets every answer. The JADEV build of lavish-axi.",
   "type": "module",
   "bin": {
+    "lavish": "dist/cli.mjs",
     "lavish-axi": "dist/cli.mjs"
   },
   "files": [
     "dist",
     "plugin.json",
     "skills/lavish",
-    "lavish-editor-marketing/renders/lavish-editor-marketing.gif",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "node scripts/build.js",
@@ -69,22 +70,34 @@
     "node": ">=22"
   },
   "keywords": [
+    "lavish",
+    "lavish-axi",
     "axi",
     "agent",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "copilot",
     "cli",
     "html",
     "review",
+    "annotation",
+    "feedback",
     "collaboration"
   ],
   "license": "MIT",
+  "author": {
+    "name": "JADEV-CORP",
+    "url": "https://github.com/JADEV-CORP"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kunchenguid/lavish-axi.git"
+    "url": "git+https://github.com/JADEV-CORP/lavish-axi.git"
   },
   "bugs": {
-    "url": "https://github.com/kunchenguid/lavish-axi/issues"
+    "url": "https://github.com/JADEV-CORP/lavish-axi/issues"
   },
-  "homepage": "https://github.com/kunchenguid/lavish-axi#readme",
+  "homepage": "https://github.com/JADEV-CORP/lavish-axi#readme",
   "publishConfig": {
     "access": "public"
   }

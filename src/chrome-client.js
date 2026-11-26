@@ -145,7 +145,7 @@ const composerAnnotateButton = /** @type {HTMLButtonElement} */ (document.getEle
 const moreWrap = /** @type {HTMLDivElement} */ (document.getElementById("moreWrap"));
 const moreButton = /** @type {HTMLButtonElement} */ (document.getElementById("moreButton"));
 const moreMenu = /** @type {HTMLDivElement} */ (document.getElementById("moreMenu"));
-// The top bar's Update notice (#3788).
+// The top bar's Update notice.
 const updateWrap = /** @type {HTMLDivElement} */ (document.getElementById("updateWrap"));
 const updateButton = /** @type {HTMLButtonElement} */ (document.getElementById("updateButton"));
 const updatePopover = /** @type {HTMLDivElement} */ (document.getElementById("updatePopover"));
@@ -336,7 +336,7 @@ const ARTIFACT_SILENCE_PROBE_MS = 8000;
 const ARTIFACT_LOAD_BEGIN_RETRY_DELAYS_MS = [100, 300];
 // Backoff for retrying a whole begin-load attempt after its in-call retries ran out. The
 // in-call retries span 400ms, which only covers a slow response - not the multi-second window
-// where the server is being replaced (a version-driven restart, or another `lavish-axi <file>`
+// where the server is being replaced (a version-driven restart, or another `lavish <file>`
 // invocation restarting the shared server). Without these the chrome abandons the artifact for
 // good: the frame is never navigated, `artifact_revision` never advances, and the page sits on
 // the layout gate and then on an empty frame with nothing to click.
@@ -5546,7 +5546,7 @@ async function probeChromeHealth() {
 }
 
 // The replacement server usually binds within a second, but it is a fresh node process competing
-// with whatever else the machine is doing, and several `lavish-axi` invocations can be racing for
+// with whatever else the machine is doing, and several `lavish` invocations can be racing for
 // the same port. Reloading on a fixed short deadline regardless of whether anything is listening
 // trades a recoverable page for the browser's connection-error page, which no Lavish code can
 // recover from. So wait for the port to answer, and if it never does, say so instead.
@@ -7561,13 +7561,13 @@ function noteAgentPresenceForNotifications(wasListening) {
   }, AGENT_QUIET_NOTIFY_MS);
 }
 
-// ---- A newer Jadev version (#3788). The server checks the fork's main branch every few hours and
-// says so here; the top bar shows Update until the reviewer installs it or dismisses that version. ----
+// ---- A newer published version. The server asks the npm registry for @jadev-corp/lavish every few
+// hours and says so here; the top bar shows Update until the reviewer installs it or dismisses that version. ----
 const UPDATE_DISMISSED_KEY = "lavish-axi:update-dismissed";
 const updateCopy = /** @type {HTMLParagraphElement} */ (document.getElementById("updateCopy"));
 const updateSteps = /** @type {HTMLPreElement} */ (document.getElementById("updateSteps"));
 /** @type {{ version: string, current: string } | null} */
-let forkUpdate = null;
+let availableUpdate = null;
 
 function dismissedUpdateVersion() {
   try {
@@ -7578,36 +7578,30 @@ function dismissedUpdateVersion() {
 }
 
 /** @param {unknown} update */
-function setForkUpdate(update) {
+function setAvailableUpdate(update) {
   const value = /** @type {any} */ (update);
   const valid =
     value &&
     typeof value.version === "string" &&
     typeof value.current === "string" &&
     /^[\w.-]{1,40}$/.test(value.version);
-  forkUpdate = valid ? { version: value.version, current: value.current } : null;
-  const show = Boolean(forkUpdate) && forkUpdate?.version !== dismissedUpdateVersion();
+  availableUpdate = valid ? { version: value.version, current: value.current } : null;
+  const show = Boolean(availableUpdate) && availableUpdate?.version !== dismissedUpdateVersion();
   updateWrap.hidden = !show;
   if (!show) setMenuOpen(updateButton, updatePopover, false);
-  if (!forkUpdate) return;
-  updateButton.title = "Lavish " + forkUpdate.version + " is available";
+  if (!availableUpdate) return;
+  updateButton.title = "Lavish " + availableUpdate.version + " is available";
   // Non-breaking hyphens keep each version on one line.
   const unbroken = (/** @type {string} */ version) => version.replaceAll("-", "‑");
   updateCopy.textContent =
     "Version " +
-    unbroken(forkUpdate.version) +
-    " is on the Jadev fork; you have " +
-    unbroken(forkUpdate.current) +
-    ". In your lavish-axi checkout:";
-  // The fork's install steps (docs/jadev-fork.md). The running server hands over to the new one
-  // the next time a session opens, and open tabs reload onto it.
-  updateSteps.textContent = [
-    "git pull",
-    "pnpm install",
-    "pnpm run build",
-    "npm pack",
-    "npm i -g ./lavish-axi-" + forkUpdate.version + ".tgz",
-  ].join("\n");
+    unbroken(availableUpdate.version) +
+    " is on npm; you have " +
+    unbroken(availableUpdate.current) +
+    ". Run this in a terminal:";
+  // The SDK's built-in update upgrades the package the way it was installed. The running server
+  // hands over to the new one the next time a review opens, and open tabs reload onto it.
+  updateSteps.textContent = "lavish update";
 }
 
 updateButton.onclick = () => toggleMenu(updateButton, updatePopover);
@@ -7615,15 +7609,15 @@ updateButton.onclick = () => toggleMenu(updateButton, updatePopover);
   void copyText(updateSteps.textContent || "");
 /** @type {HTMLButtonElement} */ (document.getElementById("updateDismiss")).onclick = () => {
   try {
-    if (forkUpdate) localStorage.setItem(UPDATE_DISMISSED_KEY, forkUpdate.version);
+    if (availableUpdate) localStorage.setItem(UPDATE_DISMISSED_KEY, availableUpdate.version);
   } catch {
     // Storage refused: it hides for this page only.
   }
   updateWrap.hidden = true;
   setMenuOpen(updateButton, updatePopover, false);
 };
-setForkUpdate(sessionData.forkUpdate);
-events.set("fork-update", (data) => setForkUpdate(data.update));
+setAvailableUpdate(sessionData.updateAvailable);
+events.set("update-available", (data) => setAvailableUpdate(data.update));
 
 // The nudge (#3782): one line to paste into the agent when it stopped polling, naming this page.
 // A session bound to a T3 Code thread (#3795) also gets Nudge agent, which leads; Copy nudge then
@@ -7709,7 +7703,7 @@ nudgeAgentButton.onclick = async () => {
   }
 };
 copyNudgeButton.onclick = async () => {
-  const nudge = 'Feedback is waiting in Lavish. Run: lavish-axi poll "' + filePath + '"';
+  const nudge = 'Feedback is waiting in Lavish. Run: lavish poll "' + filePath + '"';
   if (!(await copyText(nudge))) return;
   copyNudgeLabel.textContent = "Copied";
   copyNudgeButton.dataset.copied = "true";

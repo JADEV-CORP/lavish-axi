@@ -244,7 +244,6 @@ test("built CLI refuses an upgrade with an active poll, then honors explicit for
     LAVISH_AXI_STATE_DIR: f.dir,
     LAVISH_AXI_HOST: "127.0.0.1",
     LAVISH_AXI_LINK_HOST: "127.0.0.1",
-    LAVISH_AXI_TELEMETRY: "0",
     LAVISH_AXI_NO_OPEN: "1",
   };
   try {
@@ -296,5 +295,67 @@ test("a shutdown refusal never falls through to process termination", async () =
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(() => resolve(undefined)));
+  }
+});
+
+// The move to @jadev-corp/lavish 1.0.0: machines still run a 0.1.98-jadev.N server. The first npm
+// CLI must count as newer and replace it, but only the way any upgrade does: never under an open
+// review (whose unsent draft would be lost) or an active poll, unless forced.
+test("the built CLI replaces an idle 0.1.98-jadev.N server, never one with an open review or a poll", async () => {
+  const logs = [];
+  const f = await fixture({ version: "0.1.98-jadev.2", log: (line) => logs.push(line) });
+  const { sessionKey } = await import("../src/session-store.js");
+  const run = promisify(execFile);
+  const cli = fileURLToPath(new URL("../dist/cli.mjs", import.meta.url));
+  const port = String(f.server.port);
+  const env = {
+    ...process.env,
+    LAVISH_AXI_PORT: port,
+    LAVISH_AXI_STATE_DIR: f.dir,
+    LAVISH_AXI_HOST: "127.0.0.1",
+    LAVISH_AXI_LINK_HOST: "127.0.0.1",
+    LAVISH_AXI_NO_OPEN: "1",
+    LAVISH_AXI_UPDATE_CHECK: "0",
+  };
+  const health = () => fetch(`${f.base}/health`).then((res) => res.json());
+  const refused = (/** @type {any} */ error) => {
+    assert.match(String(error?.stdout) + String(error?.stderr), /SERVER_BUSY/);
+    return true;
+  };
+  let poll;
+  try {
+    const review = new WebSocket(`${f.base.replace(/^http/, "ws")}/events/${sessionKey(f.file)}`, { origin: f.base });
+    await once(review, "open");
+    await assert.rejects(run(process.execPath, [cli, f.file, "--no-open"], { env, windowsHide: true }), refused);
+    assert.equal((await health()).version, "0.1.98-jadev.2", "an open review keeps the old server");
+    review.terminate();
+
+    poll = await fetch(`${f.base}/api/poll?file=${encodeURIComponent(f.file)}`);
+    await assert.rejects(run(process.execPath, [cli, f.file, "--no-open"], { env, windowsHide: true }), refused);
+    assert.equal((await health()).version, "0.1.98-jadev.2", "an active poll keeps the old server");
+    await poll.body?.cancel().catch(() => {});
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const { active_connections: active } = await health();
+      if (active.polls === 0 && active.reviewers === 0) break;
+      assert.ok(Date.now() < deadline, "the poll and the review released the server");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    await run(process.execPath, [cli, f.file, "--no-open"], { env, windowsHide: true });
+    await f.server.done;
+    // From a source checkout the cause reads "local build replacement"; either way the open tabs are
+    // told it is an upgrade, which is what decides between a reload and the unsent-draft banner.
+    assert.ok(
+      logs.some((line) =>
+        /shutting down: .*running=0\.1\.98-jadev\.2; cli=\d+\.\d+\.\d+.*\(reason=upgrade\)/.test(line),
+      ),
+      logs.join("\n"),
+    );
+    assert.equal((await health()).version, VERSION, "the replacement runs this CLI's version");
+  } finally {
+    await poll?.body?.cancel().catch(() => {});
+    await run(process.execPath, [cli, "stop", "--port", port, "--force"], { env, windowsHide: true }).catch(() => {});
+    await f.close();
   }
 });

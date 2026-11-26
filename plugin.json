@@ -1,21 +1,29 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "lavish-axi",
-  "version": "0.1.98-jadev.2",
-  "description": "HTML is the new markdown. Lavish is the new editor for your HTML artifacts.",
+  "version": "1.0.0",
+  "description": "Your agent asks on an HTML page, you answer in one click, and it gets every answer. The JADEV build of lavish-axi.",
   "author": {
-    "name": "Kun Chen",
-    "url": "https://github.com/kunchenguid"
+    "name": "JADEV-CORP",
+    "url": "https://github.com/JADEV-CORP"
   },
-  "homepage": "https://github.com/kunchenguid/lavish-axi#readme",
-  "repository": "https://github.com/kunchenguid/lavish-axi",
+  "homepage": "https://github.com/JADEV-CORP/lavish-axi#readme",
+  "repository": "https://github.com/JADEV-CORP/lavish-axi",
   "license": "MIT",
   "keywords": [
+    "lavish",
+    "lavish-axi",
     "axi",
     "agent",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "copilot",
     "cli",
     "html",
     "review",
+    "annotation",
+    "feedback",
     "collaboration"
   ]
 }

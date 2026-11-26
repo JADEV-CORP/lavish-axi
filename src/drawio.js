@@ -1,4 +1,4 @@
-// `lavish-axi diagram`: turn a draw.io source into what a Lavish page shows.
+// `lavish diagram`: turn a draw.io source into what a Lavish page shows.
 //
 // The page embeds a static `<name>.drawio.svg`: no script at view time, colors that follow light
 // and dark mode (`--theme auto`), and the diagram itself embedded (`-e`), so the same SVG reopens
@@ -269,7 +269,7 @@ export function buildDiagram({
       previewOk
         ? `Look at preview_png before serving the page: labels fit, nothing overlaps, arrows read left to right or top to bottom`
         : "No preview was written; open the SVG in a browser to check it before serving the page",
-      "Keep the .drawio next to the page: it is the editable source. Rerun `lavish-axi diagram` after every edit",
+      "Keep the .drawio next to the page: it is the editable source. Rerun `lavish diagram` after every edit",
       "The SVG embeds the diagram, so draw.io (desktop, VS Code extension or app.diagrams.net) opens it for editing too",
     ],
   };

@@ -95,8 +95,8 @@ test("open and poll next_step keep --agent-reply concise-first and structure-whe
 
   assertConciseFirstGuidance(open.next_step);
   assertConciseFirstGuidance(poll.next_step);
-  assert.match(open.next_step, /lavish-axi poll --help|README/);
-  assert.match(poll.next_step, /lavish-axi poll --help|README/);
+  assert.match(open.next_step, /lavish poll --help|README/);
+  assert.match(poll.next_step, /lavish poll --help|README/);
 });
 
 test("poll help documents --agent-reply-file for longer Markdown and points at README's subset", () => {
@@ -114,8 +114,8 @@ test("poll help documents --agent-reply-file for longer Markdown and points at R
   assert.match(help, /README/);
   assert.match(help, /Feedback controls/);
   assert.doesNotMatch(help, /prefer multiline/i);
-  assert.match(help, /lavish-axi poll report\.html --agent-reply "Renamed the payment step\."/);
-  assert.match(help, /lavish-axi poll report\.html --agent-reply-file reply\.md/);
+  assert.match(help, /lavish poll report\.html --agent-reply "Renamed the payment step\."/);
+  assert.match(help, /lavish poll report\.html --agent-reply-file reply\.md/);
 });
 
 test("resolveAgentReply keeps the inline --agent-reply string", async () => {
@@ -219,7 +219,6 @@ test("poll rejects over-limit agent reply files and stdin with an actionable err
   const env = {
     ...process.env,
     LAVISH_AXI_STATE_DIR: path.join(dir, "state"),
-    LAVISH_AXI_TELEMETRY: "0",
   };
   try {
     for (const result of [
@@ -260,7 +259,6 @@ test("poll --agent-reply-file and stdin land multiline Markdown in the transcrip
     LAVISH_AXI_PORT: String(server.port),
     LAVISH_AXI_HOST: "127.0.0.1",
     LAVISH_AXI_LINK_HOST: "127.0.0.1",
-    LAVISH_AXI_TELEMETRY: "0",
     LAVISH_AXI_NO_OPEN: "1",
   };
   try {

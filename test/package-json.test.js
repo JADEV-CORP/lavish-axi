@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("check script runs all verification commands", async () => {
@@ -39,20 +39,6 @@ test("published package root is a complete Agent Plugin", async () => {
   assert.ok(packageJson.files.includes("skills/lavish"));
 });
 
-test("release-please keeps the plugin manifest version in step with the package", async () => {
-  const config = JSON.parse(await readFile(new URL("../release-please-config.json", import.meta.url), "utf8"));
-
-  assert.deepEqual(config.packages["."]["extra-files"], [{ type: "json", path: "plugin.json", jsonpath: "$.version" }]);
-});
-
-test("lavish-design agent skill is marked internal for skills CLI discovery", async () => {
-  const skillMd = await readFile(new URL("../.agents/skills/lavish-design/SKILL.md", import.meta.url), "utf8");
-  const frontmatter = skillMd.slice(4, skillMd.indexOf("\n---\n", 4));
-
-  assert.match(frontmatter, /^name: lavish-design$/m);
-  assert.match(frontmatter, /^metadata:\n {2}internal: true$/m);
-});
-
 test("public lavish skill is not marked internal", async () => {
   const skillMd = await readFile(new URL("../skills/lavish/SKILL.md", import.meta.url), "utf8");
   const frontmatter = skillMd.slice(4, skillMd.indexOf("\n---\n", 4));
@@ -71,9 +57,21 @@ test("build copies local design assets for published artifact injection", async 
 test("package metadata matches the GitHub repository used for npm provenance", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-  assert.equal(packageJson.repository.url, "git+https://github.com/kunchenguid/lavish-axi.git");
-  assert.equal(packageJson.bugs.url, "https://github.com/kunchenguid/lavish-axi/issues");
-  assert.equal(packageJson.homepage, "https://github.com/kunchenguid/lavish-axi#readme");
+  assert.equal(packageJson.repository.url, "git+https://github.com/JADEV-CORP/lavish-axi.git");
+  assert.equal(packageJson.bugs.url, "https://github.com/JADEV-CORP/lavish-axi/issues");
+  assert.equal(packageJson.homepage, "https://github.com/JADEV-CORP/lavish-axi#readme");
+});
+
+test("the package publishes as @jadev-corp/lavish with lavish and the lavish-axi alias", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
+  assert.equal(packageJson.name, "@jadev-corp/lavish");
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/, "our own semver line, no -jadev.N suffix");
+  assert.deepEqual(packageJson.bin, { lavish: "dist/cli.mjs", "lavish-axi": "dist/cli.mjs" });
+  assert.deepEqual(packageJson.publishConfig, { access: "public" });
+  assert.equal(packageJson.license, "MIT");
+  assert.equal(packageJson.author.name, "JADEV-CORP");
+  assert.ok(packageJson.files.includes("CHANGELOG.md"));
 });
 
 test("pnpm lock root importer matches the publish manifest", async () => {
@@ -88,20 +86,30 @@ test("pnpm lock root importer matches the publish manifest", async () => {
   }
 });
 
-test("release workflow publishes from the release tag checkout", async () => {
-  const workflow = await readFile(new URL("../.github/workflows/release-please.yml", import.meta.url), "utf8");
+test("only the JADEV workflows remain, and CI runs on every pull request", async () => {
+  // Upstream's release-please, no-mistakes and generated-file guards were removed. A sync with
+  // upstream can bring them back silently, so the workflow set is pinned here.
+  const workflows = (await readdir(new URL("../.github/workflows/", import.meta.url))).sort();
+  assert.deepEqual(workflows, ["ci.yml", "jadev-release.yml"]);
 
-  assert.match(
-    workflow,
-    /uses: actions\/checkout@v6\n\s+if: \$\{\{ steps\.release\.outputs\.release_created \}\}\n\s+with:\n\s+ref: \$\{\{ steps\.release\.outputs\.tag_name \}\}/,
-  );
+  for (const file of ["../release-please-config.json", "../.release-please-manifest.json"]) {
+    await assert.rejects(access(new URL(file, import.meta.url)), { code: "ENOENT" });
+  }
+
+  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.doesNotMatch(ci, /paths-ignore|release-please/);
 });
 
-test("release workflow keeps telemetry env during npm publish prepack", async () => {
-  const workflow = await readFile(new URL("../.github/workflows/release-please.yml", import.meta.url), "utf8");
+test("the release workflow publishes to npm by trusted publishing from a v<version> tag", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/jadev-release.yml", import.meta.url), "utf8");
 
-  assert.match(
-    workflow,
-    /run: npm publish --access public --provenance\n\s+if: \$\{\{ steps\.release\.outputs\.release_created \}\}\n\s+env:\n\s+LAVISH_AXI_UMAMI_HOST: https:\/\/a\.kunchenguid\.com\n\s+LAVISH_AXI_UMAMI_WEBSITE_ID: \$\{\{ vars\.LAVISH_AXI_UMAMI_WEBSITE_ID \}\}/,
-  );
+  assert.match(workflow, /tags: \["v\*\.\*\.\*"\]/);
+  assert.match(workflow, /id-token: write/);
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /if: github\.repository == 'JADEV-CORP\/lavish-axi'/);
+  assert.match(workflow, /test "v\$\{version\}" = "\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /pnpm run check/);
+  assert.match(workflow, /npm publish --provenance --access public/);
+  assert.match(workflow, /gh release create "\$\{GITHUB_REF_NAME\}" "jadev-corp-lavish-\$\{VERSION\}\.tgz"/);
+  assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN:/, "no long-lived npm token");
 });

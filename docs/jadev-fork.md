@@ -7,33 +7,71 @@ redesigned review chrome (shadcn/ui preset b50eA1ekc, resizable and movable conv
 chat, transitions.dev motion, note pins, the command palette, revision outlines) and the Lavish design default for
 artifacts. Upstream behaviour is otherwise unchanged.
 
-## Versions
+## Package and versions
 
-The fork versions as `<upstream version>-jadev.<n>`, for example `0.1.83-jadev.1`. The suffix makes it impossible to
-mistake for an npm release, and `<n>` goes up with each fork release on the same upstream base. A merge of a new
-upstream release resets it: `0.1.84-jadev.1`.
+The fork is published on npm as `@jadev-corp/lavish`. The command is `lavish`, and `lavish-axi` is an alias for the
+same entry, so agents, hooks and skills written for the old name keep working. The `LAVISH_AXI_*` variables, the
+state directory (`~/.lavish-axi`), the plugin name (`lavish-axi`), the hook markers and the on-disk formats are
+unchanged.
 
-Change the version in `package.json` and run `pnpm run build:plugin` so `plugin.json` follows. Do not hand-edit
-`CHANGELOG.md` or `.release-please-manifest.json`; release-please belongs to upstream.
+The package has its own semver line. 1.0.0 is built on upstream lavish-axi 0.1.98 and follows the last fork tarball,
+0.1.98-jadev.2. A patch release fixes, a minor release adds or merges a new upstream release, and a major release
+changes a contract agents rely on: commands, output fields or state. Each `CHANGELOG.md` entry names the upstream
+base when it changes.
 
-## Install on a machine
+Change the version in `package.json`, run `pnpm run build:plugin` so `plugin.json` follows, and add the entry to
+`CHANGELOG.md`. The changelog is this package's own and written by hand; upstream's history stays in upstream's
+repository.
+
+## Install and update
 
 ```sh
-pnpm install
-pnpm run check
-npm pack
-npm i -g ./lavish-axi-<version>.tgz
-lavish-axi --version
-npx -y lavish-axi --version
+npm i -g @jadev-corp/lavish
+lavish --version
+npx -y @jadev-corp/lavish --version
 ```
 
-Both version commands must print the jadev version. `npx -y lavish-axi` uses the global install when one exists, which
-is how agents reach the fork.
+Both version commands must print the same version. `npx -y @jadev-corp/lavish` uses the global install when one
+exists, and fetches the package from npm when it does not. A machine that still has the 0.1.x tarball needs
+`npm rm -g lavish-axi` first, because both packages provide the `lavish-axi` command.
 
-A newer Jadev CLI replaces an older Jadev server when a session opens. An older Jadev CLI adopts a newer
-Jadev server instead of restarting it. Plain upstream versions remain a separate build channel, and a forced local
-rebuild still replaces the running server. Open review tabs reload onto the replacement, or show a banner first
-when they hold an unsent draft.
+`lavish update` is the AXI SDK's built-in. It reads the package name from the installed `package.json`, asks the
+npm registry for the latest version, and upgrades the way the package was installed: `npm install -g
+@jadev-corp/lavish@latest` for npm, `pnpm add -g` for pnpm, or a hint to rerun npx. `lavish update --check` only
+reports.
+
+The running server asks the npm registry for the latest version 30 seconds after it starts and then every six hours
+(`src/update-check.js`). It calls the registry's HTTP endpoint only and never runs npm or git. A newer version shows
+**Update** in every open editor's top bar, with `lavish update`, Copy and Dismiss (dismissed per version).
+`LAVISH_AXI_UPDATE_CHECK=0` turns the check off. Versions before 1.0.0 fetched this repository from GitHub into
+`update-check.git` under the state directory; that folder is no longer used and can be deleted.
+
+A newer CLI replaces an older server when a review opens. An older CLI adopts a newer server instead of restarting
+it. Versions order by semver precedence (`compareReleaseVersions`), so 1.0.0 replaces every 0.1.98-jadev.N server
+and a prerelease ranks below its release. A version that is not plain semver is replaced, and a forced local
+rebuild still replaces the running server. An open review tab or an active poll blocks a replacement with
+`SERVER_BUSY` unless `--force` is passed. A forced replacement reloads open tabs onto the new server, or shows a
+banner first when a tab holds an unsent draft.
+
+## Releases
+
+A release is a tag on `main`:
+
+1. Set the version in `package.json`, run `pnpm run build:plugin`, date the `CHANGELOG.md` entry, and merge to
+   `main`.
+2. Tag the merge commit `v<version>` and push the tag: `git tag v1.0.0 && git push origin v1.0.0`.
+3. `.github/workflows/jadev-release.yml` checks that the tag is on `main` and matches `package.json`, runs
+   `pnpm run check`, packs the tarball, publishes it to npm with `npm publish --provenance --access public`, and
+   creates a GitHub release with the `.tgz` attached. A version already on npm is not published again, so a rerun
+   only finishes the release.
+
+Publishing uses npm trusted publishing. GitHub Actions signs in to npm with a short-lived OIDC token, so no npm
+token is stored in the repository, and npm records provenance that links each version to the workflow run that
+built it. On npmjs.com, the package's trusted publisher names the repository `JADEV-CORP/lavish-axi` and the
+workflow `jadev-release.yml`. npm configures a trusted publisher on an existing package only, so the `jadev-corp`
+npm user publishes 1.0.0 once by hand (`npm publish --access public` from a clean checkout of `main`), adds the
+trusted publisher, then pushes the `v1.0.0` tag so the workflow creates the GitHub release. Every later version is
+published by the workflow.
 
 ## Direct agent nudges
 
@@ -46,19 +84,19 @@ The agent links its conversation once. It reads its own thread id from T3 Code's
 (`parentThreadId`) and passes it with the first review:
 
 ```sh
-lavish-axi report.html --t3-thread <thread-id>
+lavish report.html --t3-thread <thread-id>
 # or, after the review is open
-lavish-axi bind-agent report.html --t3-thread <thread-id>
+lavish bind-agent report.html --t3-thread <thread-id>
 ```
 
-`lavish-axi <file>` reports `agent_link` (`linked`, `not linked` with that step, or `failed` with a reason) only when
+`lavish <file>` reports `agent_link` (`linked`, `not linked` with that step, or `failed` with a reason) only when
 it runs inside T3 Code. Lavish checks the thread with `t3 thread show` first, which takes about ten seconds while
 T3's CLI starts. Every later review the same conversation opens links automatically, without asking T3 again.
 The conversation is recognised by the harness id T3 Code's Claude and Codex providers expose (`CLAUDE_CODE_SESSION_ID`,
 `CODEX_THREAD_ID`), stored only as a hash. Reuse never replaces a link another conversation made; an explicit
 `--t3-thread` does. An open tab notices a new or removed link the next time its not-listening notice opens.
 
-Ending a review, from the browser or with `lavish-axi end`, removes its link, and a server restart removes the links
+Ending a review, from the browser or with `lavish end`, removes its link, and a server restart removes the links
 of reviews that ended while it was down. The conversation's own thread record stays so its next review still links,
 and is pruned after 30 days unused. `bind-agent --clear` removes a link by hand.
 
@@ -100,7 +138,7 @@ notes off. A page that keeps its own page-level control marks it
 
 ## Diagrams with draw.io
 
-`lavish-axi diagram <file.drawio>` renders a diagram for a page with the draw.io desktop app (open source, Apache-2.0)
+`lavish diagram <file.drawio>` renders a diagram for a page with the draw.io desktop app (open source, Apache-2.0)
 already on the machine. It writes `<name>.drawio.svg` next to the source: a static image, no script at view time, with
 colors that follow light and dark mode and the diagram embedded, so draw.io reopens the SVG for editing. It also writes
 a PNG preview under the state directory (`diagram-previews/`) for the agent to look at before serving the page, and
@@ -117,7 +155,7 @@ architecture, process and sequence diagrams to draw.io, and keeps hand-written i
 
 ## Opening beside the chat
 
-Inside T3 Code (`T3CODE_THREAD_ID` set), `lavish-axi <file>` does not open an external browser. No command can put a
+Inside T3 Code (`T3CODE_THREAD_ID` set), `lavish <file>` does not open an external browser. No command can put a
 page in T3's preview panel from outside, but the agent can: the output's `open_in` and `next_step` tell it to call
 `preview_open`, which shows the review in a tab beside the conversation. VS Code is opt-in, because every VS Code terminal
 sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"` to `terminal.integrated.env.osx` (or
@@ -127,13 +165,13 @@ sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"`
 
 ## Brainstorm playbook
 
-`lavish-axi playbook brainstorm` shapes a thinking session: the problem in one sentence and a diagram of today, three to
+`lavish playbook brainstorm` shapes a thinking session: the problem in one sentence and a diagram of today, three to
 five real options with IDs and fit scores, Go / Maybe / No on each with a note, an open "Something else?" question, and
 numbered rounds that open with what changed.
 
 ## Polls survive a server restart
 
-A newer CLI replacing the server, `lavish-axi stop`, or a Tailscale address change all restart the server. A poll
+A newer CLI replacing the server, `lavish stop`, or a Tailscale address change all restart the server. A poll
 waiting at that moment, often one started with `--agent-reply`, used to exit with `SERVER_ERROR`, and the agent
 stopped listening. It now prints a line on stderr and listens again on the new server, up to three times, when that
 server holds no other listener for the review. It does not post its reply a second time.
@@ -154,9 +192,7 @@ reviewer toggles it. The top bar, composer and rail all show that one mode.
 `LAVISH_AXI_DISCONNECT_GRACE_MS` changes the default 10-second reconnect grace. `0` or `off` disables disconnect
 release, while the fork's polling rounds still return on their own budget. Invalid values retain the default;
 large durations clamp to the timer maximum. Library files belong in the state directory's `excalidraw-libraries`
-folder, and `lavish-axi libraries` lists their references. Libraries never download automatically.
-
-The running server checks for a newer fork version shortly after it starts and then every six hours (`src/fork-update.js`). It fetches the fork's `main` from GitHub (`JADEV-CORP/lavish-axi`; the Azure DevOps copy was removed on 23 Nov 2026) with `--depth=1 --filter=blob:none` into `update-check.git` under the state directory and reads only `package.json`, so git's own credential manager signs in and Lavish never handles a token; terminal and Git Credential Manager prompts are off, so a machine that is not signed in skips the check silently. A higher `-jadev.N` shows **Update** in every open editor's top bar, with the steps above and Copy and Dismiss (dismissed per version). `LAVISH_AXI_UPDATE_CHECK=0` turns the check off.
+folder, and `lavish libraries` lists their references. Libraries never download automatically.
 
 ## Upstream 0.1.98 adaptations
 
@@ -171,10 +207,6 @@ of 0.1.91 to 0.1.98 is in, adapted where the fork's chrome differs:
 - `window.lavish.setDocumentMeta` (#458) replaces the tab icon link, so the background-tab marker
   looks the link up each time, puts its dot back over a new icon, and keeps the unseen count in a
   title the artifact sets.
-
-`lavish-axi update` is disabled in the fork. The built-in updater installs the newest npm release, which semver ranks
-above every `-jadev.N` prerelease, so it would quietly replace the fork with upstream. It exits with
-`FORK_UPDATE_DISABLED` instead.
 
 ## Sync with upstream
 
@@ -192,8 +224,8 @@ pnpm run check
 Resolve conflicts in favour of upstream behaviour unless the fork deliberately changed it; the fork's changes are in
 `src/chrome.css`, `src/chrome-client.js`, `src/server.js` (chrome markup), `src/artifact-sdk.js` (pins, outlines,
 palette hotkey), `src/design-reference.js`, `src/whiteboard-frame.css` (the whiteboard header and Excalidraw
-accent on the chrome palette and preset), and their tests. Bump the version to `<tag>-jadev.1`, open a PR into
-`main`, and reinstall from the new tarball once it merges.
+accent on the chrome palette and preset), and their tests. Bump the minor version, name the new upstream base in
+`CHANGELOG.md`, open a PR into `main`, and release it with a tag once it merges.
 
 ## Hidden files are not served
 
@@ -203,7 +235,16 @@ artifact is never readable over the network. The artifact's own folder can be hi
 below it is checked. This lives in `hasHiddenSegment` (`src/artifact-path.js`) and the `/artifact` route; keep it
 when merging upstream changes to either.
 
-## Telemetry
+## Removed from upstream
 
-Upstream's release builds inject an analytics site id at build time. Fork builds do not set
-`LAVISH_AXI_BUILD_UMAMI_WEBSITE_ID`, so the telemetry client is a no-op and nothing is sent. Keep it that way.
+The package is kept lean. These upstream parts are gone from the repository and the tarball:
+
+- Telemetry: `src/telemetry.js` and its build-time Umami settings. The CLI sends no usage data and reads no
+  `LAVISH_AXI_TELEMETRY` or `LAVISH_AXI_UMAMI_*` variable.
+- The marketing video project (`lavish-editor-marketing/`) and its GIF.
+- Upstream's release and PR tooling: release-please (`release-please.yml`, its config and manifest),
+  `no-mistakes-required.yml` and `guard-generated-files.yml`. CI is `ci.yml`, releases are `jadev-release.yml`.
+- Maintainer-only material: `task-evidence/` and the internal `lavish-design` brand skill under `.agents/`.
+
+An upstream merge that touches any of these stops on a modify/delete conflict: keep the deletion (`git rm`).
+`test/package-json.test.js` fails if an upstream workflow comes back.

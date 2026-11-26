@@ -291,7 +291,7 @@ export async function sweepAgentLinks(stateDir, isLive, { now = Date.now } = {})
 }
 
 export function nudgeMessage(session) {
-  return `Lavish has review feedback waiting for ${session.file}. Run \`lavish-axi poll "${session.file}"\` and apply it within the scope you already have. If another poll is already listening on that review, leave it alone.`;
+  return `Lavish has review feedback waiting for ${session.file}. Run \`lavish poll "${session.file}"\` and apply it within the scope you already have. If another poll is already listening on that review, leave it alone.`;
 }
 
 /** Coalesces clicks across tabs. A timeout is ambiguous, so failed attempts also keep a brief cooldown. */

@@ -61,7 +61,7 @@ test("each preset but Lavish gives lavish-auto pages a light and a dark oklch fo
   }
 });
 
-test("lavish-axi design --template prints the template as plain HTML", () => {
+test("lavish design --template prints the template as plain HTML", () => {
   const result = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "design", "--template"],

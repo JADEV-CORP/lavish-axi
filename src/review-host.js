@@ -34,5 +34,5 @@ export function detectReviewHost(args, env) {
 /** The step that puts the review beside the chat, with the way back to the external browser. */
 export function hostOpenStep(host, file, url) {
   if (!host) return "";
-  return `Show the review in ${host.place} first: call the ${host.tool} tool with url ${url}. If you do not have that tool, run \`lavish-axi ${file} --external\` to open the user's browser instead. `;
+  return `Show the review in ${host.place} first: call the ${host.tool} tool with url ${url}. If you do not have that tool, run \`lavish ${file} --external\` to open the user's browser instead. `;
 }

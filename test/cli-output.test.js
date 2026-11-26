@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import WebSocket from "ws";
 
-import { AxiError } from "axi-sdk-js";
+import { AxiError, planUpgrade, readNearestPackageJson, runUpdate } from "axi-sdk-js";
 
 process.env.LAVISH_AXI_HOST = "127.0.0.1";
 process.env.LAVISH_AXI_LINK_HOST = "127.0.0.1";
@@ -37,6 +37,7 @@ import {
   fetchJson,
   getCommandHelp,
   herdrPollChimeEnabled,
+  isLavishServerCommand,
   normalizeArgv,
   notifyHerdrPollReady,
   resolveShareRequest,
@@ -55,7 +56,6 @@ import {
   shouldRestartServer,
   startPollWaitReporter,
   stopCommand,
-  telemetryCommandName,
   VERSION,
 } from "../src/cli.js";
 import { DESIGN_PRIORITY_RULE, DESIGN_SYSTEM_HINT } from "../src/design-reference.js";
@@ -115,10 +115,10 @@ test("home help names LAVISH_AXI_ALLOWED_HOSTS for the 403 forbidden host case",
   assert.match(hostHelp, /reverse-proxy/);
   assert.match(hostHelp, /README's Allowed hosts section/);
   assert.doesNotMatch(hostHelp, /whitespace-separated/);
-  assert.match(hostHelp, /`lavish-axi stop`/);
+  assert.match(hostHelp, /`lavish stop`/);
 });
 
-test("CLI version tracks package.json so release-please bumps reach the published binary", async () => {
+test("CLI version tracks package.json so version bumps reach the published binary", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(VERSION, packageJson.version);
 });
@@ -154,9 +154,9 @@ test("home output teaches agents when and how to use Lavish Editor", () => {
     output.playbooks.find((item) => item.id === "input")?.use_when,
     "Must be used when the agent needs to collect user input on decisions, choices, preferences, triage, scope, or other structured feedback from within the artifact",
   );
-  assert.ok(output.help.some((item) => item.includes("lavish-axi <html-file>")));
+  assert.ok(output.help.some((item) => item.includes("lavish <html-file>")));
   assert.ok(output.help.some((item) => item.includes("`.lavish/`")));
-  assert.ok(output.help.some((item) => item.includes("lavish-axi playbook <playbook_id>")));
+  assert.ok(output.help.some((item) => item.includes("lavish playbook <playbook_id>")));
   assert.ok(output.help.some((item) => item.includes("combines several playbooks")));
   assert.ok(output.help.some((item) => item.includes("MUST open each matching playbook")));
   assert.ok(output.help.some((item) => item.includes("reference other filesystem assets")));
@@ -192,7 +192,7 @@ test("the design-priority rule is single-sourced and keeps its three-step semant
   assert.ok(DESIGN_SYSTEM_HINT.includes(DESIGN_PRIORITY_RULE), "the home hint embeds the rule");
   assert.match(DESIGN_SYSTEM_HINT, /does not auto-inject/);
   assert.match(DESIGN_SYSTEM_HINT, /portable/);
-  assert.match(DESIGN_SYSTEM_HINT, /lavish-axi design/);
+  assert.match(DESIGN_SYSTEM_HINT, /lavish design/);
   assert.match(DESIGN_SYSTEM_HINT, /state which of the three design sources/);
 });
 
@@ -233,7 +233,7 @@ test("open output flags an artifact that never paints its own page surface", () 
   assert.equal(warned.self_paint_warning, SELF_PAINT_WARNING);
   assert.match(warned.next_step, /^First fix the unpainted page surface flagged in self_paint_warning/);
   assert.match(warned.next_step, /live-reloads the artifact automatically/);
-  assert.match(warned.next_step, /lavish-axi poll \/tmp\/artifact\.html/, "the poll contract stays intact");
+  assert.match(warned.next_step, /lavish poll \/tmp\/artifact\.html/, "the poll contract stays intact");
 
   const clean = createOpenOutput({
     file: "/tmp/artifact.html",
@@ -289,7 +289,7 @@ test("export and share outputs flag an unpainted page surface before it reaches 
 
 test("home output warns agents that poll needs an observable wake path", () => {
   const output = createHomeOutput({ bin: "lavish-axi", sessions: [] });
-  const pollHelp = output.help.find((item) => item.includes("lavish-axi poll <html-file>"));
+  const pollHelp = output.help.find((item) => item.includes("lavish poll <html-file>"));
 
   assert.ok(pollHelp, "home help mentions the poll command");
   assert.match(pollHelp, /long-poll/);
@@ -315,7 +315,7 @@ test("ambient and per-artifact output never nags about installing the plugin", (
 
 test("home output tailors poll guidance when invoked under Codex", () => {
   const output = createHomeOutput({ bin: "lavish-axi", sessions: [], agent: "codex" });
-  const pollHelp = output.help.find((item) => item.includes("lavish-axi poll <html-file>"));
+  const pollHelp = output.help.find((item) => item.includes("lavish poll <html-file>"));
 
   assertObservablePollWakePath(pollHelp);
   assert.match(pollHelp, /Codex detected/);
@@ -324,7 +324,7 @@ test("home output tailors poll guidance when invoked under Codex", () => {
 
 test("home output keeps static skill poll guidance safe and agent-neutral", () => {
   const output = createHomeOutput({ bin: "lavish-axi", sessions: [], agent: "static" });
-  const pollHelp = output.help.find((item) => item.includes("lavish-axi poll <html-file>"));
+  const pollHelp = output.help.find((item) => item.includes("lavish poll <html-file>"));
 
   assertObservablePollWakePath(pollHelp);
   assert.doesNotMatch(pollHelp, /keep the poll attached to the active turn/i);
@@ -358,11 +358,11 @@ test("top-level help renders static home output without dynamic sessions", async
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /playbooks\[9\]/);
-    assert.match(result.stdout, /lavish-axi playbook <playbook_id>/);
+    assert.match(result.stdout, /lavish playbook <playbook_id>/);
     assert.match(result.stdout, /reference other filesystem assets/);
     assert.match(result.stdout, /same directory as the HTML file/);
     assert.match(result.stdout, /Tailwind CSS browser runtime v4/);
-    assert.match(result.stdout, /lavish-axi design/);
+    assert.match(result.stdout, /lavish design/);
     assert.match(result.stdout, /otherwise use the Lavish design/);
     assert.match(result.stdout, /never kill it/);
     assert.match(result.stdout, /feedback remains queued until delivery/);
@@ -477,7 +477,7 @@ test("playbook index output lists known playbooks with concise descriptions", ()
     "Must be used when the agent needs to collect user input on decisions, choices, preferences, triage, scope, or other structured feedback from within the artifact",
   );
   assert.ok(output.playbooks.every((playbook) => playbook.use_when.length > 20));
-  assert.ok(output.help.some((item) => item.includes("lavish-axi playbook <playbook_id>")));
+  assert.ok(output.help.some((item) => item.includes("lavish playbook <playbook_id>")));
   assert.ok(output.help.some((item) => item.includes("combines several playbooks")));
   assert.ok(output.help.some((item) => item.includes("MUST open each matching playbook")));
 });
@@ -505,9 +505,7 @@ test("diagram playbook sends system diagrams to draw.io, small figures to inline
 
   assert.ok(output.playbook.choose.some((item) => /needs at least one visible diagram/i.test(item)));
   assert.ok(
-    output.playbook.choose.some(
-      (item) => /Use draw\.io for architecture/.test(item) && /lavish-axi diagram/.test(item),
-    ),
+    output.playbook.choose.some((item) => /Use draw\.io for architecture/.test(item) && /lavish diagram/.test(item)),
   );
   assert.ok(output.playbook.choose.some((item) => /hand-authored inline SVG for a small conceptual figure/.test(item)));
   assert.ok(output.playbook.pitfalls.some((item) => /Do not serve a diagram you have not looked at/.test(item)));
@@ -565,7 +563,7 @@ test("diagram playbook routes whiteboard Mermaid through the theme-aware design 
 
   assert.ok(
     output.playbook.design_rules.some(
-      (item) => /mermaid/i.test(item) && /theme-aware/i.test(item) && /`lavish-axi design`/.test(item),
+      (item) => /mermaid/i.test(item) && /theme-aware/i.test(item) && /`lavish design`/.test(item),
     ),
     "the whiteboard opt-in must still theme Mermaid through the design snippet instead of hardcoding one theme",
   );
@@ -788,19 +786,6 @@ test("theme-aware Mermaid snippet serializes rapid theme-change renders", async 
   await Promise.resolve();
 });
 
-test("Mermaid after evidence embeds the shipped theme-aware snippet", async () => {
-  const evidence = await readFile(new URL("../task-evidence/mermaid-theme/after.html", import.meta.url), "utf8");
-  const start = evidence.indexOf('    <script type="module">');
-  const closingScript = evidence.indexOf("    </script>", start);
-
-  assert.notEqual(start, -1);
-  assert.notEqual(closingScript, -1);
-  assert.equal(
-    evidence.slice(start, closingScript + "    </script>".length).replace(/^ {4}/gm, ""),
-    createDesignOutput().whiteboard_tooling.mermaid_cdn_snippet,
-  );
-});
-
 test("playbook detail output returns focused Lavish-native guidance", () => {
   const output = createPlaybookOutput(["input"]);
 
@@ -884,7 +869,7 @@ test("unknown playbook ids produce an actionable validation error", () => {
       assert.ok(error instanceof AxiError);
       assert.equal(error.code, "VALIDATION_ERROR");
       assert.match(error.message, /Unknown playbook/);
-      assert.ok(error.suggestions.some((item) => item.includes("lavish-axi playbook")));
+      assert.ok(error.suggestions.some((item) => item.includes("lavish playbook")));
       return true;
     },
   );
@@ -917,9 +902,9 @@ test("open output keeps the user URL in session data and next_step focused on po
   assert.doesNotMatch(output.next_step, /Tell the user (?:to open|to visit)/i);
   assert.doesNotMatch(output.next_step, /http:\/\/localhost:4387\/session\/abc123/);
   assert.match(output.next_step, /Do not respond to the user just yet\. Now you must run/);
-  assert.match(output.next_step, /lavish-axi poll \/tmp\/artifact\.html/);
+  assert.match(output.next_step, /lavish poll \/tmp\/artifact\.html/);
   assert.match(output.next_step, /keep waiting for more feedback/);
-  assert.match(output.next_step, /lavish-axi reply \/tmp\/artifact\.html --agent-reply/);
+  assert.match(output.next_step, /lavish reply \/tmp\/artifact\.html --agent-reply/);
   assert.match(output.next_step, /without starting another long-poll/);
   assert.match(output.next_step, /Layout issues inbox/);
   assert.doesNotMatch(output.next_step, /layout_warnings/);
@@ -956,7 +941,7 @@ test("a user-ended open refuses with a status agents can branch on, not a URL to
   assert.match(output.next_step, /user explicitly ended this Lavish Editor session from the browser/);
   assert.match(output.next_step, /did not reopen it/);
   assert.match(output.next_step, /Do not reopen unless the user asks for further review/);
-  assert.match(output.next_step, /lavish-axi \/tmp\/artifact\.html --reopen/);
+  assert.match(output.next_step, /lavish \/tmp\/artifact\.html --reopen/);
 });
 
 test("export output reports the written file and reassures it needs no server", () => {
@@ -1038,7 +1023,7 @@ test("export command writes a portable HTML file next to the artifact", async ()
       [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "export", artifact],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_TELEMETRY: "0" },
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir },
         encoding: "utf8",
       },
     );
@@ -1066,7 +1051,7 @@ test("export command treats --out value as an option operand, not the source fil
       [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "export", "--out", output, artifact],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_TELEMETRY: "0" },
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: dir },
         encoding: "utf8",
       },
     );
@@ -1237,7 +1222,7 @@ const PASSWORD_SHAPE = /[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/;
 // a usage error - `--site`/`--update-key` with no HTML file was one - fails here instead of on the
 // user's next paste.
 function parseSuggestedShareCommand(text) {
-  const match = /`lavish-axi share ([^`]+)`/.exec(String(text));
+  const match = /`lavish share ([^`]+)`/.exec(String(text));
   assert.ok(match, `expected a suggested share command in: ${text}`);
   const argv = match[1].trim().split(/\s+/);
   const request = resolveShareRequest(argv);
@@ -1685,7 +1670,6 @@ test("share command publishes the artifact to ht-ml.app and returns the public u
         env: {
           ...process.env,
           LAVISH_AXI_STATE_DIR: dir,
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_HTML_APP_API_URL: `http://127.0.0.1:${htmlApp.port}`,
         },
       },
@@ -1730,7 +1714,6 @@ test("share command refuses a whitespace-only password instead of quietly publis
         env: {
           ...process.env,
           LAVISH_AXI_STATE_DIR: dir,
-          LAVISH_AXI_TELEMETRY: "0",
           LAVISH_AXI_HTML_APP_API_URL: `http://127.0.0.1:${htmlApp.port}`,
         },
       },
@@ -1785,7 +1768,7 @@ test("poll help is Codex-aware when requested", () => {
 test("share help distinguishes public default from password-protected shares", () => {
   const help = getCommandHelp("share");
   const home = createHomeOutput({ bin: "lavish-axi", sessions: [] });
-  const homeShareHelp = home.help.find((item) => item.includes("lavish-axi share <html-file>"));
+  const homeShareHelp = home.help.find((item) => item.includes("lavish share <html-file>"));
 
   assert.match(help, /PUBLIC by default/);
   assert.match(help, /Pass --private to publish a PRIVATE page behind a generated password/);
@@ -1825,9 +1808,9 @@ test("home share guidance defers republish and unpublish mechanics to share --he
   // at the command that owns it, but must not restate that command's flag mechanics.
   const help = getCommandHelp("share");
   const home = createHomeOutput({ bin: "lavish-axi", sessions: [] });
-  const homeShareHelp = home.help.find((item) => item.includes("lavish-axi share <html-file>"));
+  const homeShareHelp = home.help.find((item) => item.includes("lavish share <html-file>"));
 
-  assert.match(homeShareHelp, /run `lavish-axi share --help` before using it/);
+  assert.match(homeShareHelp, /run `lavish share --help` before using it/);
   assert.doesNotMatch(homeShareHelp, /--site/);
   assert.doesNotMatch(homeShareHelp, /--update-key/);
   assert.doesNotMatch(homeShareHelp, /--unpublish/);
@@ -1946,9 +1929,9 @@ test("detected layout warnings never appear in poll output", () => {
   assert.equal("layout_warnings" in output, false);
   assert.equal("artifact_failures" in output, false);
   assert.match(output.next_step, /Apply the requested changes/);
-  assert.match(output.next_step, /lavish-axi poll \/tmp\/report\.html --agent-reply/);
+  assert.match(output.next_step, /lavish poll \/tmp\/report\.html --agent-reply/);
   assert.match(output.next_step, /continuing to wait for feedback/);
-  assert.match(output.next_step, /lavish-axi reply \/tmp\/report\.html --agent-reply/);
+  assert.match(output.next_step, /lavish reply \/tmp\/report\.html --agent-reply/);
   assert.match(output.next_step, /without starting another long-poll/);
 });
 
@@ -2105,9 +2088,9 @@ test("a poll reporting the session ended by the user tells the agent to stop and
   assert.equal(output.session.ended_by, "user");
   assert.match(output.next_step, /user ended this Lavish Editor session/);
   assert.match(output.next_step, /Stop polling/);
-  assert.match(output.next_step, /do not run `lavish-axi \/tmp\/report\.html` to reopen it/);
+  assert.match(output.next_step, /do not run `lavish \/tmp\/report\.html` to reopen it/);
   assert.match(output.next_step, /deliver any remaining updates directly in this conversation/i);
-  assert.match(output.next_step, /lavish-axi \/tmp\/report\.html --reopen/);
+  assert.match(output.next_step, /lavish \/tmp\/report\.html --reopen/);
 });
 
 test("a poll reporting an agent-ended session allows a plain reopen if still needed", () => {
@@ -2118,7 +2101,7 @@ test("a poll reporting an agent-ended session allows a plain reopen if still nee
 
   assert.equal(output.session.ended_by, "agent");
   assert.match(output.next_step, /Stop polling/);
-  assert.match(output.next_step, /lavish-axi \/tmp\/report\.html`\s+to open a fresh session/);
+  assert.match(output.next_step, /lavish \/tmp\/report\.html`\s+to open a fresh session/);
   assert.doesNotMatch(output.next_step, /--reopen/);
 });
 
@@ -2138,7 +2121,7 @@ test("the final feedback batch before a user end flags session_ended and skips t
   assert.equal(output.session.ended_by, "user");
   assert.match(output.next_step, /last feedback before the user ended the session/);
   assert.match(output.next_step, /Stop polling \/tmp\/report\.html and do not reopen it/);
-  assert.match(output.next_step, /lavish-axi \/tmp\/report\.html --reopen/);
+  assert.match(output.next_step, /lavish \/tmp\/report\.html --reopen/);
   assert.doesNotMatch(output.next_step, /reload or re-open/);
 });
 
@@ -2157,7 +2140,7 @@ test("the final feedback batch before an agent end preserves ended_by and allows
   assert.equal(output.session.session_ended, true);
   assert.equal(output.session.ended_by, "agent");
   assert.match(output.next_step, /last feedback before the Lavish Editor session ended/);
-  assert.match(output.next_step, /lavish-axi \/tmp\/report\.html`\s+to open a fresh session/);
+  assert.match(output.next_step, /lavish \/tmp\/report\.html`\s+to open a fresh session/);
   assert.doesNotMatch(output.next_step, /--reopen/);
   assert.doesNotMatch(output.next_step, /user ended this Lavish Editor session/);
 });
@@ -2197,22 +2180,22 @@ test("final agent-ended feedback points a fatal artifact failure at a fresh sess
 
 test("poll wait messages tell watching agents the silence is normal", () => {
   const banner = pollWaitBannerText("/tmp/report.html");
-  assert.match(banner, /\[lavish-axi\]/);
+  assert.match(banner, /\[lavish\]/);
   assert.match(banner, /Long-polling for user feedback/);
   assert.match(banner, /stays silent/);
   assert.match(banner, /leave it running/i);
   assert.match(banner, /feedback remains queued until delivery/);
 
   const tick = pollWaitTickText(3 * 60_000);
-  assert.match(tick, /\[lavish-axi\]/);
+  assert.match(tick, /\[lavish\]/);
   assert.match(tick, /Still waiting for user feedback \(3m\)/);
   assert.match(tick, /leave this running/i);
 
   const interrupted = pollInterruptedText("/tmp/report.html");
-  assert.match(interrupted, /\[lavish-axi\]/);
+  assert.match(interrupted, /\[lavish\]/);
   assert.match(interrupted, /Poll interrupted/);
   assert.match(interrupted, /user may still be reviewing/);
-  assert.match(interrupted, /lavish-axi poll \/tmp\/report\.html/);
+  assert.match(interrupted, /lavish poll \/tmp\/report\.html/);
   assert.match(interrupted, /feedback remains queued until delivery/);
 });
 
@@ -2454,7 +2437,7 @@ test("browser-disconnected poll output asks before reopening or ending the resum
   assert.match(output.next_step, /reopen/i);
   assert.match(output.next_step, /end the session/i);
   assert.match(output.next_step, /remains open|resumable/i);
-  assert.doesNotMatch(output.next_step, /Run `lavish-axi \/tmp\/report\.html`/);
+  assert.doesNotMatch(output.next_step, /Run `lavish \/tmp\/report\.html`/);
 });
 
 test("waiting next step reassures agents that re-running poll loses nothing", () => {
@@ -2463,7 +2446,7 @@ test("waiting next step reassures agents that re-running poll loses nothing", ()
     response: { status: "waiting" },
   });
 
-  assert.match(output.next_step, /lavish-axi poll \/tmp\/report\.html/);
+  assert.match(output.next_step, /lavish poll \/tmp\/report\.html/);
   assert.match(output.next_step, /again now, the same way, to keep listening/);
   assert.match(output.next_step, /feedback remains queued until delivery/);
 });
@@ -2919,15 +2902,6 @@ test("setup rejects an unknown action and names both supported ones", async () =
   }
 });
 
-test("telemetry command names are anonymous and do not include file paths", () => {
-  assert.equal(telemetryCommandName(["report.html"]), "open");
-  assert.equal(telemetryCommandName(["poll", "/tmp/secret/report.html"]), "poll");
-  assert.equal(telemetryCommandName(["end", "/tmp/secret/report.html"]), "end");
-  assert.equal(telemetryCommandName(["playbook", "diagram"]), "playbook");
-  assert.equal(telemetryCommandName(["design"]), "design");
-  assert.equal(telemetryCommandName([]), "home");
-});
-
 test("server spawn options detach without inheriting invalid streams", () => {
   const options = createServerSpawnOptions();
 
@@ -3009,10 +2983,13 @@ test("shouldRestartServer adopts a server that is newer than the CLI", () => {
   assert.equal(shouldRestartServer("0.1.4", { ok: true, app: "lavish-axi", version: "1.0.0" }), false);
 });
 
-test("shouldRestartServer replaces a server whose version is not plain x.y.z", () => {
+test("shouldRestartServer orders prereleases by semver and replaces a server whose version is not semver", () => {
   assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "0.1.87-beta.1" }), true);
   assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "v0.1.88" }), true);
-  assert.equal(shouldRestartServer("0.1.87-beta.1", { ok: true, app: "lavish-axi", version: "0.1.88" }), true);
+  assert.equal(shouldRestartServer("0.1.87", { ok: true, app: "lavish-axi", version: "0.1.88+build.1" }), true);
+  // A prerelease CLI adopts a newer release instead of fighting it (semver precedence).
+  assert.equal(shouldRestartServer("0.1.87-beta.1", { ok: true, app: "lavish-axi", version: "0.1.88" }), false);
+  assert.equal(shouldRestartServer("0.1.88-beta.2", { ok: true, app: "lavish-axi", version: "0.1.88-beta.1" }), true);
 });
 
 test("shouldRestartServer compares versions numerically, not as strings", () => {
@@ -3156,7 +3133,7 @@ test("open can resume a session without opening another browser window", () => {
   assert.doesNotMatch(getCommandHelp("playbook"), new RegExp(`${"di"}ff, input`));
   assert.doesNotMatch(getCommandHelp("playbook"), /interactive/);
   assert.match(getCommandHelp("design"), /DaisyUI/);
-  assert.match(getCommandHelp("design"), /lavish-axi design/);
+  assert.match(getCommandHelp("design"), /lavish design/);
   assert.match(getCommandHelp("design"), /portable/);
   assert.ok(getCommandHelp("design").includes(DESIGN_PRIORITY_RULE), "design help embeds the single-sourced rule");
   assert.match(getCommandHelp("design"), /the Lavish design, the default when the user gave no design direction/);
@@ -3171,7 +3148,7 @@ test("polling a file without an active session tells the agent to open it first"
       assert.ok(error instanceof AxiError);
       assert.equal(error.code, "NOT_FOUND");
       assert.match(error.message, /No active Lavish Editor session/);
-      assert.ok(error.suggestions.some((item) => item.includes("lavish-axi /tmp/report.html")));
+      assert.ok(error.suggestions.some((item) => item.includes("lavish /tmp/report.html")));
       return true;
     },
   );
@@ -3184,7 +3161,7 @@ test("network fetch failures become structured Lavish server errors", async () =
       assert.ok(error instanceof AxiError);
       assert.equal(error.code, "SERVER_ERROR");
       assert.match(error.message, /Lavish Editor server connection failed/);
-      assert.ok(error.suggestions.some((item) => item.includes("lavish-axi server --verbose")));
+      assert.ok(error.suggestions.some((item) => item.includes("lavish server --verbose")));
       return true;
     },
   );
@@ -3338,7 +3315,7 @@ async function startShutdownRecorder(version = "0.0.0-previous") {
   return { bodies, port: address.port, close: () => server.close() };
 }
 
-test("lavish-axi stop tells the server it was stopped, and names no session to reload", async () => {
+test("lavish stop tells the server it was stopped, and names no session to reload", async () => {
   const recorder = await startShutdownRecorder();
   try {
     const output = await shutdownServerOnPort(recorder.port, {
@@ -3383,7 +3360,6 @@ test("opening an artifact names that session as the one to reload across a versi
           ...process.env,
           LAVISH_AXI_PORT: String(recorder.port),
           LAVISH_AXI_STATE_DIR: stateDir,
-          LAVISH_AXI_TELEMETRY: "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -3671,42 +3647,97 @@ test("createShareUnpublishOutput separates the immediate content swap from the l
   assert.doesNotMatch(output.next_step, /no visitor can read the old content/i);
 });
 
-test("update is refused in the Jadev fork instead of installing the upstream npm release", async () => {
+test("update is the SDK built-in, and it upgrades @jadev-corp/lavish", async () => {
   const stateDir = await mkdtemp(`${os.tmpdir()}/lavish-axi-update-test-`);
   try {
-    for (const args of [["update"], ["update", "--check"]]) {
-      const result = spawnSync(
-        process.execPath,
-        [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), ...args],
-        {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          encoding: "utf8",
-          env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir, LAVISH_AXI_TELEMETRY: "0" },
-        },
-      );
-      assert.notEqual(result.status, 0, args.join(" "));
-      assert.match(result.stdout, /FORK_UPDATE_DISABLED/);
-      assert.match(result.stdout, /Jadev fork/);
-    }
-    assert.match(getCommandHelp("update"), /Disabled in the Jadev fork/);
+    // `update --help` is answered by the SDK without a network call; a shadowing command would
+    // print Lavish's own help or an error instead.
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("../bin/lavish-axi.js", import.meta.url)), "update", "--help"],
+      {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        encoding: "utf8",
+        env: { ...process.env, LAVISH_AXI_STATE_DIR: stateDir },
+      },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /latest published npm version/);
+    assert.match(result.stdout, /--check/);
+    assert.doesNotMatch(result.stdout, /FORK_UPDATE_DISABLED|Jadev fork/);
+    assert.equal(getCommandHelp("update"), null, "no Lavish-side update help shadows the SDK's");
+
+    // The SDK reads the package name from the package.json nearest the entrypoint.
+    const entry = fileURLToPath(new URL("../dist/cli.mjs", import.meta.url));
+    assert.equal(readNearestPackageJson(entry).packageName, "@jadev-corp/lavish");
+    /** @type {string[]} */
+    const asked = [];
+    const check = await runUpdate({
+      args: ["--check"],
+      stdout: { write: () => true },
+      invokedAs: entry,
+      version: "1.0.0",
+      fetchLatest: async (name) => {
+        asked.push(name);
+        return "1.0.1";
+      },
+    });
+    assert.deepEqual(asked, ["@jadev-corp/lavish"]);
+    assert.deepEqual(/** @type {any} */ (check).update, {
+      package: "@jadev-corp/lavish",
+      current: "1.0.0",
+      latest: "1.0.1",
+      available: true,
+    });
+    assert.equal(
+      planUpgrade({ kind: "npm-global" }, "@jadev-corp/lavish").command,
+      "npm install -g @jadev-corp/lavish@latest",
+    );
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
 
-test("older Jadev CLIs adopt newer fork servers without replacing them", () => {
-  const newer = { app: "lavish-axi", version: "0.1.90-jadev.12" };
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer), false);
-  assert.equal(shouldKillProcessOnPort("0.1.90-jadev.2", newer), false);
-  assert.equal(serverReplacementReason("0.1.90-jadev.2", newer), "");
-  assert.equal(shouldRestartServer("0.1.90-jadev.13", newer), true);
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", newer, true), true);
-  // A plain upstream server is a different build channel and must not substitute for our fork.
-  assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.91" }), true);
+test("the first npm release replaces a 0.1.98-jadev.N server; newer servers are adopted", () => {
+  for (const running of ["0.1.98-jadev.2", "0.1.98-jadev.99", "0.1.83-jadev.12"]) {
+    const old = { app: "lavish-axi", version: running };
+    assert.equal(shouldRestartServer("1.0.0", old), true, running);
+    assert.equal(serverReplacementReason("1.0.0", old), "upgrade", running);
+    assert.equal(shouldKillProcessOnPort("1.0.0", old), true, running);
+  }
+  const newer = { app: "lavish-axi", version: "1.0.1" };
+  assert.equal(shouldRestartServer("1.0.0", newer), false);
+  assert.equal(shouldKillProcessOnPort("1.0.0", newer), false);
+  assert.equal(serverReplacementReason("1.0.0", newer), "");
+  assert.equal(shouldRestartServer("1.0.1", { app: "lavish-axi", version: "1.0.0" }), true);
+  assert.equal(shouldRestartServer("1.0.0", { app: "lavish-axi", version: "1.1.0-beta.1" }), false);
+  assert.equal(shouldRestartServer("1.1.0", { app: "lavish-axi", version: "1.1.0-beta.1" }), true);
+  // Fork servers still order among themselves, so an older 0.1.x CLI still on PATH somewhere is
+  // judged the same way the fork judged it.
+  assert.equal(shouldRestartServer("0.1.90-jadev.2", { app: "lavish-axi", version: "0.1.90-jadev.12" }), false);
+  assert.equal(shouldRestartServer("0.1.90-jadev.13", { app: "lavish-axi", version: "0.1.90-jadev.12" }), true);
+  assert.equal(shouldRestartServer("1.0.0", newer, true), true, "a forced local build still replaces");
 });
 
-test("the fork carries a jadev prerelease version so it is never mistaken for an npm release", () => {
-  assert.match(VERSION, /^\d+\.\d+\.\d+-jadev\.\d+$/);
+test("a Lavish server process is recognised from its npm install path too", () => {
+  assert.equal(isLavishServerCommand("node /usr/local/lib/node_modules/lavish-axi/dist/server.mjs server"), true);
+  assert.equal(
+    isLavishServerCommand("node /usr/local/lib/node_modules/@jadev-corp/lavish/dist/server.mjs server --port 4387"),
+    true,
+  );
+  assert.equal(
+    isLavishServerCommand("node /Users/me/.npm/_npx/1a2b/node_modules/@jadev-corp/lavish/dist/server.mjs server"),
+    true,
+  );
+  assert.equal(isLavishServerCommand("node /Users/me/dev/lavish-axi/bin/lavish-axi-server.js server"), true);
+  assert.equal(isLavishServerCommand("node /srv/lavish-site/server.js"), false);
+  assert.equal(isLavishServerCommand("python -m http.server 4387"), false);
+});
+
+test("the CLI reports the package's own semver version", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(VERSION, packageJson.version);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
 });
 
 test("poll and reply help describe the optional reply sections", () => {
@@ -3783,8 +3814,8 @@ test("libraries output lists counts, skips, and points at item search", () => {
   assert.deepEqual(output.skipped, [{ file: "broken.excalidrawlib", reason: "not valid JSON" }]);
   assert.equal(output.items, undefined);
   const help = output.help.join("\n");
-  assert.match(help, /lavish-axi libraries --search <text>/);
-  assert.match(help, /lavish-axi design/);
+  assert.match(help, /lavish libraries --search <text>/);
+  assert.match(help, /lavish design/);
 });
 
 test("libraries output filters item refs by search terms and library", () => {
@@ -3822,14 +3853,14 @@ test("libraries output bounds long item listings", () => {
 
 test("libraries help documents the command and the directory", () => {
   const help = getCommandHelp("libraries");
-  assert.match(help, /lavish-axi libraries \[--search <text>\] \[--library <id>\]/);
+  assert.match(help, /lavish libraries \[--search <text>\] \[--library <id>\]/);
   assert.match(help, /excalidraw-libraries/);
   assert.equal(normalizeArgv(["libraries"])[0], "libraries");
 });
 
 test("design output owns the library icon directive and the diagram playbook points at it", () => {
   const icons = createDesignOutput().whiteboard_tooling.library_icons;
-  assert.match(icons.use_when, /lavish-axi libraries/);
+  assert.match(icons.use_when, /lavish libraries/);
   assert.equal(icons.syntax, "%% lavish-icon <node-id> <library-id>/<item name>");
   assert.match(icons.example, /^flowchart /);
   assert.match(icons.example, /%% lavish-icon api /);

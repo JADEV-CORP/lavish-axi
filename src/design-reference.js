@@ -226,16 +226,16 @@ export const REVISION_REGISTRY_SNIPPET = `<script type="application/json" data-l
 <section data-lavish-revision="r1">...the block you changed...</section>`;
 
 // Single source for how agents choose an artifact's design direction. It flows into the
-// no-args home output, top-level --help (via DESIGN_SYSTEM_HINT), the `lavish-axi design`
+// no-args home output, top-level --help (via DESIGN_SYSTEM_HINT), the `lavish design`
 // summary, and the design command help. The installable skill does not embed this rule;
-// it points at `lavish-axi design`. Edit the rule here only.
+// it points at `lavish design`. Edit the rule here only.
 export const DESIGN_PRIORITY_RULE =
-  "Decide the design direction in this priority order: (1) if the user asked for a specific look or named design system, use that; (2) otherwise use the Lavish design: start the page from the template `lavish-axi design --template` prints and keep its layout, header, section, decision, and footer patterns, so every agent's pages look alike. It carries the CDN snippet (Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme) and `<html data-theme=\"lavish-auto\">`, which follows the editor's light or dark mode and theme preset, or the OS when opened on its own; use `data-theme=\"lavish\"` or `lavish-dark` only to pin one side. Prefer the template and its DaisyUI classes over hand-writing styles unless explicitly instructed otherwise by the user; (3) the one exception to (2) is a screen that previews, proposes, or mocks a specific app's UI. For that screen only, inspect the project the artifact is about - the subject or product whose UI it represents, which may differ from your current working directory - and render the mock in the app's own design system (its Tailwind or theme config, design tokens, component library, and brand assets) inside a framed region, so it faithfully shows the product, while the page around the frame stays in the Lavish design.";
+  "Decide the design direction in this priority order: (1) if the user asked for a specific look or named design system, use that; (2) otherwise use the Lavish design: start the page from the template `lavish design --template` prints and keep its layout, header, section, decision, and footer patterns, so every agent's pages look alike. It carries the CDN snippet (Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme) and `<html data-theme=\"lavish-auto\">`, which follows the editor's light or dark mode and theme preset, or the OS when opened on its own; use `data-theme=\"lavish\"` or `lavish-dark` only to pin one side. Prefer the template and its DaisyUI classes over hand-writing styles unless explicitly instructed otherwise by the user; (3) the one exception to (2) is a screen that previews, proposes, or mocks a specific app's UI. For that screen only, inspect the project the artifact is about - the subject or product whose UI it represents, which may differ from your current working directory - and render the mock in the app's own design system (its Tailwind or theme config, design tokens, component library, and brand assets) inside a framed region, so it faithfully shows the product, while the page around the frame stays in the Lavish design.";
 
 export const DESIGN_SYSTEM_HINT =
-  "Lavish does not auto-inject any design system - artifacts stay portable so they render identically when opened directly without lavish-axi running. Before writing any HTML: " +
+  "Lavish does not auto-inject any design system - artifacts stay portable so they render identically when opened directly without Lavish running. Before writing any HTML: " +
   DESIGN_PRIORITY_RULE +
-  " Run `lavish-axi design` for a content-to-playbook router, a copy-pasteable CDN snippet, the whiteboard (Mermaid) opt-in snippet, and the DaisyUI component reference. When you deliver the artifact, state which of the three design sources you used and why.";
+  " Run `lavish design` for a content-to-playbook router, a copy-pasteable CDN snippet, the whiteboard (Mermaid) opt-in snippet, and the DaisyUI component reference. When you deliver the artifact, state which of the three design sources you used and why.";
 
 export const LAVISH_THEMES = ["lavish-auto", "lavish", "lavish-dark"];
 
@@ -287,9 +287,9 @@ export function createDesignOutput() {
       summary:
         "This is the Lavish design, the default for every artifact whose user gave no design direction. A screen that mocks a specific product keeps that product's own design system inside its frame. Lavish does not auto-inject any design system; artifacts stay portable HTML. Paint an explicit page background and readable text. " +
         DESIGN_PRIORITY_RULE +
-        " Lavish adds only its SDK script to your file and never wraps a fragment, so start it with `<!doctype html>`: without one the page renders in quirks mode, where `<table>` text stops inheriting the color a wrapper theme sets. Start from `lavish-axi design --template`, which already does; the CDN snippet below is what its `<head>` carries.",
+        " Lavish adds only its SDK script to your file and never wraps a fragment, so start it with `<!doctype html>`: without one the page renders in quirks mode, where `<table>` text stops inheriting the color a wrapper theme sets. Start from `lavish design --template`, which already does; the CDN snippet below is what its `<head>` carries.",
       page_template:
-        "`lavish-axi design --template` prints the starting page as plain HTML: redirect it into your artifact file, then replace the [bracketed] placeholders and repeat or drop blocks. Keep its classes; add DaisyUI parts from the reference below.",
+        "`lavish design --template` prints the starting page as plain HTML: redirect it into your artifact file, then replace the [bracketed] placeholders and repeat or drop blocks. Keep its classes; add DaisyUI parts from the reference below.",
       cdn_snippet: DESIGN_CDN_SNIPPET,
       lavish_theme_note:
         'The snippet ends with the Lavish theme as an inline `<style>`: `data-theme="lavish"` (light) and `data-theme="lavish-dark"`. Keep it inline; the DaisyUI CDN cannot serve a custom theme.',
@@ -312,7 +312,7 @@ export function createDesignOutput() {
       versions: { mermaid: MERMAID_VERSION },
       library_icons: {
         use_when:
-          "Optional, in a whiteboard flowchart such as an architecture or system diagram: show a node as an icon from an Excalidraw library the user installed. Run `lavish-axi libraries` to see what is installed and `lavish-axi libraries --search <text>` for exact item refs; skip this when nothing is installed.",
+          "Optional, in a whiteboard flowchart such as an architecture or system diagram: show a node as an icon from an Excalidraw library the user installed. Run `lavish libraries` to see what is installed and `lavish libraries --search <text>` for exact item refs; skip this when nothing is installed.",
         syntax: "%% lavish-icon <node-id> <library-id>/<item name>",
         example:
           "flowchart LR\n  %% lavish-icon api aws-architecture-icons/AWS Lambda\n  user([Customer]) --> api[Orders API]",

@@ -23,8 +23,11 @@ const crossSpawn = createRequire(import.meta.url)("cross-spawn");
 // Clients select their local validation rules from this string; they never fetch it.
 export const PLUGIN_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 
-// Not in package.json (npm infers no author), so the one authoritative copy lives here.
-const PLUGIN_AUTHOR = Object.freeze({ name: "Kun Chen", url: "https://github.com/kunchenguid" });
+// The plugin keeps the name it had before the package moved to @jadev-corp/lavish. A scoped npm
+// name is not a valid manifest name, and VS Code, Cursor and Copilot CLI registrations from earlier
+// installs are keyed by this one, so `setup plugin` repairs them in place instead of adding a second
+// copy of the skill beside them.
+export const PLUGIN_NAME = "lavish-axi";
 
 export function spawnPluginClientSync(command, args) {
   return crossSpawn.sync(command, args, { encoding: "utf8" });
@@ -64,10 +67,10 @@ export function spawnPluginClientSync(command, args) {
 export function createPluginManifest(packageJson) {
   return {
     $schema: PLUGIN_SCHEMA_URL,
-    name: packageJson.name,
+    name: PLUGIN_NAME,
     version: packageJson.version,
     description: packageJson.description,
-    author: PLUGIN_AUTHOR,
+    author: normalizeAuthor(packageJson.author),
     homepage: packageJson.homepage,
     // The schema wants a plain URL string; package.json carries npm's `git+….git` form.
     repository: normalizeRepositoryUrl(packageJson.repository),
@@ -82,6 +85,24 @@ export function createPluginManifest(packageJson) {
  */
 export function createPluginManifestJson(packageJson) {
   return `${JSON.stringify(createPluginManifest(packageJson), null, 2)}\n`;
+}
+
+/**
+ * The manifest's `author` is an object closed to name, email and url; package.json may also hold a
+ * plain name string.
+ *
+ * @param {{ name?: string, email?: string, url?: string } | string | undefined} author package.json `author`
+ * @returns {{ name?: string, email?: string, url?: string } | undefined} manifest author
+ */
+export function normalizeAuthor(author) {
+  if (!author) return undefined;
+  if (typeof author === "string") return { name: author };
+  /** @type {{ name?: string, email?: string, url?: string }} */
+  const result = {};
+  if (author.name) result.name = author.name;
+  if (author.email) result.email = author.email;
+  if (author.url) result.url = author.url;
+  return result;
 }
 
 /**
