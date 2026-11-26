@@ -349,7 +349,8 @@ export function createPageApps(deps) {
       throw pageAppError("INVALID", "A download takes a string, a Blob, or bytes.");
     }
     if (bytes.byteLength > limits.downloadMaxBytes) throw downloadTooLarge();
-    await request("download", { name: checked.name, type: downloadMimeType(type || defaultType), bytes });
+    // `mime`, not `type`: the message's own `type` field names the message.
+    await request("download", { name: checked.name, mime: downloadMimeType(type || defaultType), bytes });
   }
 
   function downloadTooLarge() {

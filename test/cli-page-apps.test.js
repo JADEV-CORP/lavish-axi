@@ -170,3 +170,17 @@ test("lavish reply --ask answers the page's question and refuses one that is clo
     assert.match(malformed.stdout, /question id such as ask-1a2b3c4d/);
   });
 });
+
+test("poll output says a picked document is read from its path", async () => {
+  const { createPollOutput } = await import("../src/cli.js");
+  const output = createPollOutput({
+    file: "/p.html",
+    response: {
+      status: "feedback",
+      prompts: [
+        { prompt: "Chart this", attachments: [{ id: "x.csv", type: "file", path: "/s/x.csv", name: "q3.csv" }] },
+      ],
+    },
+  });
+  assert.match(output.next_step, /type "file" is a document the user chose on the page/);
+});

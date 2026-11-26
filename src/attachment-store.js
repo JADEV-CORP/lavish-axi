@@ -15,12 +15,27 @@ import path from "node:path";
 // payload, so a crafted prompt can't point an attachment at an arbitrary file.
 
 const KEY_RE = /^[0-9a-f]{16}$/;
-const ID_RE = /^[0-9a-f]{64}\.(png|jpg|webp)$/;
+const ID_RE = /^[0-9a-f]{64}\.(png|jpg|webp|pdf|txt|csv|md|json)$/;
 
 // Magic-byte detection is authoritative; a lying Content-Type is ignored. Only
-// these three raster formats are accepted for v1 (SVG is an active-content
-// surface; animated GIF is out on size/semantics).
-const MIME_BY_EXT = { png: "image/png", jpg: "image/jpeg", webp: "image/webp" };
+// these three raster formats are accepted as images (SVG is an active-content
+// surface; animated GIF is out on size/semantics). Files a page picks through
+// `window.lavish.files.pick` may also be PDF (magic bytes) or UTF-8 text; those
+// are handed to the agent as local paths and never served back over HTTP.
+const MIME_BY_EXT = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  csv: "text/csv",
+  md: "text/markdown",
+  json: "application/json",
+};
+const IMAGE_EXTS = new Set(["png", "jpg", "webp"]);
+// Text files carry no magic bytes, so their extension comes from the picked file's name, but only
+// from this list; anything else that is valid UTF-8 text is stored as .txt.
+const TEXT_EXTS = new Set(["txt", "csv", "md", "json"]);
 
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MiB per image
 // 20 pictures and 100 MiB per message, the owner's choice of October 19, 2026 (#3780).
@@ -78,7 +93,7 @@ const ATTACHMENT_TEMP_GRACE_MS = 5 * 60 * 1000; // 5 minutes
 // gone) can be reaped. A live upload always writes the image BEFORE its sidecar, so a
 // sidecar-without-image is unambiguous crash/failed-delete debris - no grace needed
 // (ATTACH-002).
-const SIDECAR_ORPHAN_RE = /^([0-9a-f]{64}\.(?:png|jpg|webp))\.meta$/;
+const SIDECAR_ORPHAN_RE = /^([0-9a-f]{64}\.(?:png|jpg|webp|pdf|txt|csv|md|json))\.meta$/;
 
 let temporaryFileId = 0;
 
@@ -160,6 +175,50 @@ function diskCapEnv(raw, fallback = DEFAULT_MAX_ATTACHMENT_DISK_BYTES) {
 // (through `acceptedImageTypes`) - so a new format can never be offered by a
 // surface that then refuses it.
 export const ACCEPTED_IMAGE_MIME = ["image/png", "image/jpeg", "image/webp"];
+
+// What `window.lavish.files.pick` accepts, in the order the picker offers it: the images above plus
+// PDF and plain-text documents. `detectFileType` enforces it; the chrome narrows the picker to it
+// (threaded through the session JSON), so the picker never offers a type the upload refuses.
+export const ACCEPTED_FILE_TYPES = [
+  { ext: "png", mime: "image/png" },
+  { ext: "jpg", mime: "image/jpeg" },
+  { ext: "jpeg", mime: "image/jpeg" },
+  { ext: "webp", mime: "image/webp" },
+  { ext: "pdf", mime: "application/pdf" },
+  { ext: "txt", mime: "text/plain" },
+  { ext: "csv", mime: "text/csv" },
+  { ext: "md", mime: "text/markdown" },
+  { ext: "json", mime: "application/json" },
+];
+
+/**
+ * Detect a picked file's type: an image or PDF by magic bytes, else UTF-8 text with no NUL byte,
+ * named by the file's own extension when it is one of the text types. Returns { mime, ext } or null.
+ * @param {Buffer} buffer
+ * @param {string} [nameHint] the file name the reviewer picked, used only for a text extension
+ */
+export function detectFileType(buffer, nameHint = "") {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return null;
+  const image = detectImageType(buffer);
+  if (image) return image;
+  if (buffer.length >= 5 && buffer.toString("latin1", 0, 5) === "%PDF-") return { mime: "application/pdf", ext: "pdf" };
+  if (buffer.includes(0)) return null;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return null;
+  }
+  const hinted =
+    String(nameHint)
+      .toLowerCase()
+      .match(/\.([a-z0-9]{1,10})$/)?.[1] || "";
+  const ext = TEXT_EXTS.has(hinted) ? hinted : "txt";
+  return { mime: MIME_BY_EXT[ext], ext };
+}
+
+export function isImageAttachmentId(id) {
+  return isValidAttachmentId(id) && IMAGE_EXTS.has(String(id).slice(String(id).lastIndexOf(".") + 1));
+}
 
 // Detect the image format from magic bytes alone. Returns { mime, ext } or null.
 export function detectImageType(buffer) {
@@ -261,7 +320,7 @@ function webpDimensions(b) {
 function buildMetadata(id, file, mime, bytes, dims) {
   return {
     id,
-    type: "image",
+    type: String(mime).startsWith("image/") ? "image" : "file",
     path: file,
     mime,
     bytes,
@@ -396,16 +455,26 @@ export async function writeAttachment(
     ttlMs = null,
     referenced = new Set(),
     evictionGraceMs = 0,
+    // "file" admits what window.lavish.files.pick accepts (detectFileType); the default stays images.
+    kind = "image",
+    nameHint = "",
   } = {},
 ) {
   if (!isValidAttachmentKey(key)) throw statusError(`invalid attachment session key: ${key}`, 400);
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw statusError("empty attachment upload", 400);
   if (buffer.length > maxBytes) throw statusError(`attachment exceeds the ${maxBytes} byte limit`, 413);
-  const type = detectImageType(buffer);
-  if (!type) throw statusError("unsupported image type (expected PNG, JPEG, or WebP)", 415);
+  const type = kind === "file" ? detectFileType(buffer, nameHint) : detectImageType(buffer);
+  if (!type) {
+    throw statusError(
+      kind === "file"
+        ? "unsupported file type (expected PNG, JPEG, WebP, PDF, or UTF-8 text such as .txt, .csv, .md, .json)"
+        : "unsupported image type (expected PNG, JPEG, or WebP)",
+      415,
+    );
+  }
   const id = `${crypto.createHash("sha256").update(buffer).digest("hex")}.${type.ext}`;
   const file = attachmentFile(stateDir, key, id);
-  const dims = imageDimensions(buffer, type.mime);
+  const dims = type.mime.startsWith("image/") ? imageDimensions(buffer, type.mime) : null;
   const sidecarContent = JSON.stringify({
     v: 1,
     mime: type.mime,
@@ -491,7 +560,9 @@ export async function resolveAttachment(stateDir, key, id) {
 // or null. Pairs with sendFile so a render is one stat + one streamed read, not two
 // full reads (see D6 in docs/invariants.md).
 export async function statAttachmentForServe(stateDir, key, id) {
-  if (!isValidAttachmentKey(key) || !isValidAttachmentId(id)) return null;
+  // Only images are served back (as thumbnails). A picked PDF or text file is the reviewer's own
+  // document for the agent; serving it from this origin would add a surface for nothing.
+  if (!isValidAttachmentKey(key) || !isImageAttachmentId(id)) return null;
   const file = attachmentFile(stateDir, key, id);
   try {
     const info = await stat(file);
@@ -504,6 +575,7 @@ export async function statAttachmentForServe(stateDir, key, id) {
 }
 
 async function readDimensions(file, mime) {
+  if (!String(mime).startsWith("image/")) return null;
   try {
     return imageDimensions(await readFile(file), mime);
   } catch {

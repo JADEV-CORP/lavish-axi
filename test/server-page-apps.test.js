@@ -287,3 +287,45 @@ test("a poll whose --ask names no open question posts nothing and does not liste
     assert.doesNotMatch(state, /Plan B\./);
   });
 });
+
+// ---- Files picked on the page reach the agent as local paths. ----
+
+test("a picked document uploads with kind=file, is not served back, and reaches the poll as a path", async () => {
+  await withSession(async ({ base, key, artifact }) => {
+    const upload = await fetch(`${base()}/api/${key}/attachments?kind=file&name=q3.csv`, {
+      method: "POST",
+      headers: { "content-type": "text/csv", origin: base() },
+      body: "region,total\nnorth,12\n",
+    });
+    assert.equal(upload.status, 200);
+    const { attachment } = await upload.json();
+    assert.match(attachment.id, /^[0-9a-f]{64}\.csv$/);
+    assert.equal(attachment.type, "file");
+
+    // The same bytes as an ordinary (image) upload are refused.
+    const asImage = await fetch(`${base()}/api/${key}/attachments`, {
+      method: "POST",
+      headers: { "content-type": "text/csv", origin: base() },
+      body: "region,total\nnorth,12\n",
+    });
+    assert.equal(asImage.status, 415);
+    assert.equal((await fetch(`${base()}/api/${key}/attachments/${attachment.id}`)).status, 404);
+
+    const queued = await fetch(`${base()}/api/${key}/prompts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base() },
+      body: JSON.stringify({
+        prompts: [{ prompt: "Chart this", tag: "files", attachments: [{ id: attachment.id, name: "q3.csv" }] }],
+      }),
+    });
+    assert.equal(queued.status, 200);
+    const delivered = await (
+      await fetch(`${base()}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=1000`)
+    ).json();
+    const [file] = delivered.prompts[0].attachments;
+    assert.equal(file.name, "q3.csv");
+    assert.equal(file.type, "file");
+    assert.equal(file.mime, "text/csv");
+    assert.ok(path.isAbsolute(file.path));
+  });
+});

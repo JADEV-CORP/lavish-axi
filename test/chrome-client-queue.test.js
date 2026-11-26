@@ -462,6 +462,7 @@ async function createChromeHarness({
     },
     setTimeout: fakeSetTimeout,
     crypto: globalThis.crypto,
+    Blob: globalThis.Blob,
     URL: {
       createObjectURL() {
         return "blob:lavish-test";
@@ -11316,4 +11317,134 @@ test("an answer that arrives in a chat-sync settles the page question too", asyn
   const result = pageAppResults(chrome).at(-1);
   assert.equal(result.ok, true);
   assert.equal(result.value, "Plan A.");
+});
+
+// ---- Files in and out. ----
+
+function pickHarness() {
+  const uploads = [];
+  return {
+    uploads,
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).includes("/attachments?kind=file")) {
+        uploads.push({ url: String(url), body: init.body });
+        const name = decodeURIComponent(String(url).split("name=")[1] || "");
+        return { ok: true, json: async () => ({ attachment: { id: "a".repeat(64) + "." + name.split(".").pop() } }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  };
+}
+
+function openPicker(chrome) {
+  const input = chrome.document.body.children.find((child) => child.tagName === "INPUT");
+  assert.ok(input, "the chrome opened a file input");
+  assert.equal(input.clicked, true);
+  return input;
+}
+
+test("files.pick opens the chrome's own picker after a click and hands the page only names, sizes and ids", async () => {
+  const { uploads, fetchImpl } = pickHarness();
+  const activation = { isActive: true };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl, activation });
+  pageAppRequest(chrome, { id: "r1", op: "files.pick", accept: [".csv", "application/pdf"], multiple: true });
+  await flushPromises();
+  const input = openPicker(chrome);
+  assert.equal(input.accept, ".pdf,application/pdf,.csv,text/csv");
+  assert.equal(input.multiple, true);
+  assert.equal(pageAppResults(chrome).at(-1).pending, true);
+
+  input.files = [
+    { name: "q3.csv", size: 12, type: "text/csv" },
+    { name: "brief.pdf", size: 40, type: "application/pdf" },
+  ];
+  input.dispatch("change");
+  await flushPromises();
+  await flushPromises();
+  assert.deepEqual(
+    uploads.map((upload) => upload.url),
+    ["/api/abc/attachments?kind=file&name=q3.csv", "/api/abc/attachments?kind=file&name=brief.pdf"],
+  );
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, [
+    { id: "a".repeat(64) + ".csv", name: "q3.csv", size: 12, type: "text/csv" },
+    { id: "a".repeat(64) + ".pdf", name: "brief.pdf", size: 40, type: "application/pdf" },
+  ]);
+  assert.equal(input.parentElement, null, "the picker input is gone once the reviewer chose");
+});
+
+test("files.pick needs a click, refuses types Lavish cannot take, and resolves empty on cancel", async () => {
+  const { uploads, fetchImpl } = pickHarness();
+  const activation = { isActive: false };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl, activation });
+  pageAppRequest(chrome, { id: "r1", op: "files.pick" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "NEEDS_CLICK");
+
+  activation.isActive = true;
+  pageAppRequest(chrome, { id: "r2", op: "files.pick", accept: [".exe", "video/*"] });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "FILE_TYPE");
+
+  pageAppRequest(chrome, { id: "r3", op: "files.pick", accept: ["image/*"] });
+  await flushPromises();
+  const input = openPicker(chrome);
+  assert.equal(input.accept, ".png,image/png,.jpg,image/jpeg,.jpeg,.webp,image/webp");
+  input.files = [{ name: "notes.txt", size: 5, type: "text/plain" }];
+  input.dispatch("change");
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "FILE_TYPE");
+
+  pageAppRequest(chrome, { id: "r4", op: "files.pick" });
+  await flushPromises();
+  openPicker(chrome).dispatch("cancel");
+  await flushPromises();
+  assert.deepEqual(pageAppResults(chrome).at(-1).value, []);
+  assert.equal(uploads.length, 0);
+});
+
+test("download saves through the chrome only after a click, with a clean name and a bounded size", async () => {
+  const activation = { isActive: true };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", activation });
+  const bytes = new TextEncoder().encode("a,b\n1,2\n").buffer;
+  pageAppRequest(chrome, { id: "r1", op: "download", name: "q3/report.csv", mime: "text/csv", bytes });
+  await flushPromises();
+  const link = chrome.document.body.lastAppendedChild;
+  assert.equal(link.download, "q3_report.csv");
+  assert.equal(link.href, "blob:lavish-test");
+  assert.equal(link.clicked, true);
+  assert.deepEqual(pageAppResults(chrome).at(-1).value, { name: "q3_report.csv", bytes: 8 });
+
+  pageAppRequest(chrome, { id: "r2", op: "download", name: "...", bytes });
+  pageAppRequest(chrome, { id: "r3", op: "download", name: "x.bin", bytes: "not bytes" });
+  pageAppRequest(chrome, { id: "r4", op: "download", name: "big.bin", bytes: new ArrayBuffer(50 * 1024 * 1024 + 1) });
+  activation.isActive = false;
+  pageAppRequest(chrome, { id: "r5", op: "download", name: "late.csv", bytes });
+  await flushPromises();
+  assert.deepEqual(
+    pageAppResults(chrome)
+      .slice(-4)
+      .map((result) => result.code),
+    ["NAME_INVALID", "INVALID", "TOO_LARGE", "NEEDS_CLICK"],
+  );
+});
+
+test("a sent note shows a picked document as a named chip, never as a thumbnail", async () => {
+  const chrome = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      initialChat: [
+        {
+          role: "user",
+          kind: "annotation",
+          text: "Use this brief",
+          attachments: [{ id: "b".repeat(64) + ".pdf", name: "brief.pdf" }],
+        },
+      ],
+    },
+  });
+  const html = chrome.element("chatLog").children[0].innerHTML;
+  assert.match(html, /class="bubble-file" title="brief.pdf"/);
+  assert.doesNotMatch(html, /<img class="bubble-attachment"/);
 });

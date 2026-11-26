@@ -85,6 +85,25 @@ const PAGE_APP_LIMITS = {
   downloadNameMaxChars: 200,
   ...(sessionData.pageAppLimits && typeof sessionData.pageAppLimits === "object" ? sessionData.pageAppLimits : {}),
 };
+// What `window.lavish.files.pick` may offer: the server's list (ACCEPTED_FILE_TYPES), narrowed by
+// the page's own `accept`. The server checks every upload's bytes again.
+const FILE_ACCEPTED_TYPES = (
+  Array.isArray(sessionData.fileAcceptedTypes) && sessionData.fileAcceptedTypes.length
+    ? sessionData.fileAcceptedTypes
+    : [
+        { ext: "png", mime: "image/png" },
+        { ext: "jpg", mime: "image/jpeg" },
+        { ext: "jpeg", mime: "image/jpeg" },
+        { ext: "webp", mime: "image/webp" },
+        { ext: "pdf", mime: "application/pdf" },
+        { ext: "txt", mime: "text/plain" },
+        { ext: "csv", mime: "text/csv" },
+        { ext: "md", mime: "text/markdown" },
+        { ext: "json", mime: "application/json" },
+      ]
+)
+  .filter((type) => type && typeof type.ext === "string" && typeof type.mime === "string")
+  .map((type) => ({ ext: type.ext.toLowerCase(), mime: type.mime.toLowerCase() }));
 // Page questions this tab is waiting on, by ask id. Declared up here because ending the session,
 // which can happen during boot, rejects them.
 /** @type {Map<string, { reply: (result: Record<string, unknown>) => void, timer: ReturnType<typeof setTimeout> }>} */
@@ -867,6 +886,17 @@ function bubbleAttachmentsHtml(entry) {
     entry.attachments
       .slice(0, BUBBLE_THUMBNAIL_LIMIT)
       .map((attachment) => {
+        // A picked document is not served back: it shows as a named chip, not a thumbnail.
+        if (!/\.(png|jpg|webp)$/.test(String(attachment.id))) {
+          const label = escapeHtml(attachment.name || "file");
+          return (
+            '<span class="bubble-file" title="' +
+            label +
+            '"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><span>' +
+            label +
+            "</span></span>"
+          );
+        }
         const alt = escapeHtml(attachment.name || "image");
         return (
           '<img class="bubble-attachment" src="/api/' +
@@ -5950,10 +5980,17 @@ function handlePageAppRequest(msg) {
   };
   const fail = (code, error) => reply({ ok: false, code, error });
   const op = String(msg.op || "");
+  /** @type {Promise<any>} */
   let work;
-  if (op.startsWith("store.")) work = pageStoreRequest(op.slice(6), msg);
-  else if (op === "ask") work = askFromPage(msg, reply);
-  else work = Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "This Lavish does not know that request." });
+  try {
+    if (op.startsWith("store.")) work = pageStoreRequest(op.slice(6), msg);
+    else if (op === "ask") work = askFromPage(msg, reply);
+    else if (op === "files.pick") work = pickFilesForPage(msg, reply);
+    else if (op === "download") work = Promise.resolve(downloadForPage(msg));
+    else work = Promise.resolve({ ok: false, code: "UNSUPPORTED", error: "This Lavish does not know that request." });
+  } catch (error) {
+    work = Promise.reject(error);
+  }
   work.then(
     (result) => {
       if (result) reply(result);
@@ -6053,6 +6090,206 @@ function settleAnsweredPageAsks(chat) {
 
 function failAllPageAsks(code, error) {
   for (const askId of [...pageAsks.keys()]) settlePageAsk(askId, { ok: false, code, error });
+}
+
+// ---- Files in (`window.lavish.files.pick`). The picker opens here, in the chrome, after a click in
+// the page: the reviewer chooses, the chrome uploads to the attachment store under the same budget
+// as every other upload, and the page receives only ids, names, sizes and types. The bytes never
+// enter the page; the agent gets local paths when the page queues the ids. ----
+let pagePickOpen = false;
+
+function acceptedFileLabel() {
+  return [...new Set(FILE_ACCEPTED_TYPES.map((type) => type.ext.toUpperCase()))].join(", ");
+}
+
+/** The accepted types the page's `accept` tokens name (all of them when it named none). */
+function narrowPickTypes(tokens) {
+  const list = (Array.isArray(tokens) ? tokens : [])
+    .filter((token) => typeof token === "string" && token.length <= 100)
+    .slice(0, 20)
+    .map((token) => token.toLowerCase());
+  if (!list.length) return FILE_ACCEPTED_TYPES;
+  return FILE_ACCEPTED_TYPES.filter((type) =>
+    list.some(
+      (token) =>
+        token === "." + type.ext ||
+        token === type.mime ||
+        (token.endsWith("/*") && type.mime.startsWith(token.slice(0, -1))),
+    ),
+  );
+}
+
+function pickedFileType(file, types) {
+  const name = String(file?.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  return types.find((type) => type.ext === ext) || null;
+}
+
+/** @returns {Promise<Record<string, unknown>>} */
+async function pickFilesForPage(msg, reply) {
+  if (!navigator.userActivation?.isActive) {
+    return {
+      ok: false,
+      code: "NEEDS_CLICK",
+      error: "Choosing files needs a click on the page first. Call files.pick() from a button's click handler.",
+    };
+  }
+  if (pagePickOpen) return { ok: false, code: "BUSY", error: "A file picker is already open." };
+  const types = narrowPickTypes(msg.accept);
+  if (!types.length) {
+    return {
+      ok: false,
+      code: "FILE_TYPE",
+      error: "None of those file types can be sent. Lavish takes " + acceptedFileLabel() + ".",
+    };
+  }
+  const input = /** @type {HTMLInputElement} */ (document.createElement("input"));
+  input.type = "file";
+  input.multiple = msg.multiple === true;
+  input.accept = [...new Set(types.flatMap((type) => ["." + type.ext, type.mime]))].join(",");
+  input.style.display = "none";
+  document.body.appendChild(input);
+  pagePickOpen = true;
+  // The reviewer may take their time: the page waits without a deadline from here.
+  reply({ pending: true, wait_ms: 0 });
+  /** @type {File[]} */
+  let files;
+  try {
+    files = await new Promise((resolve) => {
+      input.addEventListener("change", () => resolve([...(input.files || [])]), { once: true });
+      input.addEventListener("cancel", () => resolve([]), { once: true });
+      input.click();
+    });
+  } finally {
+    pagePickOpen = false;
+    input.remove();
+  }
+  if (!files.length) return { ok: true, value: [] };
+  if (files.length > attachmentMaxCount) {
+    return { ok: false, code: "TOO_MANY", error: "Choose up to " + attachmentMaxCount + " files at once." };
+  }
+  for (const file of files) {
+    if (!pickedFileType(file, types)) {
+      return {
+        ok: false,
+        code: "FILE_TYPE",
+        error: file.name + " is not a type this page takes (" + acceptedFileLabel() + ").",
+      };
+    }
+    if (attachmentMaxBytes > 0 && file.size > attachmentMaxBytes) {
+      return {
+        ok: false,
+        code: "FILE_TOO_LARGE",
+        error: file.name + " is larger than the " + formatByteLimit(attachmentMaxBytes) + " limit.",
+      };
+    }
+  }
+  const picked = [];
+  for (const file of files) {
+    const uploaded = await uploadPickedFile(file);
+    if ("error" in uploaded) return { ok: false, code: uploaded.code, error: file.name + ": " + uploaded.error };
+    picked.push({
+      id: uploaded.id,
+      name: String(file.name).slice(0, 200),
+      size: file.size,
+      type: file.type || pickedFileType(file, types)?.mime || "",
+    });
+  }
+  return { ok: true, value: picked };
+}
+
+/** @returns {Promise<{ id: string } | { code: string, error: string }>} */
+async function uploadPickedFile(file) {
+  const now = Date.now();
+  while (uploadTimestamps.length && now - uploadTimestamps[0] > UPLOAD_RATE_WINDOW_MS) uploadTimestamps.shift();
+  if (uploadTimestamps.length >= UPLOAD_RATE_MAX) {
+    return { code: "RATE_LIMITED", error: "Too many uploads. Wait a moment and retry." };
+  }
+  if (uploadedBytesTotal + file.size > UPLOAD_SESSION_BYTE_QUOTA) {
+    return {
+      code: "QUOTA",
+      error: "Upload limit reached for this review (" + formatByteLimit(UPLOAD_SESSION_BYTE_QUOTA) + ").",
+    };
+  }
+  if (uploadsInFlight >= UPLOAD_MAX_IN_FLIGHT) {
+    return { code: "BUSY", error: "Too many uploads in flight. Wait a moment and retry." };
+  }
+  uploadTimestamps.push(now);
+  uploadedBytesTotal += file.size;
+  uploadsInFlight += 1;
+  try {
+    const response = await fetch(
+      "/api/" + key + "/attachments?kind=file&name=" + encodeURIComponent(String(file.name).slice(0, 255)),
+      { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file },
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const code = response.status === 415 ? "FILE_TYPE" : response.status === 413 ? "FILE_TOO_LARGE" : "UPLOAD_FAILED";
+      return { code, error: String(data.error || "Upload failed.") };
+    }
+    const id = String(data.attachment?.id || "");
+    return id ? { id } : { code: "UPLOAD_FAILED", error: "Upload failed." };
+  } catch (error) {
+    return { code: "UPLOAD_FAILED", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    uploadsInFlight -= 1;
+  }
+}
+
+// ---- Files out (`window.lavish.download`). The sandboxed frame may be refused a download, so the
+// chrome saves it through the browser's own flow, only right after a click in the page (user
+// activation reaches the chrome from the frame), so a page cannot drop files on its own. ----
+function downloadForPage(msg) {
+  const name =
+    typeof msg.name === "string"
+      ? msg.name
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .replace(/[\\/:*?"<>|]/g, "_")
+          .replace(/^[\s.]+|[\s.]+$/g, "")
+      : "";
+  if (!name || name.length > PAGE_APP_LIMITS.downloadNameMaxChars) {
+    return {
+      ok: false,
+      code: "NAME_INVALID",
+      error: "A download needs a file name of up to " + PAGE_APP_LIMITS.downloadNameMaxChars + " characters.",
+    };
+  }
+  const bytes = msg.bytes;
+  if (Object.prototype.toString.call(bytes) !== "[object ArrayBuffer]") {
+    return { ok: false, code: "INVALID", error: "A download needs its bytes." };
+  }
+  if (bytes.byteLength > PAGE_APP_LIMITS.downloadMaxBytes) {
+    return {
+      ok: false,
+      code: "TOO_LARGE",
+      error: "A download is limited to " + formatByteLimit(PAGE_APP_LIMITS.downloadMaxBytes) + ".",
+    };
+  }
+  const rawType = typeof msg.mime === "string" ? msg.mime.trim().toLowerCase() : "";
+  const type =
+    /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}(;\s*charset=[a-z0-9_-]{1,40})?$/.test(rawType)
+      ? rawType
+      : "application/octet-stream";
+  if (!navigator.userActivation?.isActive) {
+    return {
+      ok: false,
+      code: "NEEDS_CLICK",
+      error: "Saving a file needs a click on the page first. Call download() from a button's click handler.",
+    };
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const link = /** @type {HTMLAnchorElement} */ (document.createElement("a"));
+  link.href = url;
+  link.download = name;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // The browser has the bytes once the download starts; free the URL a little later.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { ok: true, value: { name, bytes: bytes.byteLength } };
 }
 
 // Storage requests run one at a time, in the order the page made them, so a set followed by a get

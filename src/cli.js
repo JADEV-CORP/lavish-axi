@@ -832,7 +832,11 @@ function createFeedbackNextStep(file, artifactFailures, sessionEnded, endedBy, p
     ? `Some prompts talk about several marked blocks at once (target type "marks"): [1], [2] or [Mark 1], [Mark 2] in the prompt text name the entries of target.marks with that number, each with its block's selector, tag, text, and any note the user typed on its card. Apply the message to every block it names. `
     : "";
   const attachmentNote = prompts.some((prompt) => Array.isArray(prompt?.attachments) && prompt.attachments.length)
-    ? `Some prompts carry image attachments the user added: each is an object in the prompt's \`attachments\` array with an absolute local \`path\` (plus id, mime, and dimensions). Open those image files to see what the user is referring to. [Image 1], [Image 2] in the prompt text name the attachments in that order, at the point in the sentence where the user placed them. `
+    ? `Some prompts carry image attachments the user added: each is an object in the prompt's \`attachments\` array with an absolute local \`path\` (plus id, mime, and dimensions). Open those image files to see what the user is referring to. [Image 1], [Image 2] in the prompt text name the attachments in that order, at the point in the sentence where the user placed them. ${
+        prompts.some((prompt) => (prompt?.attachments || []).some((attachment) => attachment?.type === "file"))
+          ? 'An attachment with type "file" is a document the user chose on the page (PDF or text, its original name in `name`): read it from its `path`. '
+          : ""
+      }`
     : "";
   const askNote = prompts.some((prompt) => prompt?.tag === "ask" && prompt?.target?.type === "ask")
     ? `Some prompts are questions the page itself asked you (tag "ask"): the page is waiting for your answer and shows your reply text to the user as-is. Answer each one directly, in plain words, with \`lavish reply ${file} --ask <target.ask_id> --agent-reply "<answer>"\`, or \`lavish poll ${file} --ask <target.ask_id> --agent-reply "<answer>"\` to keep listening, before its target.expires_at. A reply without --ask answers the oldest question you received. Answer before you edit ${file}: an edit reloads the page and it stops waiting. `

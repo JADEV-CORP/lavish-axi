@@ -93,6 +93,7 @@ import { canonicalFile, SessionStore, sessionKey } from "./session-store.js";
 import { AsyncMutex } from "./async-mutex.js";
 import { generateSharePassword } from "./share-password.js";
 import {
+  ACCEPTED_FILE_TYPES,
   ACCEPTED_IMAGE_MIME,
   isValidAttachmentKey,
   removeAttachment,
@@ -2250,6 +2251,11 @@ export async function serve({
       // queued references (the sweep alone never evicts referenced files). The
       // eviction grace keeps a just-uploaded ready card off the reclaim list so it
       // survives until the user sends it.
+      // `?kind=file` is the chrome uploading what the reviewer chose through window.lavish.files.pick:
+      // it also admits PDF and UTF-8 text, named by `?name=` only for the text extension. Every other
+      // upload stays images only.
+      const kind = req.query.kind === "file" ? "file" : "image";
+      const nameHint = typeof req.query.name === "string" ? req.query.name.slice(0, 255) : "";
       const attachment = await store.runExclusive(async () => {
         const referenced = await store.referencedAttachmentIds();
         return writeAttachment(attachmentStateRoot, req.params.key, buffer, {
@@ -2259,6 +2265,8 @@ export async function serve({
           ttlMs: attachmentConfig.ttlMs,
           referenced,
           evictionGraceMs: attachmentConfig.evictionGraceMs,
+          kind,
+          nameHint,
         });
       });
       res.json({ status: "stored", attachment });
@@ -3742,6 +3750,7 @@ export function createChromeHtml(
     attachmentMaxCount = 0,
     attachmentAcceptedMime = ACCEPTED_IMAGE_MIME,
     pageAppLimits = pageApps.pageAppLimits(),
+    fileAcceptedTypes = ACCEPTED_FILE_TYPES,
     agentId = "",
     agentNudgeAvailable = false,
     /** @type {{ version: string, current: string } | null} */
@@ -3782,6 +3791,7 @@ export function createChromeHtml(
     attachmentMaxCount,
     attachmentAcceptedMime: acceptedMime,
     pageAppLimits,
+    fileAcceptedTypes,
     updateAvailable,
     // The legend's swatches are server-owned, not artifact-owned. The chrome
     // derives every swatch from this palette by registry position, so an
