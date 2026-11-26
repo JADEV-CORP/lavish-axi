@@ -45,6 +45,10 @@ await chmod("dist/server.mjs", 0o755);
 
 await copyFile("src/chrome-client.js", "dist/chrome-client.js");
 await copyFile("src/chrome.css", "dist/chrome.css");
+// The Versions panel and the gallery (served from /lavish-assets/).
+for (const file of ["versions-client.js", "versions.css", "gallery-client.js", "gallery.css"]) {
+  await copyFile(`src/${file}`, `dist/${file}`);
+}
 await mkdir("dist/design", { recursive: true });
 await copyFile("node_modules/daisyui/daisyui.css", "dist/design/daisyui.css");
 await copyFile("node_modules/daisyui/themes.css", "dist/design/daisyui-themes.css");

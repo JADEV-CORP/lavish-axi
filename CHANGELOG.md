@@ -7,6 +7,8 @@
 - **Page storage.** `window.lavish.store` keeps JSON per page file in the state directory, through reloads and server restarts (1 MB a value, 5 MB a page). `lavish data <page>` prints it for the agent; `--clear --yes` deletes it.
 - **Ask the agent from the page.** `await window.lavish.ask(question, { data })` sends the question at once and resolves with the agent's reply. Poll marks it as a prompt tagged `ask`, and `lavish reply <page> --ask <id>` answers it. With no agent listening it fails at once with `NO_AGENT`.
 - **Files in and out.** `window.lavish.files.pick()` lets the reviewer choose images, PDFs or text files; the agent gets their local paths when the page queues them. `window.lavish.download(name, content)` saves a file through the browser after a click.
+- **Versions.** Every saved change of a page's HTML is kept in the state directory: content-addressed, gzipped, 50 per page and 25 MB per page by default, oldest pruned first. **More > Versions** lists them with a one-line summary, shows any version read-only, compares two by text or HTML, and restores one after a confirmation. `lavish versions <page>` lists them for agents; `--show <n>` prints one, `--restore <n>` writes it back. Assets beside the page are not versioned. `LAVISH_AXI_VERSIONS=0` stops recording.
+- **Gallery.** The server's root URL lists every page this machine opened in Lavish, with title, folder, `~` path, last change and status (waiting for you, answered, ended), search, status filters and pins kept in the state directory. One click opens a page and reopens an ended review. `lavish gallery` opens it, and so does `lavish` alone at a terminal; agents keep the home output.
 
 ## 1.0.0 (2026-11-26)
 

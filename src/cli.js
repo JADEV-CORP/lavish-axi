@@ -10,7 +10,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, readFile, writeFile } from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
@@ -69,6 +69,8 @@ import { resolveDesignAssetPath, serve } from "./server.js";
 import { isHtmlPath } from "./artifact-path.js";
 import { canonicalFile, sessionKey, SessionStore } from "./session-store.js";
 import { generateSharePassword } from "./share-password.js";
+import { formatByteDelta, formatBytes, versionSummaryText } from "./version-diff.js";
+import { parseVersionId, resolveVersionLimits, VersionStore, versionsRoot } from "./version-store.js";
 import { excalidrawLibrariesDir, loadExcalidrawLibraries } from "./whiteboard-library-store.js";
 
 const SHARE_VALUE_FLAGS = ["--password", "--token", "--site", "--update-key"];
@@ -88,6 +90,8 @@ const COMMANDS = new Set([
   "diagram",
   "bind-agent",
   "data",
+  "versions",
+  "gallery",
 ]);
 // SDK-reserved built-ins (e.g. `update`) must reach runAxiCli untouched; otherwise
 // the bare-arg normalization below would rewrite them into the hidden `open` command.
@@ -231,13 +235,21 @@ export async function run(argv) {
     version: VERSION,
     argv: isTopLevelHelp ? [] : normalizedArgv,
     topLevelHelp: createTopLevelHelp({ agent }),
-    home: async () =>
-      createHomeOutput({
+    home: async () => {
+      const output = createHomeOutput({
         bin: process.argv[1] || "lavish",
         sessions: isTopLevelHelp ? [] : await visibleSessions(),
         includeSessions: !isTopLevelHelp,
         agent,
-      }),
+      });
+      // A person typing `lavish` in a terminal also gets the gallery in the browser. Agents keep
+      // the output above and nothing opens for them (shouldOpenGalleryFromHome).
+      if (!isTopLevelHelp && shouldOpenGalleryFromHome()) {
+        const gallery = await openGallery().catch(() => null);
+        if (gallery?.url) return { ...output, gallery: gallery.url };
+      }
+      return output;
+    },
     commands: {
       open: openCommand,
       poll: pollCommand,
@@ -256,6 +268,8 @@ export async function run(argv) {
       diagram: diagramCommand,
       "bind-agent": bindAgentCommand,
       data: dataCommand,
+      versions: versionsCommand,
+      gallery: galleryCommand,
     },
     getCommandHelp: (command) => getCommandHelp(command, { agent }),
   });
@@ -321,6 +335,8 @@ export function createHomeOutput({ bin, sessions, includeSessions = true, agent 
       "Run `lavish share <html-file> [--private | --password <pw>]` to publish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and get back a visitable URL. Shares are PUBLIC by default, so anyone with the link can open them. Pass --private to publish a PRIVATE page behind a password Lavish generates and returns - hand the user that password with the URL and say it is a shared secret anyone they give it to can use; --password <pw> uses one you were already given instead. Local assets are inlined; remote refs load over the network. It also returns a secret update_key that can republish or lock the same URL later - run `lavish share --help` before using it. Users can also publish from the browser chrome's overflow menu",
       "A request under a hostname Lavish does not answer to (a reverse-proxy name, a LAN IP) gets 403 `forbidden host`. Set `LAVISH_AXI_ALLOWED_HOSTS` in the environment that starts the server, running `lavish stop` first if one is already up. See README's Allowed hosts section for the rules",
       "Run `lavish stop` to shut down the background server (it also self-stops when idle or after the last session ends with nothing connected)",
+      "Every saved change of an open page is kept as a version on this machine. Run `lavish versions <html-file>` to list them, `--show <n>` to print one version's HTML, and `--restore <n>` to write it back when the user asks for an earlier state",
+      "The user can see every page this machine opened at the server's root URL; `lavish gallery` opens it in their browser. Do not open it unless they ask",
       `Run \`lavish playbook <playbook_id>\` for focused artifact guidance. ${PLAYBOOK_ROUTER_HELP}`,
       DESIGN_SYSTEM_HINT,
       "Use Lavish when the user asks for a visual artifact, HTML explainer, interactive prototype, review surface, product or technical plan, comparison, report, or browser-based feedback loop",
@@ -943,6 +959,139 @@ export function createDataOutput({ file, stored, json = false }) {
     return { data: summary, next_step: "This page has stored nothing through window.lavish.store." };
   }
   return { data: summary, entries };
+}
+
+// A person at a terminal: both ends are a TTY and no known agent harness is around. An agent that
+// runs `lavish` to read the home output must never get a browser tab for it.
+/**
+ * @param {{ env?: Record<string, string | undefined>, stdout?: { isTTY?: boolean }, stdin?: { isTTY?: boolean } }} [options]
+ */
+export function shouldOpenGalleryFromHome({ env = process.env, stdout = process.stdout, stdin = process.stdin } = {}) {
+  if (!stdout?.isTTY || !stdin?.isTTY) return false;
+  if (detectInvokingAgent(env) !== "generic") return false;
+  if (env.CI || env.T3CODE_THREAD_ID || env.T3CODE_CLI_PATH) return false;
+  return shouldOpenBrowser([], env);
+}
+
+async function openGallery({ args = [], openBrowser = true } = {}) {
+  const baseUrl = await ensureServer({ force: args.includes("--force") });
+  const url = `${baseUrl}/`;
+  let opened = false;
+  if (openBrowser && shouldOpenBrowser(args, process.env) && !detectReviewHost(args, process.env)) {
+    try {
+      const open = (await import("open")).default;
+      await open(url);
+      opened = true;
+    } catch {
+      opened = false;
+    }
+  }
+  return { url, opened };
+}
+
+async function galleryCommand(args) {
+  const { url, opened } = await openGallery({ args });
+  const pages = (await new SessionStore(stateFile()).listSessions()).length;
+  return {
+    gallery: { url, pages, status: opened ? "opened" : "ready" },
+    next_step: opened
+      ? "The gallery is open in the user's browser. It lists every page this machine opened in Lavish."
+      : `Give the user this URL: ${url}. It lists every page this machine opened in Lavish.`,
+  };
+}
+
+export function createVersionsOutput({ file, versions, currentHash = "", enabled = true }) {
+  // Only the newest version holding the current content is the page now.
+  const currentId = currentHash ? (versions.findLast((version) => version.hash === currentHash)?.id ?? 0) : 0;
+  return {
+    page: file,
+    versions: versions
+      .slice()
+      .reverse()
+      .map((version) => ({
+        n: version.id,
+        saved: version.at,
+        size: formatBytes(version.bytes),
+        change: formatByteDelta(version.summary?.delta),
+        current: version.id === currentId,
+        summary: versionSummaryText(version),
+      })),
+    ...(enabled
+      ? {}
+      : { note: "Saving new versions is off (LAVISH_AXI_VERSIONS=0). Stored versions still list and restore." }),
+    help: [
+      `Run \`lavish versions ${file} --show <n>\` to print version n's HTML, or add \`--out <path>\` to write it to a file`,
+      `Run \`lavish versions ${file} --restore <n>\` only when the user asks for an earlier state: it writes version n back to the page, keeps what the page holds now as a version first, and saves the restore as the newest version`,
+    ],
+  };
+}
+
+async function versionsCommand(args) {
+  const file = firstPositionalArg(args, ["--show", "--restore", "--out"]);
+  if (!file) {
+    throw new AxiError("HTML file path is required", "VALIDATION_ERROR", ["Run `lavish versions <html-file>`"]);
+  }
+  await assertHtmlFile(file);
+  const absolute = await canonicalFile(file);
+  const key = sessionKey(absolute);
+  const store = new VersionStore(versionsRoot(stateDir()), resolveVersionLimits(process.env));
+  const show = inspectValueFlag(args, "--show");
+  const restore = inspectValueFlag(args, "--restore");
+  if (show.present && restore.present) {
+    throw new AxiError("Pass --show or --restore, not both", "VALIDATION_ERROR", [
+      `Run \`lavish versions ${absolute}\` to list the versions`,
+    ]);
+  }
+  if (show.present || restore.present) {
+    const raw = show.present ? show.value : restore.value;
+    const id = parseVersionId(raw);
+    if (!id) {
+      throw new AxiError("A version number is required", "VALIDATION_ERROR", [
+        `Run \`lavish versions ${absolute}\` to list the numbers`,
+      ]);
+    }
+    const found = await store.read(key, id);
+    if (!found) {
+      throw new AxiError(`This page has no version ${id}`, "NOT_FOUND", [
+        `Run \`lavish versions ${absolute}\` to list the versions it keeps`,
+      ]);
+    }
+    if (show.present) {
+      const out = flagValue(args, "--out");
+      if (out) {
+        const target = path.resolve(out);
+        await writeFile(target, found.bytes);
+        return { version: { n: id, saved: found.version.at, size: formatBytes(found.bytes.length) }, written: target };
+      }
+      // The SDK prints one newline after a string, so a page that ends with one prints unchanged.
+      const html = found.bytes.toString("utf8");
+      return html.endsWith("\n") ? html.slice(0, -1) : html;
+    }
+    const outcome = await store.withLock(key, async () => {
+      const info = await lstat(absolute);
+      if (!info.isFile()) {
+        throw new AxiError("The page is not a regular file", "VALIDATION_ERROR", [
+          "Restore writes only a regular file",
+        ]);
+      }
+      // What the page holds now is kept first, so a restore never loses the latest state.
+      await store.recordUnlocked(key, await readFile(absolute), { source: "cli" });
+      await writeFile(absolute, found.bytes);
+      return store.recordUnlocked(key, found.bytes, { source: "restore", restoredFrom: id });
+    });
+    return {
+      restored: { page: absolute, from: id, ...(outcome.version ? { now: outcome.version.id } : {}) },
+      next_step:
+        "The page file now holds that version. An open review reloads it by itself. Tell the user which version you restored.",
+    };
+  }
+  const recorded = await store.record(key, await readFile(absolute), { source: "cli" });
+  return createVersionsOutput({
+    file: absolute,
+    versions: await store.list(key),
+    currentHash: recorded.hash,
+    enabled: store.enabled,
+  });
 }
 
 async function endCommand(args) {
@@ -3043,7 +3192,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n  lavish gallery [--no-open]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -3059,6 +3208,8 @@ function createCommandHelp({ agent = "generic" } = {}) {
     design: `Usage: lavish design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
     data: `Usage: lavish data <html-file> [--json]\n       lavish data <html-file> --clear --yes\n\nPrint what the page stored through window.lavish.store: the number of keys, their size, and every key with its JSON value. --json prints one JSON document instead of TOON. Data is kept per page file in the Lavish state directory (page-data/) and survives reloads and server restarts.\n\n--clear deletes everything the page stored. It refuses without --yes and reports what it would delete, so pass --yes only when the user asked for the data to go. An open page keeps what it already read until it reads again or reloads.\n`,
     "bind-agent": `Usage: lavish bind-agent <html-file> (--t3-thread <id> | --webhook-file <path> | --clear)\n\nLet the reviewer wake this session's T3 Code thread with Nudge agent. Pass --t3-thread with the id orchestrator_capabilities returns as parentThreadId. Lavish checks the thread with \`t3 thread show\` and, on a click, runs \`t3 thread send\` with a message naming this review's file. It sends no feedback text and registers nothing in T3 Code. Reviews this conversation opens later link by themselves, and ending a review removes its link. --webhook-file is the older T3 Connect webhook link: its task stays in T3 Code until the thread that created it deletes it. --clear disconnects. An open review tab picks the change up the next time its agent stops listening.\n`,
+    versions: `Usage: lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n\nList the saved versions of a page, newest first. Lavish keeps one each time an open page's HTML changes, plus the state it finds when the page is opened, in the state directory (~/.lavish-axi/versions, or LAVISH_AXI_STATE_DIR/versions). Listing also saves the page as it is now when that state is new. Each version has a number, a time, a size, the size change and a one-line summary of the text that changed.\n\n--show <n> prints version n's HTML exactly; add --out <path> to write it to a file instead.\n\n--restore <n> writes version n back to the page file. What the page held before is kept as a version first, and the restore becomes the newest version, so nothing is lost. An open review reloads by itself. Restore only when the user asks for an earlier state.\n\nOnly the HTML file is versioned; images, styles and scripts beside it are not. A page keeps ${resolveVersionLimits(process.env).maxVersions} versions by default (LAVISH_AXI_VERSIONS_MAX), and the oldest go first. LAVISH_AXI_VERSIONS=0 stops saving new ones.\n\nExamples:\n  lavish versions .lavish/plan.html\n  lavish versions .lavish/plan.html --show 3 --out /tmp/plan-v3.html\n  lavish versions .lavish/plan.html --restore 3\n`,
+    gallery: `Usage: lavish gallery [--no-open]\n\nOpen the gallery in the user's browser: every page this machine opened in Lavish, with its title, folder, last change and status, a search, and pins. It is for people; agents read \`lavish\` (no arguments) for their session list. The gallery is the server's root URL, so it follows the same host rules as review pages. A person who runs \`lavish\` alone in a terminal gets it opened too.\n`,
     diagram: `Usage: lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n\nRender a draw.io diagram for a Lavish page with the local draw.io desktop app (open source, Apache-2.0). Writes <name>.drawio.svg next to the source: a static image that follows light and dark mode and embeds the diagram, so draw.io reopens it for editing. Also writes a PNG preview to the state directory: look at it before serving the page. Prints the <img> tag to paste into the page.\n\n--layout ${DRAWIO_LAYOUTS.join("|")} lays the diagram out and writes the positions back into the .drawio, so you can write nodes and edges without coordinates. A .mmd or .mermaid input becomes an editable .drawio first. Set LAVISH_AXI_DRAWIO when draw.io is not on PATH or in the usual install folder.\n\nExamples:\n  lavish diagram .lavish/flow.drawio\n  lavish diagram .lavish/flow.drawio --layout horizontalFlow --alt "Booking flow"\n  lavish diagram .lavish/sequence.mmd\n`,
     libraries: `Usage: lavish libraries [--search <text>] [--library <id>]\n\nList the Excalidraw libraries (.excalidrawlib files) the user copied into ~/.lavish-axi/excalidraw-libraries, or LAVISH_AXI_STATE_DIR/excalidraw-libraries when set. Their items appear in every whiteboard's library panel. --search lists item refs whose ref contains every search word; --library lists one library's item refs. Lavish only reads this directory and never downloads libraries.\n\nExamples:\n  lavish libraries\n  lavish libraries --search lambda\n  lavish libraries --library aws-architecture-icons\n`,
     setup: `Usage: lavish setup hooks\n       lavish setup plugin\n\nhooks: install or repair agent SessionStart hooks for Lavish ambient context in Claude Code, Codex, OpenCode, and GitHub Copilot CLI. Restart your agent session afterward to receive the context. This is the primary integration - it carries live session state.\n\nplugin: register the installed @jadev-corp/lavish package as an Agent Plugin (agent-plugins.org) in VS Code, Cursor, and GitHub Copilot CLI. The installed package directory is itself the plugin root, so nothing is downloaded and no marketplace is involved. Reload each client afterward. Codex users should use \`setup hooks\` instead.\n\nBoth actions are explicit opt-in, idempotent, and repair a stale path after a reinstall.\n`,

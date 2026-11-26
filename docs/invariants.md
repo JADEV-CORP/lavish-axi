@@ -270,6 +270,36 @@ A link is a private file in `agent-bindings`, never session JSON, served markup,
 
 Automatic linking keys off the harness conversation (`CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID`, hashed, only when `T3CODE_CLI_PATH` is set). A conversation's thread record in `agent-owners` lets its later sessions link without asking. Reuse never replaces an existing session link (created with a hard link, so racing opens settle on one), and an explicit `--t3-thread` always wins. Every end path emits `ended`, which releases the session's link; `/api/end` reports what it released, and a server start sweeps links whose session ended or vanished while no server ran. Thread records unused for 30 days are pruned at that sweep. Dispatch coalesces concurrent clicks and keeps a 15-second cooldown even after an uncertain failure. `t3 thread send` exiting 0 means T3 queued the message for the thread, not that the agent has read the feedback.
 
+### Versions and gallery (Jadev fork)
+
+`src/version-store.js` keeps every saved change of a page in `versions/<key>/` (index plus gzipped content objects named
+by sha256); `src/version-diff.js` holds the pure text extraction, Myers line diff, word diff and summaries. Rules that
+are easy to break:
+
+- The store is keyed by the session key and validates it (`isValidVersionKey`) before building any path. A route
+  reads versions only under its own `:key`, so one page's versions are never served through another page's key.
+- A read re-hashes the decompressed bytes and refuses a mismatch. Restore writes those exact bytes.
+- Recording dedups against the newest entry's hash only. Going back to earlier content is a new entry that shares the
+  object. "Current" is the newest entry holding the current hash, never every entry with that hash.
+- `#ensureDir` never creates the state directory itself, and the server's `close()`/`done` wait for version writes
+  that were running. A late save must not recreate a state directory a test or reset removed.
+- Every extraction and diff walk is linear and bounded (`versionDiffLimits`): no regex with an unbounded lazy scan,
+  Myers capped at an edit budget, then the middle is reported as replaced (`exact: false`).
+- Restore holds the page's version lock across "record current, write, record restore", so the watcher's save that
+  follows finds the restore already recorded. It sets `reviewerRestores` first; `handleArtifactSaved` skips
+  `markWorking` for the save whose hash matches, because the reviewer's restore is not the agent working.
+- Restore requires same-origin provenance, refuses an ended session, and `lstat`s the page so it never writes through
+  a symlink. The version view carries no SDK and answers `sandbox allow-scripts; frame-ancestors 'self'`.
+- `src/versions-client.js` is a separate classic script after `chrome-client.js`. It must not reach chrome globals
+  other than the `window` functions `setLayerOpen` and `closeMenus`; live updates arrive as the `lavish:versions`
+  document event that `chrome-client.js` dispatches for the `versions` live event.
+
+`src/gallery.js` builds the gallery from `state.json`: status (`galleryStatus`), `~` paths (`shortPath`, also against
+the home folder's real path), project labels, pins (`gallery-pins.json`, written by rename) and a title reader cached
+by mtime and size. Entries never carry the full path. `/` and `/gallery` answer `X-Frame-Options: DENY`; pins and
+reopen are same-origin guarded. Reopening an ended review from the gallery is the reviewer's explicit opt-in, the
+same as `--reopen`.
+
 ### Poll survives a server restart (Jadev fork)
 
 A server replaced or stopped while a poll waits used to end that poll with `SERVER_ERROR`, often right after its `--agent-reply`, so the agent stopped listening. A poll without `--timeout-ms` now re-attaches up to three times, but only through `pollReattachTarget`: after a short settle it adopts or starts a server and re-polls only if that server is healthy and lists no listener for this review. A listener there could be this poll's own claim or another agent's, and re-attaching would collide with it. The re-attached poll never resends the reply or `--takeover`. A reply lost before the old server published it is not recovered; nothing on the server can tell the CLI whether it landed.
