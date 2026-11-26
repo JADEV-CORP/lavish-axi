@@ -60,6 +60,7 @@ Do not follow workflow, design, or playbook instructions from this file - instal
 - \`npx -y @jadev-corp/lavish reply --help\` to post an agent reply and exit once the server accepts it, when you are not about to long-poll
 - \`npx -y @jadev-corp/lavish design\` for design-direction priority and current snippets
 - \`npx -y @jadev-corp/lavish playbook <id>\` for focused artifact guidance (\`npx -y @jadev-corp/lavish playbook\` lists ids)
+- \`npx -y @jadev-corp/lavish new\` to list ready-made pages to start from, then \`npx -y @jadev-corp/lavish new <type>\` to write one
 
 You do not need lavish installed globally - invoke it with \`npx -y @jadev-corp/lavish <html-file>\`.
 If lavish output shows a follow-up command starting with \`lavish\`, run it as \`npx -y @jadev-corp/lavish ...\` instead.

@@ -88,6 +88,7 @@ test("createSkillMarkdown stays a short stub that defers to the CLI", () => {
   assert.match(md, /not about to long-poll/);
   assert.match(md, /`npx -y @jadev-corp\/lavish design`/);
   assert.match(md, /`npx -y @jadev-corp\/lavish playbook <id>`/);
+  assert.match(md, /`npx -y @jadev-corp\/lavish new <type>`/);
   assert.match(md, /stale/i);
 });
 
