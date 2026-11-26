@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -91,11 +93,15 @@ test("an older or equal published version never claims an update", async () => {
   assert.equal(checker.current(), null);
 });
 
-test("the server's checker can be turned off, and needs a semver version to compare", () => {
-  assert.equal(defaultUpdateChecker({ currentVersion: "1.0.0", env: { LAVISH_AXI_UPDATE_CHECK: "0" } }), null);
-  assert.equal(defaultUpdateChecker({ currentVersion: "1.0.0", env: { LAVISH_AXI_UPDATE_CHECK: "off" } }), null);
-  assert.equal(defaultUpdateChecker({ currentVersion: "nightly", env: {} }), null);
-  const checker = defaultUpdateChecker({ currentVersion: "1.0.0", env: {} });
+test("the server's checker can be turned off, and needs a semver version to compare", async (t) => {
+  // An empty state directory, so a policy file on the machine running the tests cannot change the result.
+  const stateDir = await mkdtemp(path.join(tmpdir(), "lavish-update-check-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const check = (currentVersion, env) => defaultUpdateChecker({ currentVersion, env, stateDir });
+  assert.equal(check("1.0.0", { LAVISH_AXI_UPDATE_CHECK: "0" }), null);
+  assert.equal(check("1.0.0", { LAVISH_AXI_UPDATE_CHECK: "off" }), null);
+  assert.equal(check("nightly", {}), null);
+  const checker = check("1.0.0", {});
   assert.equal(typeof checker?.start, "function");
   checker?.stop();
 });

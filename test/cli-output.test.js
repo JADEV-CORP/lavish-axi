@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -15,6 +15,9 @@ import { AxiError, planUpgrade, readNearestPackageJson, runUpdate } from "axi-sd
 
 process.env.LAVISH_AXI_HOST = "127.0.0.1";
 process.env.LAVISH_AXI_LINK_HOST = "127.0.0.1";
+// The in-process share tests read the machine policy from the state directory. Point it at an
+// empty one so a policy file on the machine running the tests cannot turn them off.
+process.env.LAVISH_AXI_STATE_DIR ||= mkdtempSync(path.join(os.tmpdir(), "lavish-cli-output-state-"));
 
 import {
   collapseHomeDirectory,

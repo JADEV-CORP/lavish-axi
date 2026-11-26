@@ -191,7 +191,8 @@ const updatePopover = /** @type {HTMLDivElement} */ (document.getElementById("up
 const reloadArtifactButton = /** @type {HTMLButtonElement} */ (document.getElementById("reloadArtifact"));
 const copySnapshotButton = /** @type {HTMLButtonElement} */ (document.getElementById("copySnapshot"));
 const exportArtifactButton = /** @type {HTMLButtonElement} */ (document.getElementById("exportArtifact"));
-const shareArtifactButton = /** @type {HTMLButtonElement} */ (document.getElementById("shareArtifact"));
+// Absent when the machine policy turns sharing off (the server leaves the menu item out).
+const shareArtifactButton = /** @type {HTMLButtonElement | null} */ (document.getElementById("shareArtifact"));
 const shareDialog = /** @type {HTMLDivElement} */ (document.getElementById("shareDialog"));
 const shareForm = /** @type {HTMLFormElement} */ (document.getElementById("shareForm"));
 const shareCloseButton = /** @type {HTMLButtonElement} */ (document.getElementById("shareClose"));
@@ -6595,7 +6596,7 @@ copyPathButton.onclick = copyFilePath;
 reloadArtifactButton.onclick = reloadArtifact;
 copySnapshotButton.onclick = copyDomSnapshot;
 exportArtifactButton.onclick = exportArtifact;
-shareArtifactButton.onclick = openShareDialog;
+if (shareArtifactButton) shareArtifactButton.onclick = openShareDialog;
 shareCloseButton.onclick = closeShareDialog;
 shareCancelButton.onclick = closeShareDialog;
 shareForm.addEventListener("submit", publishShare);
@@ -7342,7 +7343,7 @@ function paletteCommands() {
     { label: "Copy DOM snapshot", control: copySnapshotButton },
     { label: "Copy the artifact path", control: copyPathButton },
     { label: "Export standalone HTML", control: exportArtifactButton },
-    { label: "Publish link", control: shareArtifactButton },
+    { label: "Publish link", control: shareArtifactButton, when: Boolean(shareArtifactButton) },
     ...revisionPaletteCommands(),
     { label: "End session", control: endButton, danger: true },
   ];

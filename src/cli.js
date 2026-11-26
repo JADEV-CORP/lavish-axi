@@ -69,6 +69,7 @@ import { detectReviewHost, hostOpenStep } from "./review-host.js";
 import { resolveDesignAssetPath, serve } from "./server.js";
 import { isHtmlPath } from "./artifact-path.js";
 import { canonicalFile, sessionKey, SessionStore } from "./session-store.js";
+import { policyFile, readPolicy, SHARE_DISABLED_MESSAGE, writePolicy } from "./policy.js";
 import { generateSharePassword } from "./share-password.js";
 import { formatByteDelta, formatBytes, versionSummaryText } from "./version-diff.js";
 import { parseVersionId, resolveVersionLimits, VersionStore, versionsRoot } from "./version-store.js";
@@ -94,6 +95,7 @@ const COMMANDS = new Set([
   "versions",
   "gallery",
   "new",
+  "policy",
 ]);
 // SDK-reserved built-ins (e.g. `update`) must reach runAxiCli untouched; otherwise
 // the bare-arg normalization below would rewrite them into the hidden `open` command.
@@ -273,6 +275,7 @@ export async function run(argv) {
       versions: versionsCommand,
       gallery: galleryCommand,
       new: newCommand,
+      policy: policyCommand,
     },
     getCommandHelp: (command) => getCommandHelp(command, { agent }),
   });
@@ -1004,6 +1007,57 @@ async function galleryCommand(args) {
   };
 }
 
+// `lavish policy`: the machine policy (src/policy.js). With no flag it prints the current state, so a
+// company toolkit can check it; `--share` and `--update-check` take on or off and change it.
+const POLICY_VALUE_FLAGS = ["--share", "--update-check"];
+
+function policyOutput(policy, extra = {}) {
+  return {
+    share: policy.share ? "on" : "off",
+    update_check: policy.updateCheck ? "on" : "off",
+    source: policy.source,
+    file: policyFile(stateDir()),
+    ...extra,
+  };
+}
+
+function policySwitchValue(args, flag) {
+  const found = inspectValueFlag(args, flag);
+  if (!found.present) return undefined;
+  const value = String(found.value ?? "").toLowerCase();
+  if (value !== "on" && value !== "off") {
+    throw new AxiError(`${flag} takes on or off`, "VALIDATION_ERROR", [`Run \`lavish policy ${flag} off\``]);
+  }
+  return value === "on";
+}
+
+async function policyCommand(args) {
+  const unknown = args.find(
+    (arg) =>
+      arg.startsWith("-") &&
+      arg !== "--json" &&
+      !POLICY_VALUE_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+  );
+  if (unknown) {
+    throw new AxiError(`Unknown option: ${unknown}`, "VALIDATION_ERROR", [
+      "Run `lavish policy [--share on|off] [--update-check on|off] [--json]`",
+    ]);
+  }
+  const changes = { share: policySwitchValue(args, "--share"), updateCheck: policySwitchValue(args, "--update-check") };
+  const changed = changes.share !== undefined || changes.updateCheck !== undefined;
+  const policy = changed ? await writePolicy(stateDir(), changes) : readPolicy(stateDir());
+  const output = policyOutput(policy);
+  if (args.includes("--json")) return JSON.stringify(output, null, 2);
+  if (policy.source === "invalid") {
+    return {
+      ...output,
+      next_step:
+        "The policy file cannot be read, so both switches are off. Set them again with `lavish policy --share on|off --update-check on|off`.",
+    };
+  }
+  return output;
+}
+
 export function createVersionsOutput({ file, versions, currentHash = "", enabled = true }) {
   // Only the newest version holding the current content is the page now.
   const currentId = currentHash ? (versions.findLast((version) => version.hash === currentHash)?.id ?? 0) : 0;
@@ -1184,6 +1238,13 @@ function assetWarningSummaries(warnings) {
 // `/v1/sites/{site_id}` authorized by that update_key and mint no new one; unpublish reads no file
 // at all and sends a placeholder page. Server-independent.
 export async function shareCommand(args) {
+  // The machine policy comes first: nothing is read, built or sent while sharing is off.
+  if (!readPolicy(stateDir()).share) {
+    throw new AxiError(SHARE_DISABLED_MESSAGE, "SHARE_DISABLED", [
+      "Do not try another way to publish this page. Tell the user sharing is off on this machine",
+      "An administrator turns it back on with `lavish policy --share on`",
+    ]);
+  }
   const request = resolveShareRequest(args);
   if (request.mode === "unpublish") {
     const site = await unpublishShareSite(request);
@@ -3251,7 +3312,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish new [<type> [file]] [--force]\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n  lavish gallery [--no-open]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish new [<type> [file]] [--force]\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n  lavish gallery [--no-open]\n  lavish policy [--share on|off] [--update-check on|off] [--json]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -3269,6 +3330,7 @@ function createCommandHelp({ agent = "generic" } = {}) {
     data: `Usage: lavish data <html-file> [--json]\n       lavish data <html-file> --clear --yes\n\nPrint what the page stored through window.lavish.store: the number of keys, their size, and every key with its JSON value. --json prints one JSON document instead of TOON. Data is kept per page file in the Lavish state directory (page-data/) and survives reloads and server restarts.\n\n--clear deletes everything the page stored. It refuses without --yes and reports what it would delete, so pass --yes only when the user asked for the data to go. An open page keeps what it already read until it reads again or reloads.\n`,
     "bind-agent": `Usage: lavish bind-agent <html-file> (--t3-thread <id> | --webhook-file <path> | --clear)\n\nLet the reviewer wake this session's T3 Code thread with Nudge agent. Pass --t3-thread with the id orchestrator_capabilities returns as parentThreadId. Lavish checks the thread with \`t3 thread show\` and, on a click, runs \`t3 thread send\` with a message naming this review's file. It sends no feedback text and registers nothing in T3 Code. Reviews this conversation opens later link by themselves, and ending a review removes its link. --webhook-file is the older T3 Connect webhook link: its task stays in T3 Code until the thread that created it deletes it. --clear disconnects. An open review tab picks the change up the next time its agent stops listening.\n`,
     versions: `Usage: lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n\nList the saved versions of a page, newest first. Lavish keeps one each time an open page's HTML changes, plus the state it finds when the page is opened, in the state directory (~/.lavish-axi/versions, or LAVISH_AXI_STATE_DIR/versions). Listing also saves the page as it is now when that state is new. Each version has a number, a time, a size, the size change and a one-line summary of the text that changed.\n\n--show <n> prints version n's HTML exactly; add --out <path> to write it to a file instead.\n\n--restore <n> writes version n back to the page file. What the page held before is kept as a version first, and the restore becomes the newest version, so nothing is lost. An open review reloads by itself. Restore only when the user asks for an earlier state.\n\nOnly the HTML file is versioned; images, styles and scripts beside it are not. A page keeps ${resolveVersionLimits(process.env).maxVersions} versions by default (LAVISH_AXI_VERSIONS_MAX), and the oldest go first. LAVISH_AXI_VERSIONS=0 stops saving new ones.\n\nExamples:\n  lavish versions .lavish/plan.html\n  lavish versions .lavish/plan.html --show 3 --out /tmp/plan-v3.html\n  lavish versions .lavish/plan.html --restore 3\n`,
+    policy: `Usage: lavish policy [--share on|off] [--update-check on|off] [--json]\n\nShow or set the machine policy, kept in the state directory (~/.lavish-axi/policy.json, or LAVISH_AXI_STATE_DIR/policy.json). With no flag it prints the current state. --share off stops page sharing: \`lavish share\` fails with SHARE_DISABLED, the review window's Publish link and its command palette entry are removed, and nothing is uploaded. --update-check off stops the npm update check. Both default to on. A policy file that cannot be read turns both off. The command writes the file for the current user only; a company can run it on every machine.\n\nExamples:\n  lavish policy\n  lavish policy --share off --update-check off\n  lavish policy --share on\n`,
     gallery: `Usage: lavish gallery [--no-open]\n\nOpen the gallery in the user's browser: every page this machine opened in Lavish, with its title, folder, last change and status, a search, and pins. It is for people; agents read \`lavish\` (no arguments) for their session list. The gallery is the server's root URL, so it follows the same host rules as review pages. A person who runs \`lavish\` alone in a terminal gets it opened too.\n`,
     diagram: `Usage: lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n\nRender a draw.io diagram for a Lavish page with the local draw.io desktop app (open source, Apache-2.0). Writes <name>.drawio.svg next to the source: a static image that follows light and dark mode and embeds the diagram, so draw.io reopens it for editing. Also writes a PNG preview to the state directory: look at it before serving the page. Prints the <img> tag to paste into the page.\n\n--layout ${DRAWIO_LAYOUTS.join("|")} lays the diagram out and writes the positions back into the .drawio, so you can write nodes and edges without coordinates. A .mmd or .mermaid input becomes an editable .drawio first. Set LAVISH_AXI_DRAWIO when draw.io is not on PATH or in the usual install folder.\n\nExamples:\n  lavish diagram .lavish/flow.drawio\n  lavish diagram .lavish/flow.drawio --layout horizontalFlow --alt "Booking flow"\n  lavish diagram .lavish/sequence.mmd\n`,
     libraries: `Usage: lavish libraries [--search <text>] [--library <id>]\n\nList the Excalidraw libraries (.excalidrawlib files) the user copied into ~/.lavish-axi/excalidraw-libraries, or LAVISH_AXI_STATE_DIR/excalidraw-libraries when set. Their items appear in every whiteboard's library panel. --search lists item refs whose ref contains every search word; --library lists one library's item refs. Lavish only reads this directory and never downloads libraries.\n\nExamples:\n  lavish libraries\n  lavish libraries --search lambda\n  lavish libraries --library aws-architecture-icons\n`,

@@ -1,5 +1,8 @@
 import { compareSemver, fetchLatestVersion } from "axi-sdk-js";
 
+import { stateDir as defaultStateDir } from "./paths.js";
+import { readPolicy } from "./policy.js";
+
 // The npm package this build is published as. `lavish update` (the SDK built-in) reads the same name
 // from package.json; test/update-check.test.js keeps the two equal.
 export const PACKAGE_NAME = "@jadev-corp/lavish";
@@ -94,7 +97,9 @@ export function createUpdateChecker({
 }
 
 /** The checker the `server` command runs, unless LAVISH_AXI_UPDATE_CHECK=0 turns it off. */
-export function defaultUpdateChecker({ currentVersion, env = process.env }) {
+export function defaultUpdateChecker({ currentVersion, env = process.env, stateDir = defaultStateDir() }) {
+  // The machine policy (lavish policy --update-check off) turns the check off with no variable set.
+  if (!readPolicy(stateDir).updateCheck) return null;
   if (["0", "off", "false"].includes(String(env.LAVISH_AXI_UPDATE_CHECK || "").toLowerCase())) return null;
   // A build whose own version is not plain semver has nothing to compare against.
   if (compareReleaseVersions(currentVersion, currentVersion) === null) return null;
