@@ -96,7 +96,7 @@ test("a degraded bind stays quiet while the requested address is still unavailab
   });
 });
 
-// Runs `lavish-axi open` once against a fake control channel that reports `healthBody`, and
+// Runs `lavish open` once against a fake control channel that reports `healthBody`, and
 // returns how many times the CLI asked it to shut down. Each run starts a real server, so one call
 // takes a few seconds.
 async function countShutdowns(dir, artifact, healthBody) {
@@ -171,9 +171,11 @@ test("a stale control-channel server is replaced only once per CLI invocation", 
   });
 });
 
-// Fork channel: a newer -jadev.N server is adopted, a plain upstream release is replaced. Kept apart
-// from the test above so each stays well inside its timeout (four runs together took about 19 s of 20).
-test("a stale fork server is adopted by channel, an upstream release is replaced", { timeout: 20_000 }, async () => {
+// Semver precedence decides, with no separate fork channel: a network-stale server newer than this
+// CLI is replaced once for the network and then adopted, and a 0.1.98-jadev.N server from before the
+// npm package is older, so it is replaced for its version too. Kept apart from the test above so
+// each stays well inside its timeout (four runs together took about 19 s of 20).
+test("a newer stale server is adopted, a 0.1.98-jadev.N server is replaced", { timeout: 20_000 }, async () => {
   await withTempDir(async (dir) => {
     const artifact = await writeArtifact(dir);
 
@@ -181,18 +183,17 @@ test("a stale fork server is adopted by channel, an upstream release is replaced
       await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
-        version: "999.0.0-jadev.1",
+        version: "999.0.0",
         network_stale: true,
         network_stale_reason: "confirmed address change",
       }),
       1,
     );
-    // A plain upstream release is a different channel and still requires replacement by the fork.
     assert.equal(
       await countShutdowns(dir, artifact, {
         ok: true,
         app: "lavish-axi",
-        version: "999.0.0",
+        version: "0.1.98-jadev.2",
         network_stale: true,
         network_stale_reason: "confirmed address change",
       }),
