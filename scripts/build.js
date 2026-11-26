@@ -49,6 +49,8 @@ await copyFile("src/chrome.css", "dist/chrome.css");
 for (const file of ["versions-client.js", "versions.css", "gallery-client.js", "gallery.css"]) {
   await copyFile(`src/${file}`, `dist/${file}`);
 }
+// Starter pages for `lavish new`, read at run time next to cli.mjs.
+await cp("src/starters", "dist/starters", { recursive: true });
 await mkdir("dist/design", { recursive: true });
 await copyFile("node_modules/daisyui/daisyui.css", "dist/design/daisyui.css");
 await copyFile("node_modules/daisyui/themes.css", "dist/design/daisyui-themes.css");

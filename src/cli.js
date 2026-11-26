@@ -10,7 +10,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { access, lstat, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
@@ -24,6 +24,7 @@ import { buildDiagram, DRAWIO_LAYOUTS, resolveDrawio } from "./drawio.js";
 import { compareReleaseVersions, defaultUpdateChecker } from "./update-check.js";
 import { agentOwnerId, autoLinkSession, bindAgentNudge, linkT3Thread, releaseAgentLink } from "./agent-nudge.js";
 import { PAGE_TEMPLATE } from "./page-template.js";
+import { createStarterPage, defaultStarterPath, findStarter, STARTER_TYPES } from "./page-starters.js";
 import {
   buildSelfContainedHtml,
   exportFileName,
@@ -92,6 +93,7 @@ const COMMANDS = new Set([
   "data",
   "versions",
   "gallery",
+  "new",
 ]);
 // SDK-reserved built-ins (e.g. `update`) must reach runAxiCli untouched; otherwise
 // the bare-arg normalization below would rewrite them into the hidden `open` command.
@@ -270,6 +272,7 @@ export async function run(argv) {
       data: dataCommand,
       versions: versionsCommand,
       gallery: galleryCommand,
+      new: newCommand,
     },
     getCommandHelp: (command) => getCommandHelp(command, { agent }),
   });
@@ -325,6 +328,7 @@ export function createHomeOutput({ bin, sessions, includeSessions = true, agent 
     help: [
       "Run `lavish <html-file>` to open or resume a Lavish Editor session. If the user explicitly ended the session from the browser, this refuses to reopen it and explains why instead of reopening uninvited - pass `--reopen` only when the user asks for further review or something important needs their visual attention",
       "Unless the user specifies another location, create HTML artifacts in the current working directory under `.lavish/`",
+      "Run `lavish new <type>` to start a page from a ready-made type (decision, brainstorm, dashboard, report, tracker, slides) instead of a blank file; `lavish new` lists them",
       "Lavish serves the html file through a local express.js server. If your html needs to reference other filesystem assets such as images, CSS, fonts, and local scripts, copy them into the same directory as the HTML file, then reference them with relative paths from that directory. Never prepend `/` to those asset paths - root paths won't work. Files and folders whose names start with a dot are not served, so do not keep assets in hidden folders",
       `Run \`lavish poll <html-file>\` to wait for user feedback. It long-polls and stays silent until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, so leave it running - never kill it. Detected layout issues never return this poll: the browser files them in the user's Layout issues inbox in the Lavish top bar, and they arrive as an ordinary tag "layout-warnings" prompt only when the user selects them and queues the fixes. Never edit the artifact to chase a layout issue the user has not queued. The only exception is a fatal artifact_failures response, which means the review surface itself could not be used. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE}`,
       'Run `lavish reply <html-file> --agent-reply "<message>"` to show a concise reply and exit once Lavish Editor accepts it, when you are handing a result back and are not about to long-poll. The board stops showing Working only after this command exits 0. Use `lavish poll <html-file> --agent-reply "<message>"` when that reply should be followed by another wait for feedback. A longer reply uses `--agent-reply-file <path>` (`-` reads stdin) on either command. Run `lavish reply --help` for the receipt contract',
@@ -1802,6 +1806,61 @@ async function designCommand(args = []) {
   return createDesignOutput();
 }
 
+// `lavish new <type> [file]`: write a starter page (src/page-starters.js) and say how to open it.
+// It never replaces a file unless --force is passed.
+async function newCommand(args = []) {
+  const unknown = args.find((arg) => arg.startsWith("-") && arg !== "--force");
+  if (unknown) {
+    throw new AxiError(`Unknown option: ${unknown}`, "VALIDATION_ERROR", ["Run `lavish new <type> [file] [--force]`"]);
+  }
+  const [type, file, ...extra] = args.filter((arg) => !arg.startsWith("-"));
+  if (!type) {
+    return {
+      types: STARTER_TYPES.map(({ type, purpose }) => ({ type, purpose })),
+      help: [
+        "Run `lavish new <type> [file]` to start a page from one of these types. The file defaults to .lavish/<type>-<date>.html",
+        "The page is example content in the Lavish design. Replace the example, keep the structure, then run `lavish <file>`",
+      ],
+    };
+  }
+  const starter = findStarter(type);
+  if (!starter) {
+    throw new AxiError(`Unknown page type: ${type}`, "VALIDATION_ERROR", [
+      `Use one of: ${STARTER_TYPES.map((item) => item.type).join(", ")}`,
+      "Run `lavish new` to see what each type is for",
+    ]);
+  }
+  if (extra.length) {
+    throw new AxiError("Too many arguments", "VALIDATION_ERROR", ["Run `lavish new <type> [file] [--force]`"]);
+  }
+  const target = path.resolve(file || defaultStarterPath(type));
+  if (!isHtmlPath(target)) {
+    throw new AxiError("The page file must end in .html", "VALIDATION_ERROR", [
+      `Run \`lavish new ${type} <name>.html\``,
+    ]);
+  }
+  const relative = path.relative(process.cwd(), target);
+  const shown = relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : target;
+  const existing = await lstat(target).catch(() => null);
+  if (existing && !existing.isFile()) {
+    throw new AxiError(`${shown} exists and is not a regular file. Nothing was written.`, "VALIDATION_ERROR", [
+      `Run \`lavish new ${type} <other-file>.html\``,
+    ]);
+  }
+  if (existing && !args.includes("--force")) {
+    throw new AxiError(`${shown} already exists. Nothing was written.`, "FILE_EXISTS", [
+      `Run \`lavish new ${type} <other-file>.html\` to pick another name`,
+      `Add --force to replace ${shown}, only if the user is done with it`,
+    ]);
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, createStarterPage(type));
+  return {
+    created: { type, file: target, ...(existing ? { replaced: true } : {}) },
+    next_step: `Replace the example content in ${shown}: the comment at its top says what each part does, and \`lavish playbook ${starter.playbook}\` has the guidance. Then run \`lavish ${shown}\`.`,
+  };
+}
+
 async function setupCommand(args) {
   if (args.length !== 1 || (args[0] !== "hooks" && args[0] !== "plugin")) {
     throw new AxiError("Unknown setup action", "VALIDATION_ERROR", [
@@ -3192,7 +3251,7 @@ export function getCommandHelp(command, { agent = "generic" } = {}) {
 }
 
 function createTopLevelHelp({ agent = "generic" } = {}) {
-  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n  lavish gallery [--no-open]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
+  return `lavish - Lavish Editor AXI\n\nUsage:\n  lavish\n  lavish <html-file> [--no-open] [--external] [--no-gate] [--reopen] [--t3-thread <id>]\n  lavish poll <html-file> [--owner <label>] [--takeover] [--agent-reply "..."] [--agent-reply-file <path>] [--ask <id>]\n  lavish reply <html-file> (--agent-reply "..." | --agent-reply-file <path>) [--ask <id>]\n  lavish end <html-file>\n  lavish data <html-file> [--json] [--clear --yes]\n  lavish export <html-file> [--out <path>]\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n  lavish stop\n  lavish playbook [playbook_id]\n  lavish design\n  lavish new [<type> [file]] [--force]\n  lavish libraries [--search <text>] [--library <id>]\n  lavish diagram <file.drawio> [--layout <name>] [--out <path>] [--page <n>] [--alt <text>]\n  lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n  lavish gallery [--no-open]\n  lavish setup hooks\n  lavish setup plugin\n  lavish update [--check]\n\n${DESIGN_SYSTEM_HINT}\n\nNote: poll long-polls until the user sends feedback, ends the session, or leaves every review window disconnected past the reconnect grace period, staying silent while it waits - never kill it. Layout issues the browser detects are passive: they collect in the user's Layout issues inbox in the Lavish top bar and reach the agent only when the user selects them and queues the fixes, as an ordinary tag "layout-warnings" prompt. Do not pass --timeout-ms during normal agent use; it is for tests and debugging only. ${pollExecutionGuidance({ agent })} ${POLL_SEND_AND_END_RULE} Use \`lavish reply\` when handing a result back without waiting for more feedback: it exits 0 only after the server accepts the reply, so the board stops showing Working. \`poll --agent-reply\` posts a reply and then keeps waiting.\n\n`;
 }
 
 function createCommandHelp({ agent = "generic" } = {}) {
@@ -3204,8 +3263,9 @@ function createCommandHelp({ agent = "generic" } = {}) {
     export: `Usage: lavish export <html-file> [--out <path>]\n\nWrite a portable copy of an artifact: one HTML file with its LOCAL assets inlined (relative-path stylesheets, scripts, images, and fonts become inline <style>/<script> blocks and data URIs). Remote CDN/font references (https URLs) are left as links for the browser to load, so the file needs network to render those. Lavish makes no outbound requests - it only reads local files, confined to the artifact's directory. Defaults to writing <name>.export.html next to the source; pass --out to choose a path. The Lavish annotation SDK is never included in an export.\n`,
     share: `Usage:\n  lavish share <html-file> [--private | --password <pw>] [--token <t>]\n  lavish share <html-file> --site <site_id> --update-key <key> [--private | --password <pw>]\n  lavish share --unpublish --site <site_id> --update-key <key>\n\nPublish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and print a visitable URL. Shares are PUBLIC by default: anyone with the link can open the page, and it may be indexed or scraped. Pass --private to publish a PRIVATE page behind a generated password, returned once in the output - give it to the user with the URL and tell them it is a shared secret. Pass --password <pw> instead when the user chose the password; it is never echoed back. Builds the same local-inlined HTML as 'export' (local assets inlined; remote CDN/font URLs left as links and are not blocked by CSP on ht-ml.app, but still load over the viewer's network), then POSTs it to ht-ml.app's /v1 API. Creating a site needs no account or API key. The response includes the url plus a secret update_key (shown once) for changing the page later.\n\n--site <site_id> with --update-key <key> republishes an existing page in place: same URL, new HTML. On a republish the password is left alone unless you pass --private (rotate to a new generated one) or --password <pw> (set one). There is no way to make a private page public again: ht-ml.app accepts a request to clear a password and silently ignores it, so Lavish does not offer one rather than reporting a page as public while it is still gated. Locking a page that was PUBLIC is also not instant at ht-ml.app's CDN: it was observed still answering uncredentialed requests for minutes after the password was set, so do not tell the user a newly gated page is unreachable right away (a page that was already private has no such cached copy).\n\n--unpublish takes the same credentials and no file. ht-ml.app has NO delete endpoint, so this replaces the page with a short placeholder and locks it behind a random password that is immediately discarded; the URL still resolves and the host still holds what was published. Say that to the user rather than calling it deleted. The update_key still works, so republishing with --private brings the page back behind a new password.\n\nA value flag given an empty or whitespace-only value is REFUSED rather than acted on: an unquoted shell variable that is unset makes \`--password $PW\` an empty password, which the host treats as none and would publish a PUBLIC page while you believed it was gated. Quote the value, or pass --private to have Lavish generate one.\n\nSet LAVISH_AXI_HTML_APP_TOKEN (or pass --token) to attach an optional bearer token when CREATING a page; it is never required. A republish (--site/--update-key) or --unpublish rejects --token, because the update_key is what the Authorization header carries there. The annotation SDK is never included.\n`,
     stop: `Usage: lavish stop [--port <port>] [--force]\n\nShut down the background Lavish Editor server. Active polls or review listeners block shutdown unless --force is passed. The server also stops itself when no browser or poll has been connected for a while (LAVISH_AXI_IDLE_TIMEOUT_MS, default 30m) and immediately when the last session ends with nothing connected.\n`,
-    playbook: `Usage: lavish playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: diagram, table, comparison, plan, code, input, explanation, slides.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish playbook\n  lavish playbook diagram\n  lavish playbook input\n`,
-    design: `Usage: lavish design\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
+    playbook: `Usage: lavish playbook [playbook_id]\n\nList focused artifact guidance playbooks, or show one playbook by ID. Known IDs: ${playbookIds().join(", ")}.\n\n${PLAYBOOK_ROUTER_HELP}\n\nExamples:\n  lavish playbook\n  lavish playbook diagram\n  lavish playbook input\n`,
+    design: `Usage: lavish design [--template]\n\nTo start a page, run \`lavish new <type>\` when one of its types fits (${STARTER_TYPES.map((item) => item.type).join(", ")}), or \`lavish design --template\` for a blank page in the Lavish design.\n\nShow a copy-pasteable CDN snippet for Tailwind CSS browser runtime v4 + DaisyUI v5 with the inline Lavish theme, the whiteboard (Mermaid) opt-in snippet, a content-to-playbook router, an optional layout safety CSS snippet, plus technical reference for DaisyUI components. ${PLAYBOOK_ROUTER_HELP} Lavish artifacts stay portable HTML. This CDN snippet is the Lavish design, the default when the user gave no design direction; paste the layout safety CSS only when useful for dense nested grid/flex layouts, badges, wide fonts, or local media. ${DESIGN_PRIORITY_RULE}\n`,
+    new: `Usage: lavish new [<type> [file]] [--force]\n\nStart a page from a ready-made type instead of a blank file. Each one is example content in the Lavish design, already wired to what Lavish adds: questions with Queue all and notes, page storage, ask the agent, and downloads. A comment at the top of the page says what each part does.\n\nTypes:\n${STARTER_TYPES.map(({ type, purpose }) => `  ${type.padEnd(11)}${purpose}`).join("\n")}\n\nThe file defaults to .lavish/<type>-<date>.html in the current folder. An existing file is never replaced unless --force is passed. \`lavish new\` alone lists the types. Replace the example content, keep the structure, then run \`lavish <file>\`.\n\nExamples:\n  lavish new decision\n  lavish new tracker .lavish/launch.html\n`,
     data: `Usage: lavish data <html-file> [--json]\n       lavish data <html-file> --clear --yes\n\nPrint what the page stored through window.lavish.store: the number of keys, their size, and every key with its JSON value. --json prints one JSON document instead of TOON. Data is kept per page file in the Lavish state directory (page-data/) and survives reloads and server restarts.\n\n--clear deletes everything the page stored. It refuses without --yes and reports what it would delete, so pass --yes only when the user asked for the data to go. An open page keeps what it already read until it reads again or reloads.\n`,
     "bind-agent": `Usage: lavish bind-agent <html-file> (--t3-thread <id> | --webhook-file <path> | --clear)\n\nLet the reviewer wake this session's T3 Code thread with Nudge agent. Pass --t3-thread with the id orchestrator_capabilities returns as parentThreadId. Lavish checks the thread with \`t3 thread show\` and, on a click, runs \`t3 thread send\` with a message naming this review's file. It sends no feedback text and registers nothing in T3 Code. Reviews this conversation opens later link by themselves, and ending a review removes its link. --webhook-file is the older T3 Connect webhook link: its task stays in T3 Code until the thread that created it deletes it. --clear disconnects. An open review tab picks the change up the next time its agent stops listening.\n`,
     versions: `Usage: lavish versions <html-file> [--show <n> [--out <path>] | --restore <n>]\n\nList the saved versions of a page, newest first. Lavish keeps one each time an open page's HTML changes, plus the state it finds when the page is opened, in the state directory (~/.lavish-axi/versions, or LAVISH_AXI_STATE_DIR/versions). Listing also saves the page as it is now when that state is new. Each version has a number, a time, a size, the size change and a one-line summary of the text that changed.\n\n--show <n> prints version n's HTML exactly; add --out <path> to write it to a file instead.\n\n--restore <n> writes version n back to the page file. What the page held before is kept as a version first, and the restore becomes the newest version, so nothing is lost. An open review reloads by itself. Restore only when the user asks for an earlier state.\n\nOnly the HTML file is versioned; images, styles and scripts beside it are not. A page keeps ${resolveVersionLimits(process.env).maxVersions} versions by default (LAVISH_AXI_VERSIONS_MAX), and the oldest go first. LAVISH_AXI_VERSIONS=0 stops saving new ones.\n\nExamples:\n  lavish versions .lavish/plan.html\n  lavish versions .lavish/plan.html --show 3 --out /tmp/plan-v3.html\n  lavish versions .lavish/plan.html --restore 3\n`,

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto">
+  <!--
+    Slides page, made by `lavish new slides`. It follows `lavish playbook slides`.
+    Purpose: a short deck with one idea per slide, for a talk or a paced walkthrough.
+    How it works: one slide shows at a time. Arrow keys, Page Up/Down, Space, Home and End move
+    through the deck, and so do the buttons at the bottom. The reader can leave a note on any slide.
+    To edit: one <section data-slide> per slide, in order. Open with the point, then context,
+    evidence, and close with the decision or next step. Keep the text short.
+    Then run `lavish <this file>`.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Release review</title>
+    <!-- lavish:design -->
+  </head>
+  <body class="bg-base-100 text-base-content antialiased">
+    <div class="flex h-dvh flex-col">
+      <main class="min-h-0 flex-1">
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6 overflow-y-auto px-6 py-10 sm:px-12"
+        >
+          <p class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Release review</p>
+          <h1 class="text-4xl font-semibold tracking-tight text-balance sm:text-6xl">Search is twice as fast</h1>
+          <p class="max-w-prose text-lg text-base-content/70 sm:text-xl">
+            What shipped, what we learned, and one decision left.
+          </p>
+        </section>
+
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6 overflow-y-auto px-6 py-10 sm:px-12"
+          hidden
+        >
+          <h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-5xl">What shipped</h2>
+          <ul class="space-y-3 text-lg sm:text-2xl">
+            <li>A new search index</li>
+            <li>Results while you type</li>
+            <li>Typos forgiven</li>
+          </ul>
+        </section>
+
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-4 overflow-y-auto px-6 py-10 sm:px-12"
+          hidden
+        >
+          <p class="text-7xl font-semibold tracking-tight text-primary sm:text-9xl">2.1x</p>
+          <p class="max-w-prose text-lg text-base-content/70 sm:text-2xl">
+            faster searches. Median over one week, before and after.
+          </p>
+        </section>
+
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6 overflow-y-auto px-6 py-10 sm:px-12"
+          hidden
+        >
+          <h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-5xl">What we learned</h2>
+          <p class="max-w-prose text-lg text-base-content/80 sm:text-2xl">
+            People search more when results come back fast. Searches per visit went up by a quarter.
+          </p>
+        </section>
+
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6 overflow-y-auto px-6 py-10 sm:px-12"
+          hidden
+        >
+          <h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-5xl">The old index: keep or remove?</h2>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="border border-base-300 p-5">
+              <p class="text-lg font-semibold sm:text-xl">Keep it a month</p>
+              <p class="mt-2 text-base-content/70">A safe way back if the new index fails. Costs a second server.</p>
+            </div>
+            <div class="border border-base-300 p-5">
+              <p class="text-lg font-semibold sm:text-xl">Remove it now</p>
+              <p class="mt-2 text-base-content/70">Saves the server. No way back without a rebuild of a day.</p>
+            </div>
+          </div>
+        </section>
+
+        <section
+          data-slide
+          class="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6 overflow-y-auto px-6 py-10 sm:px-12"
+          hidden
+        >
+          <p class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Next step</p>
+          <h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-5xl">Decide by Friday</h2>
+          <p class="max-w-prose text-lg text-base-content/70 sm:text-xl">
+            Leave a note on this slide: keep the old index, or remove it.
+          </p>
+        </section>
+      </main>
+
+      <nav class="flex items-center justify-between gap-2 border-t border-base-300 px-4 py-2" aria-label="Slides">
+        <button type="button" class="btn btn-ghost btn-sm" id="previous">Previous</button>
+        <span class="text-sm tabular-nums text-base-content/60" id="counter" aria-live="polite">1 / 1</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="next">Next</button>
+      </nav>
+    </div>
+
+    <script type="module">
+      const slides = [...document.querySelectorAll("[data-slide]")];
+      let current = 0;
+
+      function show(index) {
+        current = Math.max(0, Math.min(slides.length - 1, index));
+        slides.forEach((slide, position) => {
+          slide.hidden = position !== current;
+          slide.setAttribute("aria-label", `Slide ${position + 1} of ${slides.length}`);
+        });
+        document.getElementById("counter").textContent = `${current + 1} / ${slides.length}`;
+        document.getElementById("previous").disabled = current === 0;
+        document.getElementById("next").disabled = current === slides.length - 1;
+      }
+
+      const STEPS = { ArrowRight: 1, ArrowDown: 1, PageDown: 1, " ": 1, ArrowLeft: -1, ArrowUp: -1, PageUp: -1 };
+      document.addEventListener("keydown", (event) => {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]"))
+          return;
+        if (event.key === "Home") show(0);
+        else if (event.key === "End") show(slides.length - 1);
+        else if (STEPS[event.key]) show(current + STEPS[event.key]);
+        else return;
+        event.preventDefault();
+      });
+      document.getElementById("previous").addEventListener("click", () => show(current - 1));
+      document.getElementById("next").addEventListener("click", () => show(current + 1));
+      show(0);
+    </script>
+  </body>
+</html>

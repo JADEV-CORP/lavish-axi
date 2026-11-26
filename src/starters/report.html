@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto">
+  <!--
+    Report page, made by `lavish new report`.
+    Purpose: tell the reader what happened and what it means, answer first, evidence after.
+    How it works: a plain page. The reader selects any sentence or block and leaves a note on it.
+    To edit: replace the example text. Keep the order: summary, key numbers, sections, sources.
+    Drop the key numbers when there are none. Label estimates as estimates.
+    Then run `lavish <this file>`.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Build time report</title>
+    <!-- lavish:design -->
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <main class="mx-auto max-w-3xl space-y-12 px-6 py-12">
+      <header class="space-y-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Report</p>
+        <h1 class="text-3xl font-semibold tracking-tight text-balance">
+          Builds are a third faster since the cache change
+        </h1>
+        <p class="max-w-prose text-lg text-base-content/70">
+          The build now reuses work from earlier runs. A typical build fell from about nine minutes to six, and fewer
+          builds fail.
+        </p>
+      </header>
+
+      <section aria-label="Key numbers" class="grid gap-px border border-base-300 bg-base-300 sm:grid-cols-3">
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Typical build</p>
+          <p class="text-2xl font-semibold">6.1 min</p>
+          <p class="text-sm text-base-content/60">was 9.4 min</p>
+        </div>
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Work reused</p>
+          <p class="text-2xl font-semibold">82%</p>
+          <p class="text-sm text-base-content/60">of build steps</p>
+        </div>
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Failed builds</p>
+          <p class="text-2xl font-semibold">3%</p>
+          <p class="text-sm text-base-content/60">was 5%</p>
+        </div>
+      </section>
+
+      <section class="space-y-4">
+        <h2 class="text-xl font-semibold tracking-tight">What changed</h2>
+        <p class="max-w-prose text-base-content/80">
+          Each build step now saves its result under a fingerprint of its inputs. When the inputs have not changed, the
+          next build takes the saved result instead of doing the work again.
+        </p>
+        <!--
+          Diagram slot. Write cache.drawio next to this page, run
+          `lavish diagram cache.drawio --layout horizontalFlow --alt "How a build uses the cache"`,
+          look at the preview it prints, then replace the svg below with the <img> tag it prints.
+        -->
+        <figure class="space-y-2 border border-base-300 p-4">
+          <svg
+            viewBox="0 0 562 96"
+            role="img"
+            aria-label="Source goes to the cache check. A hit reuses the saved result; a miss builds and saves it."
+            class="w-full"
+          >
+            <g fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1" y="20" width="140" height="56" />
+              <rect x="211" y="20" width="140" height="56" />
+              <rect x="421" y="20" width="140" height="56" />
+              <path d="M141 48 H203 M351 48 H413" />
+              <path d="M197 42 L205 48 L197 54 M407 42 L415 48 L407 54" />
+            </g>
+            <g fill="currentColor" font-size="16" text-anchor="middle">
+              <text x="71" y="54">Source</text>
+              <text x="281" y="54">Cache check</text>
+              <text x="491" y="54">Build output</text>
+            </g>
+          </svg>
+          <figcaption class="text-sm text-base-content/60">
+            A hit reuses the saved result. A miss builds the step and saves it.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="space-y-4">
+        <h2 class="text-xl font-semibold tracking-tight">Before and after</h2>
+        <div class="overflow-x-auto border border-base-300">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Measure</th>
+                <th class="text-right">Before</th>
+                <th class="text-right">After</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Typical build</td>
+                <td class="text-right tabular-nums">9.4 min</td>
+                <td class="text-right tabular-nums">6.1 min</td>
+              </tr>
+              <tr>
+                <td>Slowest 1 in 10 builds</td>
+                <td class="text-right tabular-nums">16 min</td>
+                <td class="text-right tabular-nums">12 min</td>
+              </tr>
+              <tr>
+                <td>Failed builds</td>
+                <td class="text-right tabular-nums">5%</td>
+                <td class="text-right tabular-nums">3%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div role="alert" class="alert border-warning/50 bg-warning/10 text-base-content">
+          <span>The cache takes 40 GB of disk. It needs a size limit before it grows further.</span>
+        </div>
+      </section>
+
+      <section class="space-y-4">
+        <h2 class="text-xl font-semibold tracking-tight">Next steps</h2>
+        <ol class="list-decimal space-y-1 pl-5 text-base-content/80">
+          <li>Set a size limit on the cache and remove the oldest entries first.</li>
+          <li>Check the slowest builds again in four weeks.</li>
+        </ol>
+      </section>
+
+      <footer class="border-t border-base-300 pt-6 text-sm text-base-content/60">
+        <p>Sources: build logs from the last four weeks, about 1,200 builds. Times are medians.</p>
+      </footer>
+    </main>
+  </body>
+</html>

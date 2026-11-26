@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto" data-lavish-annotate="off">
+  <!--
+    Decision page, made by `lavish new decision`.
+    Purpose: get a few clear answers from the reader in one pass.
+    How it works: each card is one question (data-lavish-question) with its own Queue answer button.
+    Lavish adds a Queue all bar at the end and a note box on each question, so do not build them.
+    To edit: replace the example text, keep one card per question, keep name="answer" on the inputs.
+    Then run `lavish <this file>` and wait for the answers with `lavish poll <this file>`.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Release plan: three questions</title>
+    <!-- lavish:design -->
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <main class="mx-auto max-w-3xl space-y-10 px-6 py-12">
+      <header class="space-y-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Decision</p>
+        <h1 class="text-3xl font-semibold tracking-tight text-balance">Three answers settle the release plan</h1>
+        <p class="max-w-prose text-lg text-base-content/70">
+          The build is ready. Pick an answer for each question below, then queue them all at the end of the page.
+        </p>
+      </header>
+
+      <form class="card card-border bg-base-100" data-lavish-question="D1">
+        <div class="card-body gap-4">
+          <p class="text-xs font-semibold tracking-wider text-base-content/60">D1</p>
+          <h2 class="card-title text-base">When do we ship?</h2>
+          <label
+            class="flex cursor-pointer gap-3 border border-base-300 p-4 has-checked:border-primary has-checked:bg-base-200"
+          >
+            <input type="radio" name="answer" value="Next Tuesday" class="radio radio-primary radio-sm mt-1" />
+            <span>
+              <span class="font-medium">Next Tuesday</span>
+              <span class="badge badge-primary badge-sm">Recommended</span>
+              <span class="block text-sm text-base-content/70">All tests pass and the notes are written.</span>
+            </span>
+          </label>
+          <label
+            class="flex cursor-pointer gap-3 border border-base-300 p-4 has-checked:border-primary has-checked:bg-base-200"
+          >
+            <input type="radio" name="answer" value="In two weeks" class="radio radio-primary radio-sm mt-1" />
+            <span>
+              <span class="font-medium">In two weeks</span>
+              <span class="block text-sm text-base-content/70">Room for the import fix, but the date moves.</span>
+            </span>
+          </label>
+          <div class="card-actions justify-end">
+            <button type="submit" class="btn btn-primary">Queue answer</button>
+          </div>
+        </div>
+      </form>
+
+      <form class="card card-border bg-base-100" data-lavish-question="D2">
+        <div class="card-body gap-4">
+          <p class="text-xs font-semibold tracking-wider text-base-content/60">D2</p>
+          <h2 class="card-title text-base">Where do we announce it?</h2>
+          <p class="text-sm text-base-content/70">Pick all that apply.</p>
+          <label class="flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              name="answer"
+              value="Release notes"
+              class="checkbox checkbox-primary checkbox-sm"
+              checked
+            />
+            <span>Release notes</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              name="answer"
+              value="Email to all users"
+              class="checkbox checkbox-primary checkbox-sm"
+            />
+            <span>Email to all users</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-3">
+            <input type="checkbox" name="answer" value="In-app banner" class="checkbox checkbox-primary checkbox-sm" />
+            <span>In-app banner</span>
+          </label>
+          <div class="card-actions justify-end">
+            <button type="submit" class="btn btn-primary">Queue answer</button>
+          </div>
+        </div>
+      </form>
+
+      <form class="card card-border bg-base-100" data-lavish-question="D3">
+        <div class="card-body gap-4">
+          <p class="text-xs font-semibold tracking-wider text-base-content/60">D3</p>
+          <h2 class="card-title text-base">Anything that worries you about this release?</h2>
+          <textarea name="answer" rows="3" class="textarea w-full" placeholder="Write it in your own words"></textarea>
+          <div class="card-actions justify-end">
+            <button type="submit" class="btn btn-primary">Queue answer</button>
+          </div>
+        </div>
+      </form>
+
+      <footer class="border-t border-base-300 pt-6 text-sm text-base-content/60">
+        <p>Sources: the latest test run and the open bug list.</p>
+      </footer>
+    </main>
+
+    <script type="module">
+      // One prompt per card. The Queue all bar presses each card's button, so it sends the same text.
+      for (const form of document.querySelectorAll("form[data-lavish-question]")) {
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const id = form.dataset.lavishQuestion;
+          const question = form.querySelector("h2").textContent.trim();
+          const answer = new FormData(form).getAll("answer").map(String).join(", ").trim();
+          if (!answer) return;
+          const text = `${id} ${question} Answer: ${answer}`;
+          window.lavish?.queuePrompt(text, { tag: "choice", text, element: form, data: { question: id, answer } });
+        });
+      }
+    </script>
+  </body>
+</html>

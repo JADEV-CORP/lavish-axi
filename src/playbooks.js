@@ -235,6 +235,7 @@ export const PLAYBOOKS = [
     ],
     lavish_notes: [
       "Lavish is strongest when the artifact becomes a focused review surface and not just a static page.",
+      "Start from `lavish new decision` for questions, `lavish new dashboard` for records the reader edits, or `lavish new tracker` for a checklist with an Ask button. Each is already wired to the calls below.",
       'A native single-choice question should submit the final value: `<form data-lavish-question="plan" onsubmit="event.preventDefault(); const choice = new FormData(event.currentTarget).get(\'plan\'); if (choice) window.lavish.queuePrompt(\'Use the \' + choice + \' plan\', { tag: \'choice\', text: \'Plan: \' + choice, element: event.currentTarget, data: { question: \'plan\', answer: choice } });"><label><input type="radio" name="plan" value="Starter"> Starter</label><label><input type="radio" name="plan" value="Pro"> Pro</label><button type="submit">Queue this answer</button></form>`.',
       `A tracked batch should submit the final selected set once: <form data-lavish-question="tracked-review" onsubmit="event.preventDefault(); const selected = [...event.currentTarget.querySelectorAll('input[name=items]:checked')].map((input) => ({ id: input.value, label: input.dataset.label, disposition: input.dataset.disposition })); if (selected.length) window.lavish.queuePrompt('Act on every selected item and return an item-by-item receipt. Account for every submitted ID before reporting completion.', { tag: 'tracked-batch', text: 'Apply ' + selected.length + ' selected review items', element: event.currentTarget, data: { items: selected } });"><label><input type="checkbox" name="items" value="R-03" data-label="Preserve rollback behavior" data-disposition="must-address"> R-03 — Preserve rollback behavior</label><label><input type="checkbox" name="items" value="R-08" data-label="Reuse the existing error surface" data-disposition="must-address"> R-08 — Reuse the existing error surface</label><button type="submit">Queue selected items</button></form>`,
       `For a decision artifact a human may open by double-clicking the HTML, optionally include this standalone answer-copy control: it copies every question's answers as text the human pastes back into the chat for the agent to read. It works without Lavish and remains absent unless you write it into the artifact:
@@ -333,6 +334,7 @@ export const PLAYBOOKS = [
       "Think a problem through with the user: generate and weigh options, challenge a plan, or settle a direction over several rounds",
     choose: [
       "Use this when the answer is not known yet and the user wants to think it through with you: a direction to pick, ideas to sort, a plan to challenge.",
+      "Start from `lavish new brainstorm`: it already has this shape.",
       "Pair it with the input playbook for the answer controls and the diagram playbook for the map; this playbook sets the shape of the session.",
     ],
     structure: [
@@ -367,6 +369,7 @@ export const PLAYBOOKS = [
       "Use this when the reader needs to understand something that already exists: a PR's mechanism, an incident's root cause, an architecture, a past decision.",
       "Use the plan playbook when the reader must inspect and approve an approach before implementation begins; use comparison when they must choose between options.",
       "Combine with diagram for flows or architecture, table for evidence inventories, and code when the mechanism lives in specific lines.",
+      "For a report (summary, key numbers, sections, sources), start from `lavish new report`.",
     ],
     structure: [
       "Lead with the one-sentence answer to the question the reader actually has, before any mechanism.",
@@ -399,6 +402,7 @@ export const PLAYBOOKS = [
       "Use slides only when the user asks for a deck, presentation, talk, or paced walkthrough.",
       "Use a scroll page when the user needs reference material, detailed review, or dense evidence.",
       "Use one idea per slide when the artifact has a narrative arc.",
+      "Start from `lavish new slides`: one slide at a time, keyboard navigation, notes on any slide.",
     ],
     structure: [
       "Plan the story before writing the slide markup.",
