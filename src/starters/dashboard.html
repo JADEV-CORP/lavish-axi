@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto" data-lavish-annotate="off">
+  <!--
+    Dashboard page, made by `lavish new dashboard`.
+    Purpose: a small set of records the reader can add to and edit, with totals on top.
+    How it works: the rows live in window.lavish.store under the key "rows", so they survive reloads
+    and server restarts. The agent reads them with `lavish data <this file>`. Download CSV saves the
+    table through window.lavish.download. Opened without Lavish, edits last until the tab closes.
+    To edit: change EXAMPLE_ROWS, the form fields and the totals to fit your records.
+    Then run `lavish <this file>`.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Budget dashboard</title>
+    <!-- lavish:design -->
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <main class="mx-auto max-w-4xl space-y-10 px-6 py-12">
+      <header class="space-y-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Dashboard</p>
+        <h1 class="text-3xl font-semibold tracking-tight text-balance">Project budget at a glance</h1>
+        <p class="max-w-prose text-lg text-base-content/70">
+          Add or change a line below. Every change is kept with this page.
+        </p>
+      </header>
+
+      <section aria-label="Totals" class="grid grid-cols-2 gap-px border border-base-300 bg-base-300 sm:grid-cols-4">
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Lines</p>
+          <p class="text-2xl font-semibold" id="total-lines">0</p>
+        </div>
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Planned</p>
+          <p class="text-2xl font-semibold" id="total-planned">0</p>
+        </div>
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Approved</p>
+          <p class="text-2xl font-semibold" id="total-approved">0</p>
+        </div>
+        <div class="bg-base-100 p-4">
+          <p class="text-sm text-base-content/60">Spent</p>
+          <p class="text-2xl font-semibold" id="total-spent">0</p>
+        </div>
+      </section>
+
+      <section class="space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-xl font-semibold tracking-tight">Lines</h2>
+          <button type="button" class="btn btn-sm" id="download">Download CSV</button>
+        </div>
+        <div class="overflow-x-auto border border-base-300">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="hidden sm:table-cell">Category</th>
+                <th class="text-right">Amount</th>
+                <th>Status</th>
+                <th><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <p class="text-sm text-base-content/70" id="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="space-y-4">
+        <h2 class="text-xl font-semibold tracking-tight" id="form-title">Add a line</h2>
+        <form class="grid gap-4 border border-base-300 p-4 sm:grid-cols-2" id="editor">
+          <label class="flex flex-col gap-1 text-sm">Item<input name="item" class="input w-full" required /></label>
+          <label class="flex flex-col gap-1 text-sm">Category<input name="category" class="input w-full" /></label>
+          <label class="flex flex-col gap-1 text-sm"
+            >Amount<input name="amount" type="number" min="0" step="any" class="input w-full" required
+          /></label>
+          <label class="flex flex-col gap-1 text-sm"
+            >Status
+            <select name="status" class="select w-full">
+              <option>Planned</option>
+              <option>Approved</option>
+              <option>Spent</option>
+            </select>
+          </label>
+          <div class="flex flex-wrap gap-2 sm:col-span-2">
+            <button type="submit" class="btn btn-primary">Save line</button>
+            <button type="button" class="btn btn-ghost" id="cancel" hidden>Cancel</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script type="module">
+      const EXAMPLE_ROWS = [
+        { id: "r1", item: "Hosting", category: "Infrastructure", amount: 1200, status: "Approved" },
+        { id: "r2", item: "Design review", category: "Services", amount: 800, status: "Planned" },
+        { id: "r3", item: "Test devices", category: "Hardware", amount: 2400, status: "Spent" },
+        { id: "r4", item: "Licences", category: "Software", amount: 600, status: "Approved" },
+      ];
+      const store = window.lavish?.store;
+      const form = document.getElementById("editor");
+      const say = (text) => (document.getElementById("status").textContent = text);
+      const money = (value) => Number(value || 0).toLocaleString("en", { maximumFractionDigits: 2 });
+      let rows = [];
+      let editing = null;
+
+      function render() {
+        const sum = (status) =>
+          rows.filter((row) => row.status === status).reduce((total, row) => total + row.amount, 0);
+        document.getElementById("total-lines").textContent = rows.length;
+        document.getElementById("total-planned").textContent = money(sum("Planned"));
+        document.getElementById("total-approved").textContent = money(sum("Approved"));
+        document.getElementById("total-spent").textContent = money(sum("Spent"));
+        document.getElementById("rows").replaceChildren(
+          ...rows.map((row) => {
+            const tr = document.createElement("tr");
+            // Category hides on a phone so the table fits; the header cell carries the same class.
+            const cells = [
+              [row.item, ""],
+              [row.category, "hidden sm:table-cell"],
+              [money(row.amount), "text-right tabular-nums"],
+              [row.status, ""],
+            ];
+            for (const [value, className] of cells) {
+              const td = tr.insertCell();
+              td.textContent = value;
+              td.className = className;
+            }
+            const actions = tr.insertCell();
+            actions.className = "whitespace-nowrap text-right";
+            actions.append(
+              button("Edit", () => edit(row)),
+              button("Delete", () => remove(row)),
+            );
+            return tr;
+          }),
+        );
+      }
+
+      function button(label, onClick) {
+        const element = Object.assign(document.createElement("button"), { type: "button", textContent: label });
+        element.className = "btn btn-ghost btn-xs";
+        element.addEventListener("click", onClick);
+        return element;
+      }
+
+      async function save(message) {
+        render();
+        if (!store) return say(`${message} Open this page with Lavish to keep changes.`);
+        try {
+          await store.set("rows", rows);
+          say(message);
+        } catch (error) {
+          say(`Not saved: ${error.message}`);
+        }
+      }
+
+      function edit(row) {
+        editing = row.id;
+        // namedItem, because the elements collection has its own item() method.
+        for (const name of ["item", "category", "amount", "status"]) form.elements.namedItem(name).value = row[name];
+        document.getElementById("form-title").textContent = `Edit ${row.item}`;
+        document.getElementById("cancel").hidden = false;
+        form.elements.namedItem("item").focus();
+      }
+
+      function reset() {
+        editing = null;
+        form.reset();
+        document.getElementById("form-title").textContent = "Add a line";
+        document.getElementById("cancel").hidden = true;
+      }
+
+      function remove(row) {
+        rows = rows.filter((other) => other.id !== row.id);
+        if (editing === row.id) reset();
+        save(`Deleted ${row.item}.`);
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const values = Object.fromEntries(new FormData(form));
+        const line = { ...values, item: values.item.trim(), amount: Number(values.amount) || 0 };
+        if (editing) rows = rows.map((row) => (row.id === editing ? { ...row, ...line } : row));
+        else rows = [...rows, { id: Date.now().toString(36), ...line }];
+        reset();
+        save(`Saved ${line.item}.`);
+      });
+
+      document.getElementById("cancel").addEventListener("click", reset);
+
+      document.getElementById("download").addEventListener("click", async () => {
+        const cells = [
+          ["Item", "Category", "Amount", "Status"],
+          ...rows.map((row) => [row.item, row.category, row.amount, row.status]),
+        ];
+        const csv =
+          cells.map((line) => line.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n") +
+          "\n";
+        if (!window.lavish?.download) {
+          const link = Object.assign(document.createElement("a"), { download: "budget.csv" });
+          link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+          return link.click();
+        }
+        try {
+          await window.lavish.download("budget.csv", csv, "text/csv");
+          say("Saved budget.csv to your downloads.");
+        } catch (error) {
+          say(`Download failed: ${error.message}`);
+        }
+      });
+
+      try {
+        rows = (await store?.get("rows")) ?? EXAMPLE_ROWS;
+      } catch (error) {
+        rows = EXAMPLE_ROWS;
+        say(`Could not read saved lines: ${error.message}`);
+      }
+      render();
+    </script>
+  </body>
+</html>

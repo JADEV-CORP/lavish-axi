@@ -116,6 +116,10 @@ async function createChromeHarness({
   // plain-http page on a non-loopback host, which browsers refuse notification permission.
   /** @type {{ permission: string, secure?: boolean } | null} */
   background = null,
+  // Opt-in user activation: the chrome reads `navigator.userActivation.isActive`, which a click in
+  // the artifact frame also turns on. Tests flip `activation.isActive` to model one.
+  /** @type {{ isActive: boolean } | null} */
+  activation = null,
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -454,9 +458,11 @@ async function createChromeHarness({
           clipboardWrites.push(String(value));
         },
       },
+      ...(activation ? { userActivation: activation } : {}),
     },
     setTimeout: fakeSetTimeout,
     crypto: globalThis.crypto,
+    Blob: globalThis.Blob,
     URL: {
       createObjectURL() {
         return "blob:lavish-test";
@@ -11105,4 +11111,362 @@ test("a window that is not the artifact frame cannot set the tab", async () => {
     });
   }
   assert.equal(chrome.tab().title, "Plan \u00b7 Lavish");
+});
+
+// ---- Page apps (src/page-apps.js): the chrome relays the frame's requests to the server. ----
+
+function pageAppRequest(chrome, fields) {
+  chrome.sendFrameMessage({
+    type: "lavish:pageApp",
+    nonce: "doc-nonce",
+    artifact_load_token: chrome.artifactLoadToken(),
+    ...fields,
+  });
+}
+
+// Plain copies: the chrome runs in its own realm, so its objects have that realm's prototypes.
+function pageAppResults(chrome) {
+  return JSON.parse(JSON.stringify(chrome.postedToFrame.filter((message) => message.type === "lavish:pageAppResult")));
+}
+
+test("page storage requests reach the server as JSON and the answer goes back to the asking page", async () => {
+  const bodies = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/page-store")) {
+        bodies.push(init.body);
+        return { ok: true, json: async () => ({ keys: 1, bytes: 12 }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  pageAppRequest(chrome, { id: "r1", op: "store.set", key: "plan", json: '{"step":2}' });
+  await flushPromises();
+
+  assert.deepEqual(JSON.parse(bodies[0]), { op: "set", key: "plan", value: { step: 2 } });
+  assert.deepEqual(pageAppResults(chrome).at(-1), {
+    type: "lavish:pageAppResult",
+    id: "r1",
+    nonce: "doc-nonce",
+    ok: true,
+    value: { keys: 1, bytes: 12 },
+  });
+});
+
+test("the chrome refuses a bad storage request without calling the server", async () => {
+  let calls = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/page-store")) calls += 1;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  pageAppRequest(chrome, { id: "r1", op: "store.set", key: "", json: "1" });
+  pageAppRequest(chrome, { id: "r2", op: "store.set", key: "k", json: '1,"op":"list"' });
+  pageAppRequest(chrome, { id: "r3", op: "store.get", key: "a\nb" });
+  await flushPromises();
+  assert.equal(calls, 0);
+  assert.deepEqual(
+    pageAppResults(chrome).map((result) => [result.id, result.code]),
+    [
+      ["r1", "KEY_INVALID"],
+      ["r2", "VALUE_INVALID"],
+      ["r3", "KEY_INVALID"],
+    ],
+  );
+});
+
+test("a page-app request without an id or nonce, or from a stale load, gets no answer", async () => {
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  pageAppRequest(chrome, { id: "r1", op: "store.get", key: "k", nonce: "" });
+  pageAppRequest(chrome, { id: "x1", op: "store.get", key: "k" });
+  chrome.sendFrameMessage({ type: "lavish:pageApp", id: "r2", nonce: "n", op: "store.get", key: "k" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).length, 0);
+});
+
+test("a server refusal reaches the page with its code", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) =>
+      String(url).endsWith("/page-store")
+        ? { ok: false, status: 507, json: async () => ({ code: "STORE_FULL", error: "A page can store up to 5 MB." }) }
+        : { ok: true, json: async () => ({}) },
+  });
+  pageAppRequest(chrome, { id: "r4", op: "store.set", key: "k", json: '"v"' });
+  await flushPromises();
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "STORE_FULL");
+  assert.equal(result.error, "A page can store up to 5 MB.");
+});
+
+test("a page that floods store writes is told to slow down, and reads still pass", async () => {
+  let writes = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/page-store") && /"op":"(set|delete)"/.test(String(init.body))) writes += 1;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  for (let i = 0; i < 60; i += 1)
+    pageAppRequest(chrome, { id: "r" + (100 + i), op: "store.set", key: "k", json: String(i) });
+  pageAppRequest(chrome, { id: "r999", op: "store.get", key: "k" });
+  await flushPromises();
+  const results = pageAppResults(chrome);
+  const limited = results.filter((result) => result.code === "RATE_LIMITED");
+  // A burst of 40 passes; the bucket refills at 20 a second, so a fast loop of 60 loses most of the rest.
+  assert.ok(limited.length >= 10 && limited.length <= 20, String(limited.length));
+  assert.equal(writes, 60 - limited.length);
+  for (let i = 0; i < 10; i += 1) await flushPromises();
+  assert.equal(pageAppResults(chrome).find((result) => result.id === "r999")?.ok, true);
+});
+
+function askHarness(askResponse) {
+  const asks = [];
+  return {
+    asks,
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/asks")) {
+        asks.push(JSON.parse(init.body));
+        return askResponse;
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  };
+}
+
+const ASK_ACCEPTED = {
+  ok: true,
+  json: async () => ({ status: "asked", ask: { id: "ask-0000abcd", expires_at: "2026-11-26T10:05:00.000Z" } }),
+};
+
+test("a page question is sent at once and the agent reply that names it answers the page", async () => {
+  const { asks, fetchImpl } = askHarness(ASK_ACCEPTED);
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl });
+  pageAppRequest(chrome, {
+    id: "r1",
+    op: "ask",
+    question: "Which plan?",
+    context: "plans[2]: A,B",
+    timeout_ms: 60000,
+    attachments: [{ id: "f.pdf", name: "brief.pdf", path: "/etc/passwd" }],
+  });
+  await flushPromises();
+  assert.deepEqual(asks, [
+    {
+      question: "Which plan?",
+      context: "plans[2]: A,B",
+      timeout_ms: 60000,
+      attachments: [{ id: "f.pdf", name: "brief.pdf" }],
+    },
+  ]);
+  const waiting = pageAppResults(chrome).at(-1);
+  assert.equal(waiting.pending, true);
+  assert.equal(waiting.ask_id, "ask-0000abcd");
+  assert.equal(waiting.wait_ms, 75000);
+
+  // Another reply, then the one that names the question.
+  chrome.webSocket().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Earlier note done." }),
+  });
+  assert.equal(pageAppResults(chrome).length, 1);
+  chrome.webSocket().listeners.get("agent-reply")({
+    data: JSON.stringify({ role: "agent", text: "Plan B.", ask_id: "ask-0000abcd" }),
+  });
+  assert.deepEqual(pageAppResults(chrome).at(-1), {
+    type: "lavish:pageAppResult",
+    id: "r1",
+    nonce: "doc-nonce",
+    ok: true,
+    value: "Plan B.",
+  });
+});
+
+test("a page question the server refuses fails fast with the server's code", async () => {
+  const { fetchImpl } = askHarness({
+    ok: false,
+    status: 409,
+    json: async () => ({ code: "NO_AGENT", error: "No agent is listening to this page." }),
+  });
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "Which plan?" });
+  await flushPromises();
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.code, "NO_AGENT");
+  assert.equal(result.error, "No agent is listening to this page.");
+});
+
+test("a replaced, timed-out, or ended page question rejects with its own code", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: askHarness(ASK_ACCEPTED).fetchImpl,
+  });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "First?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.webSocket().listeners.get("ask-closed")({
+    data: JSON.stringify({ ask_id: "ask-0000abcd", status: "superseded" }),
+  });
+  assert.equal(pageAppResults(chrome).at(-1).code, "ASK_SUPERSEDED");
+
+  pageAppRequest(chrome, { id: "r2", op: "ask", question: "Second?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.runTimers(60000);
+  assert.equal(pageAppResults(chrome).at(-1).code, "ASK_TIMEOUT");
+
+  pageAppRequest(chrome, { id: "r3", op: "ask", question: "Third?", timeout_ms: 60000 });
+  await flushPromises();
+  chrome.webSocket().listeners.get("ended")({ data: "{}" });
+  assert.equal(pageAppResults(chrome).at(-1).code, "SESSION_ENDED");
+  pageAppRequest(chrome, { id: "r4", op: "ask", question: "Fourth?" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "SESSION_ENDED");
+});
+
+test("an answer that arrives in a chat-sync settles the page question too", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: askHarness(ASK_ACCEPTED).fetchImpl,
+  });
+  pageAppRequest(chrome, { id: "r1", op: "ask", question: "Which plan?" });
+  await flushPromises();
+  chrome.webSocket().listeners.get("chat-sync")({
+    data: JSON.stringify({ chat: [{ role: "agent", text: "Plan A.", ask_id: "ask-0000abcd" }], chat_revision: 9 }),
+  });
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, true);
+  assert.equal(result.value, "Plan A.");
+});
+
+// ---- Files in and out. ----
+
+function pickHarness() {
+  const uploads = [];
+  return {
+    uploads,
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).includes("/attachments?kind=file")) {
+        uploads.push({ url: String(url), body: init.body });
+        const name = decodeURIComponent(String(url).split("name=")[1] || "");
+        return { ok: true, json: async () => ({ attachment: { id: "a".repeat(64) + "." + name.split(".").pop() } }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  };
+}
+
+function openPicker(chrome) {
+  const input = chrome.document.body.children.find((child) => child.tagName === "INPUT");
+  assert.ok(input, "the chrome opened a file input");
+  assert.equal(input.clicked, true);
+  return input;
+}
+
+test("files.pick opens the chrome's own picker after a click and hands the page only names, sizes and ids", async () => {
+  const { uploads, fetchImpl } = pickHarness();
+  const activation = { isActive: true };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl, activation });
+  pageAppRequest(chrome, { id: "r1", op: "files.pick", accept: [".csv", "application/pdf"], multiple: true });
+  await flushPromises();
+  const input = openPicker(chrome);
+  assert.equal(input.accept, ".pdf,application/pdf,.csv,text/csv");
+  assert.equal(input.multiple, true);
+  assert.equal(pageAppResults(chrome).at(-1).pending, true);
+
+  input.files = [
+    { name: "q3.csv", size: 12, type: "text/csv" },
+    { name: "brief.pdf", size: 40, type: "application/pdf" },
+  ];
+  input.dispatch("change");
+  await flushPromises();
+  await flushPromises();
+  assert.deepEqual(
+    uploads.map((upload) => upload.url),
+    ["/api/abc/attachments?kind=file&name=q3.csv", "/api/abc/attachments?kind=file&name=brief.pdf"],
+  );
+  const result = pageAppResults(chrome).at(-1);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, [
+    { id: "a".repeat(64) + ".csv", name: "q3.csv", size: 12, type: "text/csv" },
+    { id: "a".repeat(64) + ".pdf", name: "brief.pdf", size: 40, type: "application/pdf" },
+  ]);
+  assert.equal(input.parentElement, null, "the picker input is gone once the reviewer chose");
+});
+
+test("files.pick needs a click, refuses types Lavish cannot take, and resolves empty on cancel", async () => {
+  const { uploads, fetchImpl } = pickHarness();
+  const activation = { isActive: false };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", fetchImpl, activation });
+  pageAppRequest(chrome, { id: "r1", op: "files.pick" });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "NEEDS_CLICK");
+
+  activation.isActive = true;
+  pageAppRequest(chrome, { id: "r2", op: "files.pick", accept: [".exe", "video/*"] });
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "FILE_TYPE");
+
+  pageAppRequest(chrome, { id: "r3", op: "files.pick", accept: ["image/*"] });
+  await flushPromises();
+  const input = openPicker(chrome);
+  assert.equal(input.accept, ".png,image/png,.jpg,image/jpeg,.jpeg,.webp,image/webp");
+  input.files = [{ name: "notes.txt", size: 5, type: "text/plain" }];
+  input.dispatch("change");
+  await flushPromises();
+  assert.equal(pageAppResults(chrome).at(-1).code, "FILE_TYPE");
+
+  pageAppRequest(chrome, { id: "r4", op: "files.pick" });
+  await flushPromises();
+  openPicker(chrome).dispatch("cancel");
+  await flushPromises();
+  assert.deepEqual(pageAppResults(chrome).at(-1).value, []);
+  assert.equal(uploads.length, 0);
+});
+
+test("download saves through the chrome only after a click, with a clean name and a bounded size", async () => {
+  const activation = { isActive: true };
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", activation });
+  const bytes = new TextEncoder().encode("a,b\n1,2\n").buffer;
+  pageAppRequest(chrome, { id: "r1", op: "download", name: "q3/report.csv", mime: "text/csv", bytes });
+  await flushPromises();
+  const link = chrome.document.body.lastAppendedChild;
+  assert.equal(link.download, "q3_report.csv");
+  assert.equal(link.href, "blob:lavish-test");
+  assert.equal(link.clicked, true);
+  assert.deepEqual(pageAppResults(chrome).at(-1).value, { name: "q3_report.csv", bytes: 8 });
+
+  pageAppRequest(chrome, { id: "r2", op: "download", name: "...", bytes });
+  pageAppRequest(chrome, { id: "r3", op: "download", name: "x.bin", bytes: "not bytes" });
+  pageAppRequest(chrome, { id: "r4", op: "download", name: "big.bin", bytes: new ArrayBuffer(50 * 1024 * 1024 + 1) });
+  activation.isActive = false;
+  pageAppRequest(chrome, { id: "r5", op: "download", name: "late.csv", bytes });
+  await flushPromises();
+  assert.deepEqual(
+    pageAppResults(chrome)
+      .slice(-4)
+      .map((result) => result.code),
+    ["NAME_INVALID", "INVALID", "TOO_LARGE", "NEEDS_CLICK"],
+  );
+});
+
+test("a sent note shows a picked document as a named chip, never as a thumbnail", async () => {
+  const chrome = await createChromeHarness({
+    sessionData: {
+      ...defaultSessionData,
+      initialChat: [
+        {
+          role: "user",
+          kind: "annotation",
+          text: "Use this brief",
+          attachments: [{ id: "b".repeat(64) + ".pdf", name: "brief.pdf" }],
+        },
+      ],
+    },
+  });
+  const html = chrome.element("chatLog").children[0].innerHTML;
+  assert.match(html, /class="bubble-file" title="brief.pdf"/);
+  assert.doesNotMatch(html, /<img class="bubble-attachment"/);
 });

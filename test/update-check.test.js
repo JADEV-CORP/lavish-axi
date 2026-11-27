@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -91,11 +93,55 @@ test("an older or equal published version never claims an update", async () => {
   assert.equal(checker.current(), null);
 });
 
-test("the server's checker can be turned off, and needs a semver version to compare", () => {
-  assert.equal(defaultUpdateChecker({ currentVersion: "1.0.0", env: { LAVISH_AXI_UPDATE_CHECK: "0" } }), null);
-  assert.equal(defaultUpdateChecker({ currentVersion: "1.0.0", env: { LAVISH_AXI_UPDATE_CHECK: "off" } }), null);
-  assert.equal(defaultUpdateChecker({ currentVersion: "nightly", env: {} }), null);
-  const checker = defaultUpdateChecker({ currentVersion: "1.0.0", env: {} });
+test("turning the check off on a running checker stops the next fetch", async () => {
+  let on = true;
+  let fetches = 0;
+  let asked = 0;
+  const seen = [];
+  // Waits for a condition instead of a fixed time, so a slow runner only makes the test longer.
+  const until = async (done) => {
+    const deadline = Date.now() + 10_000;
+    while (!done()) {
+      assert.ok(Date.now() < deadline, "timed out waiting for the checker");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const checker = createUpdateChecker({
+    currentVersion: "1.0.0",
+    read: async () => {
+      fetches += 1;
+      return "1.1.0";
+    },
+    enabled: () => {
+      asked += 1;
+      return on;
+    },
+    firstCheckMs: 1,
+    intervalMs: 5,
+  });
+  checker.start((update) => seen.push(update));
+  await until(() => checker.current()?.version === "1.1.0");
+
+  on = false;
+  await until(() => seen.at(-1) === null);
+  // Let three more checks run while it is off: each asks the policy first and must not fetch.
+  const fetchesWhenOff = fetches;
+  const askedWhenOff = asked;
+  await until(() => asked >= askedWhenOff + 3);
+  checker.stop();
+  assert.equal(fetches, fetchesWhenOff, "no fetch once the policy is off");
+  assert.equal(checker.current(), null, "a pending notice is dropped");
+});
+
+test("the server's checker can be turned off, and needs a semver version to compare", async (t) => {
+  // An empty state directory, so a policy file on the machine running the tests cannot change the result.
+  const stateDir = await mkdtemp(path.join(tmpdir(), "lavish-update-check-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const check = (currentVersion, env) => defaultUpdateChecker({ currentVersion, env, stateDir });
+  assert.equal(check("1.0.0", { LAVISH_AXI_UPDATE_CHECK: "0" }), null);
+  assert.equal(check("1.0.0", { LAVISH_AXI_UPDATE_CHECK: "off" }), null);
+  assert.equal(check("nightly", {}), null);
+  const checker = check("1.0.0", {});
   assert.equal(typeof checker?.start, "function");
   checker?.stop();
 });

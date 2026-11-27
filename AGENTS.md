@@ -52,6 +52,7 @@ Each line is the rule. [docs/invariants.md](docs/invariants.md) has the failure 
 - Live-event WebSockets keep the ping/pong heartbeat so half-open sockets terminate. Idle self-shutdown keys off tracked live connections, not session status. [Process model](docs/invariants.md#process-model).
 - The detached server entrypoint logs `uncaughtException` and exits 1 explicitly. Each listener keeps its `error` handler after `listening`. [Process model](docs/invariants.md#process-model).
 - `/api/:key/prompts`, `/share`, whiteboard writes, and attachment upload/delete are same-origin guarded. The key alone must never queue a prompt or publish. [Request flow](docs/invariants.md#request-flow).
+- Version restore, gallery pins and gallery reopen are same-origin guarded. A version view carries no SDK and keeps its `sandbox` CSP. Versions are read only under their own page key. [Versions and gallery](docs/invariants.md#versions-and-gallery-jadev-fork).
 - Poll control `GET` and `POST` requests reject a present foreign Origin or Referer while header-less CLI requests keep working. [Request flow](docs/invariants.md#request-flow).
 - The chrome page (`/session/:key`) answers `X-Frame-Options: DENY` and `frame-ancestors 'none'`. Keep that header off `/artifact/*` and `/whiteboard-frame`, which are framed. [Request flow](docs/invariants.md#request-flow).
 - The artifact route injects only the one SDK `<script>` tag. Served artifact bytes otherwise match the file on disk. [Request flow](docs/invariants.md#request-flow).
@@ -129,6 +130,9 @@ Each line is the rule. [docs/invariants.md](docs/invariants.md) has the failure 
 - Self-paint stays a warning. Never block open and never auto-repair. [Things to know when editing](docs/invariants.md#things-to-know-when-editing).
 - The layout audit fails open. An empty completed pass means repaired. A failed run publishes `complete: false` and no findings. [Things to know when editing](docs/invariants.md#things-to-know-when-editing).
 - The layout audit is severe-only. Scroll dimensions alone are never proof, diagram surfaces are excluded, and a finding needs the same severe root in two samples. [Things to know when editing](docs/invariants.md#things-to-know-when-editing).
+
+- Page apps go SDK to chrome to server, validated at each hop. `/api/:key/page-store` and `/api/:key/asks` are same-origin guarded, page data never enters `state.json`, picked documents are never served back, and download and files.pick need user activation. [Page apps](docs/invariants.md#page-apps-jadev-fork).
+- Starter pages (`lavish new`) are plain HTML in `src/starters/`. Their `<head>` keeps the `<!-- lavish:design -->` marker, they use theme colors only, and they load nothing beyond the design snippet. `test/page-starters.test.js` checks each one.
 
 ## Maintaining this file
 

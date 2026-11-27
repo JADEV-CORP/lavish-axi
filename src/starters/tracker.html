@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en" data-theme="lavish-auto" data-lavish-annotate="off">
+  <!--
+    Tracker page, made by `lavish new tracker`.
+    Purpose: a checklist the reader ticks off over days, with a button to ask the agent for help.
+    How it works: the items live in window.lavish.store under the key "items", so they survive
+    reloads and server restarts; the agent reads them with `lavish data <this file>`.
+    Ask sends the question and the list to the agent through window.lavish.ask and shows the reply.
+    The agent sees it in `lavish poll` as a prompt tagged "ask" and answers with
+    `lavish reply <this file> --ask <ask_id> --agent-reply "..."`. With no agent listening, the page says so.
+    To edit: change the title and EXAMPLE_ITEMS. Then run `lavish <this file>`.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Launch checklist</title>
+    <!-- lavish:design -->
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <main class="mx-auto max-w-2xl space-y-10 px-6 py-12">
+      <header class="space-y-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Tracker</p>
+        <h1 class="text-3xl font-semibold tracking-tight text-balance">Launch checklist</h1>
+        <p class="max-w-prose text-lg text-base-content/70">
+          Tick items as you finish them. The list is kept with this page.
+        </p>
+      </header>
+
+      <section class="space-y-4">
+        <div class="space-y-2">
+          <p class="text-sm text-base-content/70" id="progress-text">0 of 0 done</p>
+          <progress class="progress progress-primary w-full" id="progress" value="0" max="1"></progress>
+        </div>
+        <ul class="divide-y divide-base-300 border border-base-300" id="items"></ul>
+        <form class="flex gap-2" id="add">
+          <label class="sr-only" for="new-item">New item</label>
+          <input id="new-item" name="text" class="input min-w-0 flex-1" placeholder="Add an item" required />
+          <button type="submit" class="btn">Add</button>
+        </form>
+        <p class="text-sm text-base-content/70" id="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="card card-border bg-base-100">
+        <form class="card-body gap-3" id="ask">
+          <h2 class="card-title text-base">Ask the agent</h2>
+          <p class="text-sm text-base-content/70">
+            The agent gets your question and the list, and its reply shows here.
+          </p>
+          <label class="sr-only" for="question">Question</label>
+          <textarea id="question" name="question" rows="2" class="textarea w-full">
+Which open item should I do next, and why?</textarea
+          >
+          <div class="card-actions justify-end">
+            <button type="submit" class="btn btn-primary" id="ask-button">Ask</button>
+          </div>
+          <div
+            class="border border-base-300 bg-base-200 p-4 text-sm whitespace-pre-wrap"
+            id="answer"
+            aria-live="polite"
+            hidden
+          ></div>
+        </form>
+      </section>
+    </main>
+
+    <script type="module">
+      const EXAMPLE_ITEMS = [
+        { id: "t1", text: "Write the release notes", done: true },
+        { id: "t2", text: "Check sign-up on a phone", done: true },
+        { id: "t3", text: "Back up the database", done: false },
+        { id: "t4", text: "Update the help pages", done: false },
+        { id: "t5", text: "Tell support what changed", done: false },
+      ];
+      // What the page shows when an ask fails. Every error carries a code; these are the common ones.
+      const ASK_ERRORS = {
+        NO_AGENT: "No agent is listening right now. Ask your agent to run lavish poll on this page, then try again.",
+        ASK_TIMEOUT: "The agent did not answer in time. Try again when it is back.",
+        ASK_BUSY: "A question is already waiting for an answer.",
+        ASK_SUPERSEDED: "A newer question from another tab replaced this one.",
+      };
+      const store = window.lavish?.store;
+      const say = (text) => (document.getElementById("status").textContent = text);
+      let items = [];
+
+      function render() {
+        const done = items.filter((item) => item.done).length;
+        document.getElementById("progress-text").textContent = `${done} of ${items.length} done`;
+        Object.assign(document.getElementById("progress"), { value: done, max: Math.max(items.length, 1) });
+        document.getElementById("items").replaceChildren(
+          ...items.map((item) => {
+            const li = document.createElement("li");
+            li.className = "flex items-center gap-3 px-4 py-3";
+            const label = document.createElement("label");
+            label.className = "flex min-w-0 flex-1 cursor-pointer items-center gap-3";
+            const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: item.done });
+            box.className = "checkbox checkbox-primary checkbox-sm";
+            box.addEventListener("change", () =>
+              update(items.map((other) => (other.id === item.id ? { ...other, done: box.checked } : other))),
+            );
+            const text = Object.assign(document.createElement("span"), { textContent: item.text });
+            if (item.done) text.className = "text-base-content/50 line-through";
+            label.append(box, text);
+            const remove = Object.assign(document.createElement("button"), { type: "button", textContent: "Remove" });
+            remove.className = "btn btn-ghost btn-xs";
+            remove.addEventListener("click", () => update(items.filter((other) => other.id !== item.id)));
+            li.append(label, remove);
+            return li;
+          }),
+        );
+      }
+
+      async function update(next) {
+        items = next;
+        render();
+        if (!store) return say("Open this page with Lavish to keep changes.");
+        try {
+          await store.set("items", items);
+          say("");
+        } catch (error) {
+          say(`Not saved: ${error.message}`);
+        }
+      }
+
+      document.getElementById("add").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const input = document.getElementById("new-item");
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = "";
+        update([...items, { id: Date.now().toString(36), text, done: false }]);
+      });
+
+      document.getElementById("ask").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const question = document.getElementById("question").value.trim();
+        const answer = document.getElementById("answer");
+        const button = document.getElementById("ask-button");
+        if (!question) return;
+        answer.hidden = false;
+        if (!window.lavish?.ask) {
+          answer.textContent = "Open this page with Lavish to ask the agent.";
+          return;
+        }
+        button.disabled = true;
+        answer.textContent = "Waiting for the agent...";
+        const open = items.filter((item) => !item.done).map((item) => item.text);
+        const done = items.filter((item) => item.done).map((item) => item.text);
+        try {
+          answer.textContent = await window.lavish.ask(question, { data: { open, done } });
+        } catch (error) {
+          answer.textContent = ASK_ERRORS[error.code] || `The agent could not answer: ${error.message}`;
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      try {
+        items = (await store?.get("items")) ?? EXAMPLE_ITEMS;
+      } catch (error) {
+        items = EXAMPLE_ITEMS;
+        say(`Could not read the saved list: ${error.message}`);
+      }
+      render();
+    </script>
+  </body>
+</html>

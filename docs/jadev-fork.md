@@ -5,7 +5,12 @@
 This repository is Jadev's fork of [kunchenguid/lavish-axi](https://github.com/kunchenguid/lavish-axi). It carries the
 redesigned review chrome (shadcn/ui preset b50eA1ekc, resizable and movable conversation panel, Peek, the AI Elements
 chat, transitions.dev motion, note pins, the command palette, revision outlines) and the Lavish design default for
-artifacts. Upstream behaviour is otherwise unchanged.
+artifacts.
+
+From 1.1 a page is more than a review: it is your own local Artifact. It can start from a template, remember what the
+reader enters, ask the agent and wait for the reply, take files and save them, and keep every version. The gallery lists
+every page. Everything stays on this machine, in the state directory. [Pages that do more](#pages-that-do-more) covers
+these. Upstream behaviour is otherwise unchanged.
 
 ## Package and versions
 
@@ -169,6 +174,177 @@ sets `TERM_PROGRAM=vscode` whoever types in it: add `"LAVISH_AXI_OPEN": "panel"`
 five real options with IDs and fit scores, Go / Maybe / No on each with a note, an open "Something else?" question, and
 numbered rounds that open with what changed.
 
+## Pages that do more
+
+These four parts turn a page into a small app the reader comes back to:
+
+- [Templates](#templates): `lavish new <type>` starts a decision, brainstorm, dashboard, report, tracker or deck.
+- [Page apps](#page-apps): the page stores data, asks the agent, takes files and saves them, through `window.lavish`.
+- [Versions](#versions): every saved change is kept, and any version can be viewed, compared or restored.
+- [Gallery](#gallery): the server's root URL lists every page, with its status.
+
+## Templates
+
+`lavish new <type> [file]` writes a ready page, so the agent fills in a page instead of starting from a blank file. Each
+type is example content in the Lavish design, already wired to what Lavish adds, with a comment at the top that says
+what each part does.
+
+| Type         | For                                  | Wired to                                                           |
+| ------------ | ------------------------------------ | ------------------------------------------------------------------ |
+| `decision`   | A few questions answered in one pass | One card per question, Queue all and notes                         |
+| `brainstorm` | Options weighed over rounds          | The brainstorm playbook: diagram slot, IDs, Go / Maybe / No, round |
+| `dashboard`  | Records the reader adds to and edits | `store`, an add and edit form, a CSV through `download`            |
+| `report`     | What happened and what it means      | Summary, key numbers, sections, a diagram slot, sources            |
+| `tracker`    | A checklist kept over days           | `store`, and an Ask button through `ask` that explains `NO_AGENT`  |
+| `slides`     | A short talk, one idea per slide     | Arrow keys, Page Up and Down, Space, Home and End                  |
+
+The file defaults to `.lavish/<type>-<date>.html` in the current folder. An existing file is never replaced unless
+`--force` is passed. `lavish new` alone lists the types. `lavish design`, `lavish --help` and the playbooks point
+agents here; `lavish design --template` stays for a page no type fits.
+
+The pages are plain HTML in `src/starters/`, copied to `dist/starters/` by the build. Each `<head>` holds a
+`<!-- lavish:design -->` marker that becomes the design snippet when the page is written, so the CDN versions and the
+theme have one source. A page opened without Lavish still works: storage then lasts until the tab closes, and Ask says
+it needs Lavish. `test/page-starters.test.js` checks every page for the snippet, theme colors only, no remote images, and
+its wiring.
+
+## Page apps
+
+A page can do more than collect review notes. Four calls on `window.lavish` turn it into a small local app,
+and everything stays on this machine. The frame never talks to the server: the SDK asks the chrome, the chrome
+checks the request and forwards it, and the server checks it again. Each call returns a Promise that rejects
+with an `Error` whose `code` the page can show or branch on. When no chrome answers within 15 seconds, the
+call rejects with `UNAVAILABLE`. A page opened without Lavish has no `window.lavish`, so check for it first.
+
+- **Storage.** `store.get(key)`, `store.set(key, value)`, `store.delete(key)` and `store.list(prefix?)` keep JSON
+  per page file in the state directory (`page-data/<key>.json`, owner-only). Data survives reloads and server
+  restarts. Keys are 1 to 256 characters without control characters; one value is at most 1 MB of JSON; a page
+  holds at most 5 MB and 10,000 keys. `get` resolves `undefined` for a missing key, `delete` resolves whether
+  the key existed, `list` resolves the sorted keys. Codes: `KEY_INVALID`, `VALUE_INVALID`, `VALUE_TOO_LARGE`,
+  `STORE_FULL`, and `RATE_LIMITED` past 20 writes a second (bursts of 40 pass). `lavish data <page>` prints what a page stored (`--json` for one JSON document), and
+  `lavish data <page> --clear --yes` deletes it; `--clear` alone only reports what would go.
+- **Ask the agent.** `ask(question, { data, timeoutMs, attachments })` sends the question at once as a prompt
+  tagged `ask`, shows it in the conversation, and resolves with the text of the agent reply that answers it.
+  Poll hands the agent `target.ask_id` and `target.expires_at`; the agent answers with
+  `lavish reply <page> --ask <id> --agent-reply "..."` (or `poll --ask`). A reply without `--ask` answers the
+  oldest question the agent has received, never one it has not seen yet. With no agent listening the call
+  rejects at once with `NO_AGENT`. One question at a time per page (`ASK_BUSY`); a newer question from another
+  tab or after a reload replaces the open one (`ASK_SUPERSEDED`). The wait is 5 minutes by default, 10 seconds
+  to 30 minutes (`ASK_TIMEOUT`), and at most 6 questions a minute (`RATE_LIMITED`). An expired or replaced
+  question is not handed to the agent, and `reply --ask` on it posts nothing (`ASK_CLOSED`). The question is
+  at most 4,000 characters; `data` goes to the agent as TOON, up to 64 KB. Ending the review rejects it with
+  `SESSION_ENDED`.
+- **Files in.** `files.pick({ accept, multiple })`, called from a click, opens the browser's file picker in the
+  chrome. The chosen files go to the attachment store with its limits (10 MB a file, 20 per prompt by default);
+  the page receives `{ id, name, size, type }` and never the bytes. It passes them on with
+  `queuePrompt(text, { attachments: files })` or `ask(question, { attachments: files })`, and the agent gets
+  each file's local `path`. Besides PNG, JPEG and WebP, a picked file may be a PDF (checked by its bytes) or
+  UTF-8 text (`.txt`, `.csv`, `.md`, `.json`). Documents are never served back over HTTP. Cancelling resolves
+  `[]`. Codes: `NEEDS_CLICK`, `FILE_TYPE`, `FILE_TOO_LARGE`, `TOO_MANY`, `UPLOAD_FAILED`.
+- **Files out.** `download(name, content, type?)` saves a string, a `Blob` or bytes through the browser's own
+  save flow. The sandboxed frame may not download, so the chrome saves it, and only right after a click
+  (`NEEDS_CLICK`). Names lose path separators and characters Windows refuses, up to 200 characters
+  (`NAME_INVALID`); a download is at most 50 MB (`TOO_LARGE`).
+
+The helpers live in `src/page-apps.js` (SDK side and shared limits), `src/page-store.js`, `src/page-asks.js`,
+and `handlePageAppRequest` in `src/chrome-client.js`. The input playbook shows each call in a page.
+
+## Versions
+
+Every saved change of a page's HTML becomes a version, kept on this machine. Lavish records one when the page is
+opened, each time the file watcher reports a save, and before and after a restore. A save that leaves the bytes
+unchanged adds nothing.
+
+In the review, **More > Versions** (or **Show versions** in the command palette) opens the panel. It lists every
+version with its time, size, size change and one line on what changed: lines changed, added or removed, and the first
+text that changed. Pick one to view it read-only. **Compare** diffs it against any other version, by the text the page
+shows or by its HTML, with the changed words marked. **Restore** asks first, then writes that version back to the page
+file. The open review reloads, and the restore is saved as a new version, so the state it replaced stays in the list.
+A restore does not mark delivered notes Working: that save is the reviewer's, not the agent's.
+
+Agents use the CLI:
+
+```sh
+lavish versions plan.html               # newest first: number, time, size, change, summary
+lavish versions plan.html --show 3      # version 3's HTML, exactly
+lavish versions plan.html --show 3 --out /tmp/plan-v3.html
+lavish versions plan.html --restore 3   # only when the user asks for an earlier state
+```
+
+`versions` needs no running server. Listing also records the page as it is now when that state is new.
+
+Storage lives in the state directory, one folder per page key:
+
+- `versions/<key>/index.json` lists the versions oldest first: number, sha256, time, size, stored size, source
+  (`open`, `save`, `restore` or `cli`), the restored version's number and the change summary. It never holds the page
+  path.
+- `versions/<key>/<sha256>.html.gz` holds each distinct content once, gzipped. Going back to earlier content adds a
+  version and no bytes. A read checks the sha256 and refuses a damaged object.
+- Folders are `0700`, files `0600`. `index.json` is replaced by write and rename, so a crash leaves the old list.
+
+Limits: 50 versions per page (`LAVISH_AXI_VERSIONS_MAX`), 25 MB of stored objects per page
+(`LAVISH_AXI_VERSIONS_MAX_MB`), and no version for a save over 10 MB. The oldest go first; the newest always stays.
+`LAVISH_AXI_VERSIONS=0` stops recording; stored versions still list, show and restore.
+
+What versions do not cover: images, styles and scripts beside the page are not versioned. A version renders with the
+page's current assets. Text a script builds at runtime is not in the text diff; the HTML diff shows its source. Saves
+made while Lavish was not watching the page are kept as one version the next time it opens.
+
+A version renders from `/api/<key>/versions/<n>/view` with a `<base>` pointing at the page's folder, no SDK, and the
+CSP `sandbox allow-scripts; frame-ancestors 'self'`. Restore is same-origin guarded like `/prompts`, refuses an ended
+review, and never writes through a symlink swapped in after the page was opened.
+
+## Gallery
+
+The server's root URL (`/`, also `/gallery`) lists every page this machine opened in Lavish: title, project folder,
+path with `~` for the home folder, last change, and status. **Waiting for you** means the page waits for the reviewer,
+**Answered** means the reviewer sent something the agent has not answered, **Ended** means the review was closed. A
+green dot means the agent is listening. Search matches titles, folders and paths; `/` focuses it. The status filters
+show counts. Pins put pages at the top and live in `gallery-pins.json` in the state directory. One click opens a page;
+an ended review reopens first, which is the reviewer's explicit opt-in.
+
+`lavish gallery` opens it in the browser. A person who runs `lavish` alone at a terminal also gets it opened: both
+ends must be a TTY, with no agent harness (`CLAUDECODE`, `CODEX_*`, T3 Code), no `CI` and no `LAVISH_AXI_NO_OPEN`.
+Agents still get the home output and nothing opens for them.
+
+The gallery reads `state.json` and the first 16 KB of each page for its `<title>`, cached by modification time, so a
+gallery of hundreds of pages costs one stat per page after the first load. Rows render once and filter by toggling
+`hidden`. It follows the same host rules as review pages; full paths are not sent, only `~` paths. Pin and reopen are
+same-origin guarded, and the page answers `X-Frame-Options: DENY`.
+
+The Versions panel and the gallery ship as their own files (`src/versions-client.js`, `src/versions.css`,
+`src/gallery-client.js`, `src/gallery.css`), served from a fixed allowlist under `/lavish-assets/`. The Versions
+script reaches `chrome-client.js` only through `window.setLayerOpen`, `window.closeMenus` and the `lavish:versions`
+document event.
+
+## Machine policy
+
+A company can switch off page sharing and the npm update check for a user:
+
+```
+lavish policy --share off --update-check off
+```
+
+`lavish policy` with no flag prints the current state, `--json` prints it as JSON, and `--share on` or `--update-check on` turns a switch back on. A switch you do not name keeps its value.
+
+The policy is a file, `policy.json`, in the state directory (`~/.lavish-axi`, or `LAVISH_AXI_STATE_DIR`). It is written through a temporary file and a rename. On macOS and Linux it has mode 0600; on Windows the permissions of the user profile apply.
+
+The policy applies per user, not per machine: run `lavish policy` as each user. It is a guardrail against publishing by accident, not a lock. Any user can change their own policy, and the refusal tells an agent not to.
+
+```json
+{ "share": false, "updateCheck": false }
+```
+
+- Both switches default to on. No file means both are on.
+- `false`, `"off"`, `"false"` and `0` turn a switch off. A switch missing from the file stays on.
+- The file fails closed. If it cannot be parsed or a value is not a switch, both switches are off and `lavish policy` reports `source: invalid`. A file written by Windows PowerShell 5.1 starts with a BOM, which is ignored. Fix it by running `lavish policy` with both flags again.
+
+**Share off.** `lavish share` stops with `SHARE_DISABLED` before it reads the page or contacts ht-ml.app. This includes republish and unpublish. In the review window, `POST /api/:key/share` answers 403 with the same code, **Publish link** is left out of the More menu, and the command palette has no publish entry. The server reads the policy on every request, so a change applies to windows already open after they reload.
+
+**Update check off.** The server does not ask npm for a newer version, and the **Update** button never appears. `LAVISH_AXI_UPDATE_CHECK=0` still works on its own. The policy is read before every check, so a running server stops checking without a restart.
+
+The code is in `src/policy.js`. Tests are in `test/policy.test.js` and `test/cli-policy.test.js`.
+
 ## Polls survive a server restart
 
 A newer CLI replacing the server, `lavish stop`, or a Tailscale address change all restart the server. A poll
@@ -224,8 +400,11 @@ pnpm run check
 Resolve conflicts in favour of upstream behaviour unless the fork deliberately changed it; the fork's changes are in
 `src/chrome.css`, `src/chrome-client.js`, `src/server.js` (chrome markup), `src/artifact-sdk.js` (pins, outlines,
 palette hotkey), `src/design-reference.js`, `src/whiteboard-frame.css` (the whiteboard header and Excalidraw
-accent on the chrome palette and preset), and their tests. Bump the minor version, name the new upstream base in
-`CHANGELOG.md`, open a PR into `main`, and release it with a tag once it merges.
+accent on the chrome palette and preset), the page app files (`src/page-apps.js`, `src/page-store.js`,
+`src/page-asks.js`), the versions and gallery files (`src/version-*.js`, `src/versions*`, `src/gallery*`), the
+templates (`src/page-starters.js`, `src/starters/`), and their tests. Upstream's root page was a short status card;
+here `/` is the gallery. Bump the minor version, name the new upstream base in `CHANGELOG.md`, open a PR into `main`,
+and release it with a tag once it merges.
 
 ## Hidden files are not served
 

@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer, get as httpGet } from "node:http";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
@@ -45,6 +45,8 @@ import * as mermaidNode from "./mermaid-node.js";
 import * as queueAll from "./queue-all.js";
 import * as tableCellHelpers from "./table-cell.js";
 import * as toonEncode from "./toon-encode.js";
+import * as pageApps from "./page-apps.js";
+import { createPageStore, pageStoreError } from "./page-store.js";
 import { extractMermaidSources, whiteboardSourceHash } from "./mermaid-source.js";
 import { createExcalidrawLibraryCache, excalidrawLibrariesDir } from "./whiteboard-library-store.js";
 import { parseLibraryIconDirectives } from "./whiteboard-libraries.js";
@@ -88,9 +90,33 @@ import {
   resolveAllowedArtifactFile,
 } from "./artifact-path.js";
 import { canonicalFile, SessionStore, sessionKey } from "./session-store.js";
+import {
+  isValidVersionKey,
+  parseVersionId,
+  resolveVersionLimits,
+  VersionStore,
+  versionsRoot,
+} from "./version-store.js";
+import {
+  buildDiffRows,
+  formatByteDelta,
+  formatBytes,
+  htmlSourceLines,
+  htmlToTextLines,
+  versionSummaryText,
+} from "./version-diff.js";
+import {
+  buildGalleryEntries,
+  createGalleryHtml,
+  createPageHeadReader,
+  GalleryPins,
+  isValidGalleryKey,
+} from "./gallery.js";
 import { AsyncMutex } from "./async-mutex.js";
+import { readPolicy, SHARE_DISABLED_MESSAGE } from "./policy.js";
 import { generateSharePassword } from "./share-password.js";
 import {
+  ACCEPTED_FILE_TYPES,
   ACCEPTED_IMAGE_MIME,
   isValidAttachmentKey,
   removeAttachment,
@@ -131,6 +157,19 @@ const chromeFontUrls = Object.fromEntries(
     },
   ]),
 );
+
+// The Versions panel and the gallery ship as their own files beside the chrome (Jadev fork). A fixed
+// allowlist, like the fonts: the route never resolves a path the request names.
+const lavishAssetUrls = {
+  "versions-client.js": { url: new URL("./versions-client.js", import.meta.url), type: "application/javascript" },
+  "versions.css": { url: new URL("./versions.css", import.meta.url), type: "text/css" },
+  "gallery-client.js": { url: new URL("./gallery-client.js", import.meta.url), type: "application/javascript" },
+  "gallery.css": { url: new URL("./gallery.css", import.meta.url), type: "text/css" },
+};
+// A saved version renders read-only: scripts run so script-built pages still draw, but in an opaque
+// origin with no forms, popups or downloads, and only inside a Lavish page.
+const VERSION_VIEW_CONTENT_SECURITY_POLICY = "sandbox allow-scripts; frame-ancestors 'self'";
+const VERSION_DIFF_CACHE_MAX = 16;
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const WHITEBOARD_CHANNEL_TOKEN_TTL_MS = 5 * 60_000;
@@ -393,6 +432,20 @@ export async function serve({
   let tailscaleRecoveryTimer = null;
   const app = express();
   const store = new SessionStore(stateFile);
+  // Page versions and gallery pins live beside state.json (src/version-store.js, src/gallery.js).
+  const versionStore = new VersionStore(versionsRoot(path.dirname(stateFile)), resolveVersionLimits(env));
+  const galleryPins = new GalleryPins(path.dirname(stateFile));
+  const readPageHead = createPageHeadReader(extractArtifactHead);
+  // The home folder as written and as its real path: session files are real paths.
+  const galleryHomes = await realpath(homedir())
+    .then((real) => [...new Set([homedir(), real])])
+    .catch(() => [homedir()]);
+  // The hash a reviewer's Restore just wrote, per page. The save it causes is the reviewer's, not
+  // the agent acting on feedback, so it must not stamp Working (docs/delivery-acks.md).
+  /** @type {Map<string, string>} */
+  const reviewerRestores = new Map();
+  /** @type {Map<string, any>} */
+  const versionDiffCache = new Map();
   const events = new EventEmitter();
   const watchers = new Map();
   const activePolls = new Map();
@@ -401,6 +454,10 @@ export async function serve({
   // The agent normally polls again within seconds, so presence says "between rounds" and the editor
   // waits a moment before calling it gone. A new poll clears it.
   const betweenRounds = new Set();
+  // When each of those rounds ended. A page question (POST /api/:key/asks) counts a session between
+  // rounds as listened to only this long, the same grace the editor gives before it says the agent
+  // is gone.
+  const roundEndedAt = new Map();
   // The last agent a poll reported for each session, kept after the poll ends so replies keep
   // their name. In memory only: a restarted server learns it again from the next poll.
   const agentIds = new Map();
@@ -448,6 +505,21 @@ export async function serve({
   // few boards.
   events.on("reload", (key) => {
     broadcastLiveEvent("reload", key);
+    void handleArtifactSaved(key);
+  });
+
+  async function handleArtifactSaved(key) {
+    // Every saved change becomes a version (Jadev fork). A failure costs that version, never the
+    // reload or the Working stamp.
+    let restoredByReviewer = false;
+    try {
+      const outcome = await trackVersionWrite(recordArtifactVersion(key, "save"));
+      restoredByReviewer = Boolean(outcome?.hash) && reviewerRestores.get(key) === outcome.hash;
+    } catch (error) {
+      writeLog(`[lavish] version after save failed: ${error?.message || error}`);
+    }
+    reviewerRestores.delete(key);
+    if (restoredByReviewer) return;
     // Working (docs/delivery-acks.md): a save after a delivery is the agent acting on what it was
     // handed. The store writes nothing when no delivered, unanswered note exists.
     store
@@ -456,7 +528,35 @@ export async function serve({
         if (session) events.emit("chat-sync", key, session);
       })
       .catch((error) => writeLog(`[lavish] working stamp after reload failed: ${error?.message || error}`));
-  });
+  }
+
+  // Records the page's current HTML as its newest version. The store skips content equal to the
+  // newest version, so the open paths can call this on every open.
+  async function recordArtifactVersion(key, source) {
+    if (shuttingDown) return null;
+    const session = await store.findByKey(key);
+    if (!session || !isHtmlPath(session.file)) return null;
+    const bytes = await readFile(session.file);
+    const result = await versionStore.record(key, bytes, { source });
+    if (result.recorded) broadcastLiveEvent("versions", key, { count: result.count, latest: result.version.id });
+    return result;
+  }
+
+  // Version writes still running. Closing the server waits for them, so nothing is written into
+  // a state directory after `close()` returns.
+  /** @type {Set<Promise<unknown>>} */
+  const pendingVersionWrites = new Set();
+  function trackVersionWrite(promise) {
+    const tracked = promise.catch(() => {}).finally(() => pendingVersionWrites.delete(tracked));
+    pendingVersionWrites.add(tracked);
+    return promise;
+  }
+
+  function recordOpenedVersion(key) {
+    trackVersionWrite(recordArtifactVersion(key, "open")).catch((error) =>
+      writeLog(`[lavish] version on open failed: ${error?.message || error}`),
+    );
+  }
   // The transcript the chrome renders is computed here (src/chat-messages.js): agent text ships
   // with its rendered html, user entries ship as text with their anchor, never as html.
   events.on("agent-reply", (key, entry) => broadcastLiveEvent("agent-reply", key, entry));
@@ -470,6 +570,8 @@ export async function serve({
     );
   });
   events.on("layout-warnings", (key, warnings) => broadcastLiveEvent("layout-warnings", key, { warnings }));
+  // A page question that ended without an answer (replaced by a newer one): the chrome tells the page.
+  events.on("ask-closed", (key, data) => broadcastLiveEvent("ask-closed", key, data));
   events.on("ended", (key, endedBy) => broadcastLiveEvent("ended", key, { ended_by: endedBy || null }));
   // Every end path emits "ended", so an ended review never keeps its agent link (#3834). A crash
   // before this runs is caught by the startup sweep below.
@@ -844,6 +946,14 @@ export async function serve({
   // the sweeper's reference snapshot and its delete (D5), and `queuePrompts` cannot
   // interleave with a concurrent poll.
 
+  // Page apps (docs/jadev-fork.md, Page apps): one set of limits for the SDK, the chrome, and these
+  // routes. Picked files reuse the attachment store, so its own limits apply to them.
+  const pageLimits = pageApps.pageAppLimits({
+    pickMaxFiles: attachmentConfig.maxPerPrompt,
+    pickMaxBytes: attachmentConfig.maxBytes,
+  });
+  const pageStore = createPageStore(attachmentStateRoot, { limits: pageLimits, log: writeLog });
+
   const defaultJsonParser = express.json({ limit: "2mb" });
   const whiteboardJsonParser = express.json({ limit: "20mb" });
   app.use((req, res, next) => {
@@ -856,8 +966,101 @@ export async function serve({
     return defaultJsonParser(req, res, next);
   });
 
-  app.get("/", (_req, res) => {
-    res.type("html").send(createLandingHtml());
+  // The gallery (Jadev fork): every page this machine opened, for people. Same host rules as every
+  // route; only shortened paths leave the server.
+  async function galleryEntries() {
+    const [sessions, pins] = await Promise.all([store.listSessions(), galleryPins.read()]);
+    return buildGalleryEntries(sessions, {
+      pins,
+      listening: new Set(activePolls.keys()),
+      readHead: readPageHead,
+      home: galleryHomes,
+    });
+  }
+
+  app.get(["/", "/gallery"], async (_req, res, next) => {
+    try {
+      const entries = await galleryEntries();
+      // It carries pin controls, so like the chrome page it is never framed.
+      res.setHeader("x-frame-options", "DENY");
+      res.setHeader("content-security-policy", "frame-ancestors 'none'");
+      res.setHeader("cache-control", "no-store");
+      res.type("html").send(
+        createGalleryHtml({
+          entries,
+          themeBootstrapJs: CHROME_THEME_BOOTSTRAP_JS,
+          faviconTag: LAVISH_DEFAULT_FAVICON,
+          logoSvg: LAVISH_LOGO_SVG,
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/gallery", async (_req, res, next) => {
+    try {
+      res.setHeader("cache-control", "no-store");
+      res.json({ entries: await galleryEntries() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/gallery/pins", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin pin request rejected" });
+        return;
+      }
+      const key = String(req.body?.key || "");
+      if (!isValidGalleryKey(key) || !(await store.findByKey(key))) {
+        res.status(404).json({ error: "session not found" });
+        return;
+      }
+      res.json({ pins: await galleryPins.set(key, req.body?.pinned === true) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // One click from the gallery. An ended review reopens here: the reviewer asking for it is the
+  // explicit opt-in a user-ended session requires.
+  app.post("/api/gallery/:key/open", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin open request rejected" });
+        return;
+      }
+      const key = req.params.key;
+      const existing = isValidGalleryKey(key) ? await store.findByKey(key) : null;
+      if (!existing) {
+        res.status(404).json({ error: "session not found" });
+        return;
+      }
+      const file = await resolveAllowedArtifactFile(existing.file);
+      if (sessionKey(file) !== key) {
+        res.status(409).json({ status: "moved", error: "The page file now resolves to another path." });
+        return;
+      }
+      if (existing.status === "ended") {
+        await store.upsertSession(file, `http://${hostForUrl(resolvedLinkHost)}:${publicPort}/session/${key}`);
+        clearFeedbackDelivery(key, activePolls, deliveredFeedback, events);
+        await syncOutstandingRepairs(key);
+        logEvent?.(`session reopened from the gallery key=${key}`);
+      }
+      res.json({ status: "opened", url: `/session/${key}` });
+    } catch (error) {
+      if (isArtifactPathError(error)) {
+        res.status(error.statusCode).json({ status: "error", code: error.code, error: error.message });
+        return;
+      }
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+        res.status(404).json({ status: "missing", error: "The page file is no longer there." });
+        return;
+      }
+      next(error);
+    }
   });
 
   app.get("/health", async (req, res) => {
@@ -955,6 +1158,7 @@ export async function serve({
       logEvent?.(`session opened key=${key} file=${file}`);
       await syncOutstandingRepairs(key);
       await watchSession(session, watchers, events, logEvent, reloadDebounceMs);
+      recordOpenedVersion(key);
       res.json({
         key,
         file,
@@ -975,11 +1179,13 @@ export async function serve({
     }
   });
 
-  async function publishAgentReply(key, text, { requireOpen = false } = {}) {
+  // Throws ASK_NOT_FOUND / ASK_CLOSED (with statusCode) when `askId` names no open page question;
+  // nothing is posted then.
+  async function publishAgentReply(key, text, { requireOpen = false, askId = "" } = {}) {
     const current = await store.findByKey(key);
     const artifactHtml = current?.file ? await readFile(current.file, "utf8").catch(() => "") : "";
     const revisionId = artifactRevisions.newestRevisionIdInHtml(artifactHtml);
-    const session = await store.addAgentReply(key, text, { requireOpen, revisionId });
+    const session = await store.addAgentReply(key, text, { requireOpen, revisionId, askId });
     if (!session || (requireOpen && session.status === "ended")) return session;
     const lastEntry = session.chat?.at(-1);
     const entry = serializeChat([
@@ -997,6 +1203,8 @@ export async function serve({
     const takeover = req.query.takeover === "1";
     const agentReply =
       req.method === "POST" && req.body?.agent_reply !== undefined ? String(req.body.agent_reply) : null;
+    // The page question the reply answers (`lavish poll --ask <id>`); meaningful only with a reply.
+    const askId = agentReply !== null && typeof req.body?.ask_id === "string" ? req.body.ask_id : "";
     if (takeover && req.method !== "POST") {
       res.status(405).json({ error: "poll takeover requires POST" });
       return;
@@ -1055,36 +1263,55 @@ export async function serve({
         res.status(403).json({ error: "cross-origin poll takeover rejected" });
         return;
       }
-      const { holder, previousPresence, conflict, missing } = await pollOwnershipLock.runExclusive(async () => {
-        const currentHolder = activePolls.get(key);
-        if (currentHolder && !takeover) return { conflict: listenerConflict(currentHolder, "LISTENER_ACTIVE") };
-        const nextHolder = { key, owner, startedAt: Date.now(), replaced: false, replace: null };
-        claimedHolder = nextHolder;
-        betweenRounds.delete(key);
-        const priorPresence = presenceSignature(key, activePolls, deliveredFeedback);
-        if (currentHolder) {
-          // Install the successor before releasing the old response so its cleanup cannot emit a
-          // transient "waiting" state or clear the successor's listener ownership.
-          currentHolder.replaced = true;
-          activePolls.set(key, nextHolder);
-          currentHolder.replace?.();
-        } else {
-          activePolls.set(key, nextHolder);
-        }
-        // Attaching a fresh round retires the prior delivery marker; releasing a poll never does.
-        deliveredFeedback.delete(key);
-        if (agentReply !== null) {
-          const session = await publishAgentReply(key, agentReply);
-          if (!session) {
-            activePolls.delete(key);
-            return { missing: true };
+      const { holder, previousPresence, conflict, missing, askError } = await pollOwnershipLock.runExclusive(
+        async () => {
+          const currentHolder = activePolls.get(key);
+          if (currentHolder && !takeover) return { conflict: listenerConflict(currentHolder, "LISTENER_ACTIVE") };
+          // A reply naming a question that is not open is refused before this poll displaces anyone.
+          const askProblem = askId ? await store.askReplyError(key, askId) : null;
+          if (askProblem) return { askError: askProblem };
+          const nextHolder = { key, owner, startedAt: Date.now(), replaced: false, replace: null };
+          claimedHolder = nextHolder;
+          betweenRounds.delete(key);
+          roundEndedAt.delete(key);
+          const priorPresence = presenceSignature(key, activePolls, deliveredFeedback);
+          if (currentHolder) {
+            // Install the successor before releasing the old response so its cleanup cannot emit a
+            // transient "waiting" state or clear the successor's listener ownership.
+            currentHolder.replaced = true;
+            activePolls.set(key, nextHolder);
+            currentHolder.replace?.();
+          } else {
+            activePolls.set(key, nextHolder);
           }
-        }
-        return { holder: nextHolder, previousPresence: priorPresence };
-      });
+          // Attaching a fresh round retires the prior delivery marker; releasing a poll never does.
+          deliveredFeedback.delete(key);
+          if (agentReply !== null) {
+            let session;
+            try {
+              session = await publishAgentReply(key, agentReply, { askId });
+            } catch (error) {
+              // The question closed between the check above and the write (another reply answered it).
+              if (!String(error?.code || "").startsWith("ASK_")) throw error;
+              activePolls.delete(key);
+              return { askError: error };
+            }
+            if (!session) {
+              activePolls.delete(key);
+              return { missing: true };
+            }
+          }
+          return { holder: nextHolder, previousPresence: priorPresence };
+        },
+      );
       if (conflict) {
         detachRequestClose();
         res.status(409).json(conflict);
+        return;
+      }
+      if (askError) {
+        detachRequestClose();
+        res.status(askError.statusCode || 409).json(askErrorBody(askError));
         return;
       }
       if (missing) {
@@ -1195,7 +1422,10 @@ export async function serve({
             await restoreClosedFeedback(key, responseResult);
             return;
           }
-          if (roundEnded && responseResult.status === "waiting") betweenRounds.add(key);
+          if (roundEnded && responseResult.status === "waiting") {
+            betweenRounds.add(key);
+            roundEndedAt.set(key, Date.now());
+          }
           finishFeedbackDelivery(key, responseResult);
           const agentResponse = agentFacingFeedback(responseResult);
           if (streamHeartbeat) {
@@ -1498,6 +1728,7 @@ export async function serve({
     try {
       const session = await publishAgentReply(req.params.key, String(req.body?.text || ""), {
         requireOpen: true,
+        askId: typeof req.body?.ask_id === "string" ? req.body.ask_id : "",
       });
       if (!session) {
         res.status(404).json({ error: "session not found" });
@@ -1507,7 +1738,263 @@ export async function serve({
         res.status(409).json({ status: "ended", ended_by: session.ended_by });
         return;
       }
-      res.json({ status: "sent" });
+      const answered = session.chat?.at(-1)?.ask_id;
+      res.json({ status: "sent", ...(answered ? { ask_id: answered } : {}) });
+    } catch (error) {
+      if (String(error?.code || "").startsWith("ASK_")) {
+        res.status(error.statusCode || 409).json(askErrorBody(error));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // Ask the agent from the page (`window.lavish.ask`, src/page-asks.js). Only the chrome may call it:
+  // the frame asks the chrome, which forwards the question. The question goes out at once as a
+  // prompt tagged "ask", and the agent's next reply answers it. A page whose agent is not
+  // listening is told so right away instead of waiting for nothing.
+  app.post("/api/:key/asks", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page question rejected" });
+        return;
+      }
+      const key = req.params.key;
+      const session = await store.findByKey(key);
+      if (!session) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      if (session.status === "ended") {
+        res.status(409).json({ code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." });
+        return;
+      }
+      const question = typeof req.body?.question === "string" ? req.body.question : "";
+      const context = typeof req.body?.context === "string" ? req.body.context : "";
+      if (!question.trim() || question.length > pageLimits.askQuestionMaxChars) {
+        res.status(400).json({
+          code: "INVALID",
+          error: `A question is 1 to ${pageLimits.askQuestionMaxChars} characters.`,
+        });
+        return;
+      }
+      if (context.length > pageLimits.askContextMaxChars) {
+        res.status(400).json({ code: "TOO_LARGE", error: "The question's data is too large." });
+        return;
+      }
+      const requested = Number(req.body?.timeout_ms);
+      const timeoutMs = Number.isFinite(requested)
+        ? Math.min(pageLimits.askMaxTimeoutMs, Math.max(pageLimits.askMinTimeoutMs, Math.floor(requested)))
+        : pageLimits.askDefaultTimeoutMs;
+      const roundEnd = roundEndedAt.get(key);
+      const listening =
+        activePolls.has(key) ||
+        deliveredFeedback.has(key) ||
+        (betweenRounds.has(key) && roundEnd !== undefined && Date.now() - roundEnd <= ASK_BETWEEN_ROUNDS_GRACE_MS);
+      if (!listening) {
+        res.status(409).json({
+          code: "NO_AGENT",
+          error: "No agent is listening to this page. Ask your agent to run lavish poll on it, then try again.",
+        });
+        return;
+      }
+      const result = await store.createAsk(
+        key,
+        { question, context, timeoutMs, attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [] },
+        {
+          resolveAttachment: (sessionKeyValue, id) => resolveAttachment(attachmentStateRoot, sessionKeyValue, id),
+          maxPerPrompt: attachmentConfig.maxPerPrompt,
+          maxPromptBytes: attachmentConfig.maxPromptBytes,
+        },
+      );
+      if (!result) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      if (result.ended) {
+        res.status(409).json({ code: "SESSION_ENDED", error: "This review has ended, so the agent cannot answer." });
+        return;
+      }
+      if (result.rejected) {
+        res.status(400).json({
+          code: "FILES_REJECTED",
+          error: "Some files could not be sent with the question.",
+          rejected: result.rejected,
+        });
+        return;
+      }
+      for (const id of result.superseded) events.emit("ask-closed", key, { ask_id: id, status: "superseded" });
+      events.emit("feedback", key, result.session.ended_by);
+      events.emit("chat-sync", key, result.session);
+      res.json({ status: "asked", ask: result.ask, superseded: result.superseded });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Page versions (Jadev fork, src/version-store.js). Reads answer any host the allowlist admits,
+  // like export; Restore writes the page file, so only this server's own chrome may ask for it.
+  // `currentId` is the newest version holding the page's current content: going back to earlier
+  // content leaves older versions with the same hash, and only one of them is the page now.
+  function serializeVersion(version, currentId) {
+    const delta = Number(version.summary?.delta) || 0;
+    return {
+      id: version.id,
+      at: version.at,
+      bytes: version.bytes,
+      size: formatBytes(version.bytes),
+      delta,
+      change: formatByteDelta(delta),
+      source: version.source,
+      ...(Number.isSafeInteger(version.restored_from) ? { restored_from: version.restored_from } : {}),
+      kind: String(version.summary?.kind || ""),
+      summary: versionSummaryText(version),
+      current: version.id === currentId,
+    };
+  }
+
+  function currentVersionId(versions, currentHash) {
+    if (!currentHash) return 0;
+    for (let index = versions.length - 1; index >= 0; index -= 1) {
+      if (versions[index].hash === currentHash) return versions[index].id;
+    }
+    return 0;
+  }
+
+  async function findVersionedSession(req, res) {
+    const key = req.params.key;
+    const session = isValidVersionKey(key) ? await store.findByKey(key) : null;
+    if (!session) {
+      res.status(404).json({ error: "session not found" });
+      return null;
+    }
+    if (refuseNonHtmlArtifact(session, res)) return null;
+    return session;
+  }
+
+  app.get("/api/:key/versions", async (req, res, next) => {
+    try {
+      const session = await findVersionedSession(req, res);
+      if (!session) return;
+      // The current file is recorded first, so the list always ends with the page as it is now.
+      let currentHash = "";
+      try {
+        currentHash = (await recordArtifactVersion(session.key, "open"))?.hash || "";
+      } catch {
+        currentHash = "";
+      }
+      const versions = await versionStore.list(session.key);
+      const currentId = currentVersionId(versions, currentHash);
+      res.setHeader("cache-control", "no-store");
+      res.json({
+        enabled: versionStore.enabled,
+        limits: {
+          max_versions: versionStore.limits.maxVersions,
+          max_page_bytes: versionStore.limits.maxPageBytes,
+        },
+        versions: versions
+          .slice()
+          .reverse()
+          .map((version) => serializeVersion(version, currentId)),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/:key/versions/diff", async (req, res, next) => {
+    try {
+      const session = await findVersionedSession(req, res);
+      if (!session) return;
+      const from = parseVersionId(req.query.from);
+      const to = parseVersionId(req.query.to);
+      const mode = req.query.mode === "html" ? "html" : "text";
+      const [before, after] =
+        from && to
+          ? await Promise.all([versionStore.read(session.key, from), versionStore.read(session.key, to)])
+          : [null, null];
+      if (!before || !after) {
+        res.status(404).json({ error: "version not found" });
+        return;
+      }
+      const cacheKey = `${before.version.hash}:${after.version.hash}:${mode}`;
+      let diff = versionDiffCache.get(cacheKey);
+      if (!diff) {
+        const lines = mode === "html" ? htmlSourceLines : htmlToTextLines;
+        diff = buildDiffRows(lines(before.bytes.toString("utf8")), lines(after.bytes.toString("utf8")));
+        if (versionDiffCache.size >= VERSION_DIFF_CACHE_MAX)
+          versionDiffCache.delete(versionDiffCache.keys().next().value);
+        versionDiffCache.set(cacheKey, diff);
+      }
+      res.setHeader("cache-control", "no-store");
+      res.json({ from, to, mode, ...diff });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/:key/versions/:id/view", async (req, res, next) => {
+    try {
+      res.setHeader("content-security-policy", VERSION_VIEW_CONTENT_SECURITY_POLICY);
+      const session = await findVersionedSession(req, res);
+      if (!session) return;
+      const id = parseVersionId(req.params.id);
+      const found = id ? await versionStore.read(session.key, id) : null;
+      if (!found) {
+        res.status(404).type("text/plain").send("Version not found");
+        return;
+      }
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.type("html").send(withArtifactBase(found.bytes.toString("utf8"), session.key));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/:key/versions/:id/restore", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin restore request rejected" });
+        return;
+      }
+      const session = await findVersionedSession(req, res);
+      if (!session) return;
+      if (session.status === "ended") {
+        res.status(409).json({ status: "ended", error: "This review has ended." });
+        return;
+      }
+      const id = parseVersionId(req.params.id);
+      const found = id ? await versionStore.read(session.key, id) : null;
+      if (!found) {
+        res.status(404).json({ error: "version not found" });
+        return;
+      }
+      // Under the page's version lock, so the save the watcher reports next finds this version
+      // already recorded instead of recording the same content as a plain save.
+      const outcome = await versionStore.withLock(session.key, async () => {
+        // Never write through a symlink swapped in after the session was opened.
+        const info = await lstat(session.file).catch(() => null);
+        if (!info || !info.isFile()) return null;
+        // What the page holds now is kept first, so a restore never loses the latest state.
+        await versionStore.recordUnlocked(session.key, await readFile(session.file), { source: "save" });
+        reviewerRestores.set(session.key, found.version.hash);
+        await writeFile(session.file, found.bytes);
+        return versionStore.recordUnlocked(session.key, found.bytes, { source: "restore", restoredFrom: id });
+      });
+      if (!outcome) {
+        res.status(409).json({ status: "missing", error: "The page file is missing or is not a regular file." });
+        return;
+      }
+      if (outcome.recorded) {
+        broadcastLiveEvent("versions", session.key, { count: outcome.count, latest: outcome.version.id });
+      }
+      logEvent?.(`version ${id} restored key=${session.key}`);
+      res.json({
+        status: "restored",
+        restored_from: id,
+        version: outcome.version ? serializeVersion(outcome.version, outcome.version.id) : null,
+      });
     } catch (error) {
       next(error);
     }
@@ -1556,6 +2043,12 @@ export async function serve({
     try {
       if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
         res.status(403).json({ error: "cross-origin share request rejected" });
+        return;
+      }
+      // The machine policy is read on every request, so `lavish policy` takes effect without a
+      // restart, and it is checked before the page is read or anything leaves the machine.
+      if (!readPolicy(path.dirname(stateFile)).share) {
+        res.status(403).json({ error: SHARE_DISABLED_MESSAGE, code: "SHARE_DISABLED" });
         return;
       }
       const session = await store.findByKey(req.params.key);
@@ -1655,6 +2148,7 @@ export async function serve({
       const session = chromeLoad.session;
       if (refuseNonHtmlArtifact(session, res)) return;
       await watchSession(session, watchers, events, logEvent, reloadDebounceMs);
+      recordOpenedVersion(session.key);
       const artifactHtml = await readFile(session.file, "utf8").catch(() => "");
       const { faviconTag, title } = extractArtifactHead(artifactHtml);
       const review = reviewIdentity(session.file, title);
@@ -1681,8 +2175,10 @@ export async function serve({
           chromeLoadToken: chromeLoad.chrome_load_token,
           attachmentMaxBytes: attachmentConfig.maxBytes,
           attachmentMaxCount: attachmentConfig.maxPerPrompt,
+          pageAppLimits: pageLimits,
           agentId: agentIds.get(session.key) || "",
           updateAvailable: updateChecker?.current() || null,
+          shareEnabled: readPolicy(path.dirname(stateFile)).share,
           agentNudgeAvailable: await agentNudger.available(session.key),
         }),
       );
@@ -1843,6 +2339,20 @@ export async function serve({
     }
   });
 
+  app.get("/lavish-assets/:asset", async (req, res, next) => {
+    try {
+      const asset = Object.hasOwn(lavishAssetUrls, req.params.asset) ? lavishAssetUrls[req.params.asset] : null;
+      if (!asset) {
+        res.status(404).send("Not found");
+        return;
+      }
+      res.setHeader("cache-control", "no-cache");
+      res.type(asset.type).send(await readFile(asset.url, "utf8"));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/chrome-fonts/:asset", async (req, res, next) => {
     try {
       const asset = Object.hasOwn(chromeFontUrls, req.params.asset) ? chromeFontUrls[req.params.asset] : null;
@@ -1891,6 +2401,7 @@ export async function serve({
         createSdkJs(String(req.query.key || ""), verified.artifact_revision, verified.artifact_load_token, {
           maxAttachmentCount: attachmentConfig.maxPerPrompt,
           maxAttachmentBytes: attachmentConfig.maxBytes,
+          pageAppLimits: pageLimits,
         }),
       );
     } catch (error) {
@@ -2117,6 +2628,11 @@ export async function serve({
       // queued references (the sweep alone never evicts referenced files). The
       // eviction grace keeps a just-uploaded ready card off the reclaim list so it
       // survives until the user sends it.
+      // `?kind=file` is the chrome uploading what the reviewer chose through window.lavish.files.pick:
+      // it also admits PDF and UTF-8 text, named by `?name=` only for the text extension. Every other
+      // upload stays images only.
+      const kind = req.query.kind === "file" ? "file" : "image";
+      const nameHint = typeof req.query.name === "string" ? req.query.name.slice(0, 255) : "";
       const attachment = await store.runExclusive(async () => {
         const referenced = await store.referencedAttachmentIds();
         return writeAttachment(attachmentStateRoot, req.params.key, buffer, {
@@ -2126,6 +2642,8 @@ export async function serve({
           ttlMs: attachmentConfig.ttlMs,
           referenced,
           evictionGraceMs: attachmentConfig.evictionGraceMs,
+          kind,
+          nameHint,
         });
       });
       res.json({ status: "stored", attachment });
@@ -2172,6 +2690,76 @@ export async function serve({
       });
       res.json({ status });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  // Page storage (`window.lavish.store`). Only this server's chrome may call it: the artifact frame
+  // asks the chrome, which validates the request and forwards it here, where it is validated again.
+  app.post("/api/:key/page-store", async (req, res, next) => {
+    try {
+      if (!isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page storage request rejected" });
+        return;
+      }
+      const session = await store.findByKey(req.params.key);
+      if (!session) {
+        res.status(404).json({ code: "SESSION_NOT_FOUND", error: "session not found" });
+        return;
+      }
+      const op = String(req.body?.op || "");
+      const name = req.body?.key;
+      if (op === "get") {
+        res.json(await pageStore.get(session.key, name));
+      } else if (op === "set") {
+        res.json(await pageStore.set(session.key, session.file, name, req.body?.value));
+      } else if (op === "delete") {
+        res.json(await pageStore.delete(session.key, session.file, name));
+      } else if (op === "list") {
+        res.json(await pageStore.list(session.key, typeof req.body?.prefix === "string" ? req.body.prefix : ""));
+      } else {
+        throw pageStoreError("INVALID", "unknown page storage operation");
+      }
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page>`: what a page stored, for the agent. Header-less CLI requests pass; a
+  // present foreign Origin or Referer does not, like the poll control routes.
+  app.get("/api/:key/page-data", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json(await pageStore.read(req.params.key));
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  // `lavish data <page> --clear --yes`. The global origin guard already refuses a foreign page.
+  app.post("/api/:key/page-data/clear", async (req, res, next) => {
+    try {
+      if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+        res.status(403).json({ error: "cross-origin page data request rejected" });
+        return;
+      }
+      res.json({ status: "cleared", ...(await pageStore.clear(req.params.key)) });
+    } catch (error) {
+      if (error?.code && error?.statusCode) {
+        res.status(error.statusCode).json({ code: error.code, error: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -2654,6 +3242,8 @@ export async function serve({
     }
   })();
 
+  // Settled once the listeners closed and every version write that was already running finished.
+  const finished = done.then(() => Promise.allSettled([...pendingVersionWrites]));
   return {
     port: publicPort,
     hosts: boundHosts,
@@ -2661,9 +3251,9 @@ export async function serve({
     agentLinksSwept,
     close: async () => {
       shutdown("", "", "close() called");
-      await done;
+      await finished;
     },
-    done,
+    done: finished,
   };
 }
 
@@ -2760,13 +3350,6 @@ const STATUS_PAGE_CSS =
 
 function createStatusPageHtml({ title, body }) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${STATUS_PAGE_CSS}</style></head><body><main class="card"><p class="brand">${LAVISH_LOGO_SVG}<span>Lavish</span></p>${body}</main></body></html>`;
-}
-
-function createLandingHtml() {
-  return createStatusPageHtml({
-    title: "Lavish Editor",
-    body: "<h1>Lavish Editor is running</h1><p>Open the review session URL printed by your agent.</p>",
-  });
 }
 
 function createDeniedHtml({ title, message, workingUrl }) {
@@ -3118,6 +3701,18 @@ function clearFeedbackDelivery(key, activePolls, deliveredFeedback, events) {
   }
 }
 
+// How long after a poll round ends a page question still counts the agent as listening (#3782).
+const ASK_BETWEEN_ROUNDS_GRACE_MS = 60_000;
+
+function askErrorBody(error) {
+  return {
+    status: "error",
+    code: error.code,
+    error: error.message,
+    ...(error.ask_status ? { ask_status: error.ask_status } : {}),
+  };
+}
+
 export function computePresence(key, activePolls, deliveredFeedback) {
   if (deliveredFeedback.has(key)) return "working";
   return activePolls.has(key) ? "listening" : "waiting";
@@ -3230,6 +3825,12 @@ const chromeIcons = {
     15,
   ),
   command: chromeIcon('<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>', 16),
+  // Lucide layers (saved versions) and rotate-ccw (restore one).
+  layers: chromeIcon(
+    '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+    15,
+  ),
+  rotateCcw: chromeIcon('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>', 14),
   zoomIn: chromeIcon(
     '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>',
     16,
@@ -3434,6 +4035,20 @@ export function extractArtifactHead(html) {
   return { faviconTag, title };
 }
 
+// A saved version is served from /api/<key>/versions/<n>/view, so its relative asset links would
+// resolve there. A <base> pointing at the page's folder lets them load the page's current assets.
+// A page that declares its own <base> keeps it.
+export function withArtifactBase(html, key) {
+  const source = String(html ?? "");
+  const head = source.slice(0, 64 * 1024);
+  if (/<base\b/i.test(head)) return source;
+  const tag = `<base href="/artifact/${encodeURIComponent(String(key))}/">`;
+  const anchor = /<head\b[^>]*>/i.exec(head) || /<html\b[^>]*>/i.exec(head) || /^\s*<!doctype[^>]*>/i.exec(head);
+  if (!anchor) return tag + source;
+  const at = anchor.index + anchor[0].length;
+  return source.slice(0, at) + tag + source.slice(at);
+}
+
 // The chrome page ships with the layout-gate overlay already covering the artifact area. Install
 // its bounded escape and manual bypass inline before `chrome-client.js`, so they still work if the
 // shared server shuts down between serving the page and serving that script. This block also arms
@@ -3526,10 +4141,14 @@ export function createChromeHtml(
     attachmentMaxBytes = 0,
     attachmentMaxCount = 0,
     attachmentAcceptedMime = ACCEPTED_IMAGE_MIME,
+    pageAppLimits = pageApps.pageAppLimits(),
+    fileAcceptedTypes = ACCEPTED_FILE_TYPES,
     agentId = "",
     agentNudgeAvailable = false,
     /** @type {{ version: string, current: string } | null} */
     updateAvailable = null,
+    // False when the machine policy turns sharing off: the menu item and palette entry are left out.
+    shareEnabled = true,
   } = {},
 ) {
   const agent = agentDisplay(agentId);
@@ -3565,6 +4184,8 @@ export function createChromeHtml(
     attachmentMaxBytes,
     attachmentMaxCount,
     attachmentAcceptedMime: acceptedMime,
+    pageAppLimits,
+    fileAcceptedTypes,
     updateAvailable,
     // The legend's swatches are server-owned, not artifact-owned. The chrome
     // derives every swatch from this palette by registry position, so an
@@ -3586,11 +4207,12 @@ export function createChromeHtml(
 ${faviconTag}
 <script id="lavishThemeBootstrap">${CHROME_THEME_BOOTSTRAP_JS}</script>
 <link rel="stylesheet" href="/chrome.css">
+<link rel="stylesheet" href="/lavish-assets/versions.css">
 </head>
 <body class="${bodyClass}">
 <button class="edge-reveal edge-reveal-top" id="barReveal" type="button" aria-label="Show the top bar"><span class="edge-reveal-pill">Show the top bar</span></button>
 <button class="edge-reveal edge-reveal-bottom" id="peekReveal" type="button" aria-label="Show Peek"><span class="edge-reveal-pill">Show Peek</span></button>
-<div class="bar"><div class="brand"><span class="brand-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><span class="brand-mark">Lavish</span></div><span class="bar-rule" aria-hidden="true"></span><button class="bar-path" id="copyPathBar" type="button" title="Copy path · ${escapeHtml(session.file)}" aria-label="Copy the artifact path"><span class="bar-path-dir">${escapeHtml(path.basename(path.dirname(session.file)))} /</span><span class="bar-path-file">${escapeHtml(path.basename(session.file))}</span>${chromeIcons.copy}</button><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count t-digit-group" id="warningsCount">0</span></button><div class="menu warnings-drawer t-dropdown" data-origin="top-right" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer">${chromeIcons.history}<span class="revisions-button-text" id="revisionsLatest">Revisions</span><span class="revisions-count t-digit-group" id="revisionsCount">0</span></button><div class="menu revisions-drawer t-dropdown" data-origin="top-right" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"></span><span class="agent-status-text t-text-swap" id="agentStatusText">Agent not listening</span></span><div class="pointer-mode" role="group" aria-label="Pointer mode"><button class="pointer-option" id="modeInteract" type="button" aria-pressed="false" title="${escapeHtml(modeToggleHint)}">${chromeIcons.pointer}<span>Interact</span></button><button class="pointer-option annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}">${chromeIcons.crosshair}<span>Annotate</span></button></div><div class="layout-switch" role="group" aria-label="Conversation layout"><button class="layout-option" id="layoutLeft" type="button" aria-pressed="false" aria-label="Conversation on the left" title="Conversation on the left">${chromeIcons.panelLeft}</button><button class="layout-option" id="layoutRight" type="button" aria-pressed="false" aria-label="Conversation on the right" title="Conversation on the right">${chromeIcons.panelRight}</button><button class="layout-option" id="layoutRail" type="button" aria-pressed="false" aria-label="Collapse the conversation to a rail" title="Collapse the conversation to a rail">${chromeIcons.panelRail}</button><button class="layout-option" id="layoutPeek" type="button" aria-pressed="false" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme"><span class="t-icon-swap" id="themeIconSwap" data-state="a"><span class="theme-icon t-icon" data-icon="a">${chromeIcons.moon}</span><span class="theme-icon t-icon" data-icon="b">${chromeIcons.sun}</span></span></button><div class="update-wrap" id="updateWrap" hidden><button class="update-button" id="updateButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="updatePopover">${chromeIcons.update}<span>Update</span></button><div class="menu update-popover t-dropdown" data-origin="top-right" id="updatePopover" role="dialog" aria-labelledby="updateTitle" hidden><p class="update-title" id="updateTitle">A newer Lavish is available</p><p class="update-copy" id="updateCopy"></p><pre class="update-steps" id="updateSteps"></pre><div class="update-actions"><button class="button button-ghost" id="updateDismiss" type="button">Dismiss</button><button class="button" id="updateCopySteps" type="button">Copy command</button></div></div></div><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu t-dropdown" data-origin="top-right" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button><button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button><div class="menu-rule"></div><button class="menu-item" id="hideBar" type="button">${chromeIcons.panelTopClose}<span>Hide the top bar</span></button><button class="menu-item" id="openThemes" type="button">${chromeIcons.palette}<span>Theme presets</span></button><button class="menu-item" id="followSystemTheme" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.monitor}<span>Follow system theme</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="startInteract" type="button" role="menuitemcheckbox" aria-checked="false">${chromeIcons.pointer}<span>Open pages in Interact</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="notifyToggle" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.bell}<span>Notifications</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><p class="menu-note" id="notifyNote" role="status" hidden></p><button class="menu-item menu-subitem" id="notifyAllow" type="button" hidden><span id="notifyAllowLabel">Allow desktop notifications</span></button><button class="menu-item" id="openPalette" type="button">${chromeIcons.command}<span>Command palette</span><kbd class="menu-kbd">Ctrl K</kbd></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
+<div class="bar"><div class="brand"><span class="brand-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><span class="brand-mark">Lavish</span></div><span class="bar-rule" aria-hidden="true"></span><button class="bar-path" id="copyPathBar" type="button" title="Copy path · ${escapeHtml(session.file)}" aria-label="Copy the artifact path"><span class="bar-path-dir">${escapeHtml(path.basename(path.dirname(session.file)))} /</span><span class="bar-path-file">${escapeHtml(path.basename(session.file))}</span>${chromeIcons.copy}</button><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count t-digit-group" id="warningsCount">0</span></button><div class="menu warnings-drawer t-dropdown" data-origin="top-right" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer">${chromeIcons.history}<span class="revisions-button-text" id="revisionsLatest">Revisions</span><span class="revisions-count t-digit-group" id="revisionsCount">0</span></button><div class="menu revisions-drawer t-dropdown" data-origin="top-right" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><span class="agent-status" id="agentStatus" data-state="waiting" role="status" aria-live="polite"><span class="agent-status-dot" aria-hidden="true"></span><span class="agent-status-text t-text-swap" id="agentStatusText">Agent not listening</span></span><div class="pointer-mode" role="group" aria-label="Pointer mode"><button class="pointer-option" id="modeInteract" type="button" aria-pressed="false" title="${escapeHtml(modeToggleHint)}">${chromeIcons.pointer}<span>Interact</span></button><button class="pointer-option annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}">${chromeIcons.crosshair}<span>Annotate</span></button></div><div class="layout-switch" role="group" aria-label="Conversation layout"><button class="layout-option" id="layoutLeft" type="button" aria-pressed="false" aria-label="Conversation on the left" title="Conversation on the left">${chromeIcons.panelLeft}</button><button class="layout-option" id="layoutRight" type="button" aria-pressed="false" aria-label="Conversation on the right" title="Conversation on the right">${chromeIcons.panelRight}</button><button class="layout-option" id="layoutRail" type="button" aria-pressed="false" aria-label="Collapse the conversation to a rail" title="Collapse the conversation to a rail">${chromeIcons.panelRail}</button><button class="layout-option" id="layoutPeek" type="button" aria-pressed="false" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme"><span class="t-icon-swap" id="themeIconSwap" data-state="a"><span class="theme-icon t-icon" data-icon="a">${chromeIcons.moon}</span><span class="theme-icon t-icon" data-icon="b">${chromeIcons.sun}</span></span></button><div class="update-wrap" id="updateWrap" hidden><button class="update-button" id="updateButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="updatePopover">${chromeIcons.update}<span>Update</span></button><div class="menu update-popover t-dropdown" data-origin="top-right" id="updatePopover" role="dialog" aria-labelledby="updateTitle" hidden><p class="update-title" id="updateTitle">A newer Lavish is available</p><p class="update-copy" id="updateCopy"></p><pre class="update-steps" id="updateSteps"></pre><div class="update-actions"><button class="button button-ghost" id="updateDismiss" type="button">Dismiss</button><button class="button" id="updateCopySteps" type="button">Copy command</button></div></div></div><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu t-dropdown" data-origin="top-right" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="openVersions" type="button">${chromeIcons.layers}<span>Versions</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button>${shareEnabled ? `<button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button>` : ""}<div class="menu-rule"></div><button class="menu-item" id="hideBar" type="button">${chromeIcons.panelTopClose}<span>Hide the top bar</span></button><button class="menu-item" id="openThemes" type="button">${chromeIcons.palette}<span>Theme presets</span></button><button class="menu-item" id="followSystemTheme" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.monitor}<span>Follow system theme</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="startInteract" type="button" role="menuitemcheckbox" aria-checked="false">${chromeIcons.pointer}<span>Open pages in Interact</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><button class="menu-item" id="notifyToggle" type="button" role="menuitemcheckbox" aria-checked="true">${chromeIcons.bell}<span>Notifications</span><span class="menu-check" aria-hidden="true">${chromeIcons.check}</span></button><p class="menu-note" id="notifyNote" role="status" hidden></p><button class="menu-item menu-subitem" id="notifyAllow" type="button" hidden><span id="notifyAllowLabel">Allow desktop notifications</span></button><button class="menu-item" id="openPalette" type="button">${chromeIcons.command}<span>Command palette</span><kbd class="menu-kbd">Ctrl K</kbd></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
 <div class="layout" id="layout"><div class="frame"><div class="find-bar" id="findBar" role="search" aria-label="Find in the page" hidden><input class="find-input" id="findInput" type="text" placeholder="Find in page" aria-label="Find in page" autocomplete="off" spellcheck="false"><span class="find-count" id="findCount" aria-live="polite"></span><button class="find-step" id="findPrev" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)">${chromeIcons.chevronUp}</button><button class="find-step" id="findNext" type="button" aria-label="Next match" title="Next match (Enter)">${chromeIcons.chevronDown}</button><button class="find-step" id="findClose" type="button" aria-label="Close find" title="Close (Esc)">${chromeIcons.close}</button></div><iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" allow="fullscreen" data-artifact-src="/artifact/${session.key}/index.html"></iframe></div><div class="panel-scrim" id="panelScrim"></div><aside class="panel" id="panel"><div class="panel-resizer" id="panelResizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation" aria-valuemin="280" aria-valuemax="560" aria-valuenow="360" tabindex="0"><span class="panel-grip" aria-hidden="true">${chromeIcons.gripVertical}</span></div><div class="panel-rail" id="panelRail"><button class="rail-button" id="railOpen" type="button" aria-label="Open the conversation" title="Open the conversation">${chromeIcons.chat}<span class="rail-unread t-badge" id="railUnread" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="railUnreadCount">1</span></span></button><button class="rail-button" id="railAnnotate" type="button" aria-pressed="true" aria-label="Annotate" title="Annotate (A)">${chromeIcons.crosshair}</button><button class="rail-button" id="railPeek" type="button" aria-label="Peek: float the conversation at the bottom" title="Peek: float the conversation at the bottom">${chromeIcons.panelBottom}</button></div><div class="panel-head" id="panelHead"><span class="panel-handle" aria-hidden="true"></span><div class="panel-head-row"><span class="panel-logo" aria-hidden="true">${LAVISH_LOGO_SVG}</span><h2>Conversation</h2><span class="panel-agent" id="panelAgent"${agent ? "" : " hidden"}>${agent ? escapeHtml(agent.name) : ""}</span><span class="panel-summary" id="panelSummary" role="status" aria-live="polite"></span><button class="panel-see-through" id="panelSeeThrough" type="button" aria-label="Hold to see the artifact through the panel" title="Hold to see the artifact through the panel">${chromeIcons.eye}</button><button class="panel-toggle" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" aria-label="Show conversation"><span class="t-icon-swap" id="panelToggleIcon" data-state="a"><span class="t-icon" data-icon="a">${chromeIcons.chevronUp}</span><span class="t-icon" data-icon="b">${chromeIcons.chevronDown}</span></span><span class="t-badge panel-queued" id="panelQueued" data-open="false" aria-hidden="true"><span class="t-badge-dot" id="panelQueuedCount">0</span></span></button><span class="panel-head-tools"><button class="panel-tool panel-tool-side" id="panelSwapSide" type="button" aria-label="Move to the other side" title="Move to the other side">${chromeIcons.arrowLeftRight}</button><button class="panel-tool panel-tool-rail" id="panelToRail" type="button" aria-label="Collapse to a rail" title="Collapse to a rail">${chromeIcons.panelLeftClose}</button><button class="panel-tool panel-tool-hide" id="peekHide" type="button" aria-label="Hide Peek" title="Hide Peek">${chromeIcons.eyeOff}</button><button class="panel-tool panel-tool-back" id="peekToSidebar" type="button" aria-label="Back to the sidebar" title="Back to the sidebar">${chromeIcons.panelLeft}</button></span></div></div><div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"></div><button class="scroll-latest t-dropdown" data-origin="bottom-center" id="scrollLatest" type="button" aria-label="Scroll to the latest message" title="Scroll to the latest message" hidden>${chromeIcons.chevronDown}</button></div><div class="composer" id="chatComposer"><div class="presence-banner handoff-banner" id="handoffBanner" hidden><span>This review is open in another Lavish tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</span><button class="handoff-takeover" id="handoffTakeover" type="button">Take over here</button></div><div class="presence-banner handoff-banner" id="outdatedBanner" hidden><span id="outdatedText">The Lavish server this page was connected to is no longer running. Reloading will work once it is running again.</span><span class="outdated-actions"><button class="handoff-takeover" id="outdatedReload" type="button">Check and reload</button><button class="handoff-takeover" id="outdatedDismiss" type="button">Dismiss</button></span></div><div class="presence-banner nudge-notice" id="presenceBanner" role="region" aria-labelledby="presenceTitle" aria-describedby="presenceCopy" hidden><p class="nudge-title" id="presenceTitle">${chromeIcons.unplug}<span>Your agent is not listening</span></p><p class="nudge-copy" id="presenceCopy">Feedback waits until it polls again. Copy a message to paste into your agent.</p><div class="nudge-actions"><button class="button button-outline" id="nudgeAgent" type="button" hidden aria-busy="false" title="Send this session's file path and key to its T3 Code thread">${chromeIcons.send}<span>Nudge agent</span></button><button class="button button-outline" id="copyNudge" type="button" data-copied="false"><span class="t-icon-swap" id="copyNudgeIcon" data-state="a" aria-hidden="true"><span class="t-icon" data-icon="a">${chromeIcons.copy}</span><span class="t-icon" data-icon="b">${chromeIcons.check}</span></span><span id="copyNudgeLabel">Copy nudge</span></button></div><p class="nudge-status" id="nudgeStatus" role="status" aria-live="polite" data-tone=""><span class="nudge-status-icon" aria-hidden="true"><span data-icon="pending">${chromeIcons.loader}</span><span data-icon="success">${chromeIcons.circleCheck}</span><span data-icon="info">${chromeIcons.info}</span><span data-icon="error">${chromeIcons.circleAlert}</span></span><span id="nudgeStatusText"></span></p></div><div class="chat-suggestions" id="chatSuggestions" role="group" aria-label="Suggested replies" hidden></div><div class="send-hint" id="sendHint" hidden>Nothing queued in this tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</div><div class="queue" id="queuePanel" hidden><button class="queue-head" id="queueToggle" type="button" aria-expanded="true" aria-controls="queuedLog"><span class="queue-title">Queued</span><span class="queue-count t-digit-group" id="queueCount">0</span><span class="queue-chevron" aria-hidden="true">${chromeIcons.chevronDown}</span></button><ul class="queue-list" id="queuedLog"></ul></div><div class="edit-bar" id="editBar" hidden><span id="editBarText">Editing a queued note</span><button class="edit-bar-cancel" id="editCancel" type="button">Cancel</button></div><div class="prompt-input t-input" id="promptInput"><div class="message-marks" id="messageMarks" aria-label="Marked blocks" hidden></div><div class="chat-attachments" id="chatAttachments"></div><textarea id="chatInput" placeholder="Ask for a change, or annotate the artifact" rows="1"></textarea><div class="chat-attachment-toolbar"><button class="chat-attach" id="chatAttach" type="button" aria-label="Attach images" title="Attach images">${chromeIcons.paperclip}</button><button class="chat-annotate" id="composerAnnotate" type="button" aria-pressed="true" title="Annotate (A)">${chromeIcons.crosshair}<span>Annotate</span></button><input id="chatAttachInput" type="file" accept="${escapeHtml(acceptedMime.join(","))}" multiple hidden><span class="chat-attachment-notice" id="chatAttachmentNotice" role="status"></span></div><div class="actions" id="sendActions"><button class="button button-ghost" id="queueLater" type="button" title="Queue for later (Ctrl+Q)">Queue</button><div class="send-split" id="sendSplit"><button class="button send-main" id="send">${chromeIcons.arrowUp}<span class="t-text-swap" id="sendLabel">Send</span></button><button class="button send-more" id="sendMore" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sendMenu" aria-label="More send options" title="More send options">${chromeIcons.chevronDown}</button><div class="menu send-menu t-dropdown" data-origin="bottom-right" id="sendMenu" role="menu" hidden><button class="menu-item danger" id="sendAndEnd" type="button" role="menuitem">${chromeIcons.exit}<span>Send and end session</span></button></div></div></div></div><div class="composer-hints" aria-hidden="true"><span><kbd>Enter</kbd> send</span><span><kbd>Shift Enter</kbd> new line</span><span><kbd>Ctrl Q</kbd> queue</span><span><kbd>Ctrl K</kbd> commands</span></div></div></aside></div>
 <div class="image-zoom" id="imageZoom" role="dialog" aria-modal="true" aria-labelledby="imageZoomCaption" hidden><div class="image-zoom-overlay" aria-hidden="true"></div><div class="image-zoom-stage" id="imageZoomStage"><img class="image-zoom-img" id="imageZoomImg" alt="" draggable="false"></div><p class="image-zoom-caption" id="imageZoomCaption">Image preview</p><button class="image-zoom-step image-zoom-prev" id="imageZoomPrev" type="button" aria-label="Previous picture" title="Previous picture (Left arrow)" hidden>${chromeIcons.chevronLeft}</button><button class="image-zoom-step image-zoom-next" id="imageZoomNext" type="button" aria-label="Next picture" title="Next picture (Right arrow)" hidden>${chromeIcons.chevronRight}</button><button class="image-zoom-close" id="imageZoomClose" type="button" aria-label="Close preview" title="Close (Esc)">${chromeIcons.close}</button><div class="image-zoom-bar" role="toolbar" aria-label="Zoom"><output class="image-zoom-position" id="imageZoomPosition" aria-live="polite" hidden></output><span class="image-zoom-sep image-zoom-position-sep" id="imageZoomPositionSep" aria-hidden="true" hidden></span><button class="image-zoom-tool" id="imageZoomOut" type="button" aria-label="Zoom out" title="Zoom out (-)">${chromeIcons.zoomOut}</button><output class="image-zoom-level" id="imageZoomLevel" aria-live="polite">100%</output><button class="image-zoom-tool" id="imageZoomIn" type="button" aria-label="Zoom in" title="Zoom in (+)">${chromeIcons.zoomIn}</button><span class="image-zoom-sep" aria-hidden="true"></span><button class="image-zoom-tool image-zoom-text" id="imageZoomFit" type="button" title="Fit to screen (0)">Fit</button><button class="image-zoom-tool image-zoom-text" id="imageZoomActual" type="button" title="Actual size (1)">1:1</button></div></div>
 <div class="image-zoom video-viewer" id="videoViewer" role="dialog" aria-modal="true" aria-labelledby="videoViewerCaption" hidden><div class="image-zoom-overlay" aria-hidden="true"></div><div class="video-viewer-stage" id="videoViewerStage"><video class="video-viewer-video" id="videoViewerVideo" controls playsinline preload="metadata"></video></div><p class="image-zoom-caption" id="videoViewerCaption">Video</p><button class="image-zoom-close" id="videoViewerClose" type="button" aria-label="Close video" title="Close (Esc)">${chromeIcons.close}</button><div class="image-zoom-bar" role="toolbar" aria-label="Video"><button class="image-zoom-tool image-zoom-text video-viewer-fullscreen" id="videoViewerFullscreen" type="button" title="Full screen (F)">${chromeIcons.fullscreen}<span>Full screen</span></button></div></div>
@@ -3600,14 +4222,22 @@ ${faviconTag}
 <div class="ended-overlay" id="endedOverlay" hidden><div class="ended-card"><div class="ended-title">Session ended.<br>Return to your agent to continue.</div><p class="ended-copy">${escapeHtml(session.file)}</p></div></div>
 <div class="whiteboard-overlay" id="whiteboardOverlay" hidden><div class="whiteboard-shell"><div class="whiteboard-error" id="whiteboardError" hidden></div><button class="whiteboard-close" id="whiteboardClose" type="button" aria-label="Close whiteboard"><svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button><iframe id="whiteboardFrame" title="Excalidraw whiteboard" sandbox="allow-scripts allow-popups"></iframe></div></div>
 <div class="share-overlay theme-overlay" id="themeDialog" role="dialog" aria-modal="true" aria-labelledby="themeTitle" hidden><div class="share-card theme-dialog t-modal" id="themeSurface"><div class="share-head"><div><h2 id="themeTitle">Theme presets</h2><p class="theme-sub">Pick a preset. Each has a light and a dark side; the orb you click sets both. The choice stays in this browser.</p></div><button class="share-close" id="themeClose" type="button" aria-label="Close theme presets">${chromeIcons.close}</button></div><div class="theme-grid" id="themeGrid" role="list"></div></div></div>
+${createVersionsDialogHtml()}
 <div class="theme-icons" hidden><span id="themeIconSun">${chromeIcons.sunSmall}</span><span id="themeIconMoon">${chromeIcons.moonSmall}</span><span id="themeIconCopy">${chromeIcons.copy}</span></div>
 <div class="ui-tooltip" id="uiTooltip" role="tooltip" hidden></div>
 <script id="lavish-session" type="application/json">${sessionJson}</script>
 <script src="/composer.js"></script>
 <script>${CHROME_BOOT_FAILSAFE_JS}</script>
 <script src="/chrome-client.js" onerror="window.__lavishChromeBootFailed()"></script>
+<script src="/lavish-assets/versions-client.js"></script>
 </body>
 </html>`;
+}
+
+// The Versions panel (Jadev fork). src/versions-client.js drives it; nothing here is filled until
+// the panel opens, so a page that never opens it pays one hidden node.
+function createVersionsDialogHtml() {
+  return `<div class="share-overlay versions-overlay" id="versionsDialog" role="dialog" aria-modal="true" aria-labelledby="versionsTitle" hidden><div class="versions-card t-modal" id="versionsSurface"><div class="versions-head"><div class="versions-heading"><h2 class="versions-title" id="versionsTitle">Versions</h2><p class="versions-sub" id="versionsSub">Every saved change of this page, kept on this machine.</p></div><button class="share-close" id="versionsClose" type="button" aria-label="Close versions">${chromeIcons.close}</button></div><div class="versions-body"><div class="versions-list" id="versionsList" role="listbox" aria-label="Saved versions" tabindex="0"></div><div class="versions-detail" id="versionsDetail"><div class="versions-toolbar"><div class="versions-tabs" role="tablist" aria-label="Show the version"><button class="versions-tab" id="versionsTabView" type="button" role="tab" aria-selected="true" aria-controls="versionsStage">View</button><button class="versions-tab" id="versionsTabCompare" type="button" role="tab" aria-selected="false" aria-controls="versionsStage">Compare</button></div><label class="versions-compare" id="versionsCompareWrap" hidden><span>with</span><select id="versionsCompareBase" aria-label="Compare with"></select></label><div class="versions-modes" id="versionsModes" role="group" aria-label="Compare by" hidden><button class="versions-mode" type="button" data-mode="text" aria-pressed="true">Text</button><button class="versions-mode" type="button" data-mode="html" aria-pressed="false">HTML</button></div><span class="versions-toolbar-spacer" aria-hidden="true"></span><button class="button button-outline versions-restore" id="versionsRestore" type="button" disabled>${chromeIcons.rotateCcw}<span id="versionsRestoreLabel">Restore</span></button></div><div class="versions-confirm" id="versionsConfirm" role="group" aria-labelledby="versionsConfirmText" hidden><p class="versions-confirm-text" id="versionsConfirmText"></p><div class="versions-confirm-actions"><button class="button button-ghost" id="versionsConfirmCancel" type="button">Cancel</button><button class="button" id="versionsConfirmRestore" type="button">Restore</button></div></div><div class="versions-stage" id="versionsStage" role="tabpanel"><iframe class="versions-frame" id="versionsFrame" title="Saved version, read-only" sandbox="allow-scripts"></iframe><div class="versions-diff" id="versionsDiff" hidden></div><p class="versions-empty" id="versionsEmpty" hidden></p></div><p class="versions-note" id="versionsNote">Read-only. Images and styles beside the page load as they are now.</p></div></div><p class="versions-status" id="versionsStatus" role="status" aria-live="polite"></p></div></div>`;
 }
 
 export function createWhiteboardFrameHtml(channelToken = "") {
@@ -3651,13 +4281,13 @@ function serializeModuleHelpers(module) {
  * @param {string} key
  * @param {number} [artifactRevision]
  * @param {string} [artifactLoadToken]
- * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[] }} [options]
+ * @param {{ maxAttachmentCount?: number, maxAttachmentBytes?: number, acceptedImageMime?: string[], pageAppLimits?: Record<string, number> }} [options]
  */
 export function createSdkJs(
   key,
   artifactRevision = 0,
   artifactLoadToken = "",
-  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME } = {},
+  { maxAttachmentCount, maxAttachmentBytes, acceptedImageMime = ACCEPTED_IMAGE_MIME, pageAppLimits = undefined } = {},
 ) {
   const mermaidHelperSource = serializeModuleHelpers(mermaidNode);
   const tableHelperSource = serializeModuleHelpers(tableCellHelpers);
@@ -3665,6 +4295,7 @@ export function createSdkJs(
   const findHelperSource = serializeModuleHelpers(findInPage);
   const toonHelperSource = serializeModuleHelpers(toonEncode);
   const queueAllHelperSource = serializeModuleHelpers(queueAll);
+  const pageAppHelperSource = serializeModuleHelpers(pageApps);
   const revisionNumber = Number(artifactRevision);
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : 0;
   const loadToken = String(artifactLoadToken || "").slice(0, 200);
@@ -3676,6 +4307,7 @@ export function createSdkJs(
     maxAttachmentCount: Number.isFinite(maxAttachmentCount) ? maxAttachmentCount : undefined,
     maxAttachmentBytes: Number.isFinite(maxAttachmentBytes) ? maxAttachmentBytes : undefined,
     acceptedImageMime: acceptedImageMime.map(String),
+    pageAppLimits: pageApps.pageAppLimits(pageAppLimits),
   };
   return `(() => {
 const key=${JSON.stringify(key)};
@@ -3706,6 +4338,7 @@ ${revisionHelperSource.declarations}
 ${findHelperSource.declarations}
 ${toonHelperSource.declarations}
 ${queueAllHelperSource.declarations}
+${pageAppHelperSource.declarations}
 (${createArtifactSdk.toString()})(deriveQueueKey, isNativeInteractiveControl, mermaidHelpers, artifactRevision, artifactLoadToken, key, ${JSON.stringify(sdkOptions)});
 })();`;
 }

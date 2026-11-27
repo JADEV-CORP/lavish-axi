@@ -1,5 +1,8 @@
 import { compareSemver, fetchLatestVersion } from "axi-sdk-js";
 
+import { stateDir as defaultStateDir } from "./paths.js";
+import { readPolicy } from "./policy.js";
+
 // The npm package this build is published as. `lavish update` (the SDK built-in) reads the same name
 // from package.json; test/update-check.test.js keeps the two equal.
 export const PACKAGE_NAME = "@jadev-corp/lavish";
@@ -47,11 +50,13 @@ export async function readLatestPublishedVersion({ packageName = PACKAGE_NAME, f
  * Checks shortly after the server starts and then every few hours, and calls `onChange` with
  * `{ version, current }` when a newer version is published (or `null` once it no longer is).
  * Its timers never keep the server alive.
- * @param {{ currentVersion: string, read: () => Promise<string>, intervalMs?: number, firstCheckMs?: number }} options
+ * `enabled` is asked before every fetch, so a policy change stops a running checker.
+ * @param {{ currentVersion: string, read: () => Promise<string>, enabled?: () => boolean, intervalMs?: number, firstCheckMs?: number }} options
  */
 export function createUpdateChecker({
   currentVersion,
   read,
+  enabled = () => true,
   intervalMs = UPDATE_CHECK_INTERVAL_MS,
   firstCheckMs = UPDATE_CHECK_FIRST_MS,
 }) {
@@ -62,6 +67,14 @@ export function createUpdateChecker({
   let stopped = false;
 
   async function check(onChange) {
+    if (!enabled()) {
+      // Turned off while running: drop a pending notice and fetch nothing.
+      if (available) {
+        available = null;
+        onChange(null);
+      }
+      return;
+    }
     const latest = await read();
     if (stopped || !latest) return;
     const next =
@@ -94,9 +107,16 @@ export function createUpdateChecker({
 }
 
 /** The checker the `server` command runs, unless LAVISH_AXI_UPDATE_CHECK=0 turns it off. */
-export function defaultUpdateChecker({ currentVersion, env = process.env }) {
+export function defaultUpdateChecker({ currentVersion, env = process.env, stateDir = defaultStateDir() }) {
+  // The machine policy (lavish policy --update-check off) turns the check off with no variable set.
+  if (!readPolicy(stateDir).updateCheck) return null;
   if (["0", "off", "false"].includes(String(env.LAVISH_AXI_UPDATE_CHECK || "").toLowerCase())) return null;
   // A build whose own version is not plain semver has nothing to compare against.
   if (compareReleaseVersions(currentVersion, currentVersion) === null) return null;
-  return createUpdateChecker({ currentVersion, read: () => readLatestPublishedVersion() });
+  return createUpdateChecker({
+    currentVersion,
+    read: () => readLatestPublishedVersion(),
+    // Read before each fetch, so `lavish policy --update-check off` applies to a running server.
+    enabled: () => readPolicy(stateDir).updateCheck,
+  });
 }

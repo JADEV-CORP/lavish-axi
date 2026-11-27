@@ -27,6 +27,17 @@ import {
   unstampDelivery,
 } from "./chat-messages.js";
 import { normalizeMermaidNodeTarget } from "./mermaid-node.js";
+import {
+  ASK_TAG,
+  ASK_TARGET_TYPE,
+  askId as formatAskId,
+  askPromptText,
+  askStatus,
+  boundAsks,
+  isAskPrompt,
+  isOpenAskStatus,
+  replyTargetAsk,
+} from "./page-asks.js";
 import { EXCALIDRAW_SCENE_TARGET_TYPE, normalizeExcalidrawSceneTarget } from "./whiteboard-core.js";
 
 export const LAYOUT_WARNINGS_TARGET_TYPE = "layout-warnings";
@@ -341,6 +352,66 @@ export class SessionStore {
     return { ...session, fresh_feedback: !restoring && acceptedPrompts.length > 0 };
   }
 
+  /**
+   * Ask the agent from the page (src/page-asks.js). Queues the question as a prompt tagged "ask"
+   * through the same path as any prompt (attachments resolved, transcript entry, feedback status),
+   * then records the ask and closes the page's older open ask: one question at a time per page,
+   * and the newest one wins. Returns `{ session, ask, superseded }`, `null` for no session, or the
+   * same `{ ended }` / `{ rejected }` shapes `queuePrompts` returns.
+   * @param {string} key
+   * @param {{ question: string, context?: string, timeoutMs: number, attachments?: Array<{ id: string, name?: string }> }} ask
+   * @param {Record<string, any>} [options] the attachment resolver and caps, as for queuePrompts
+   */
+  async createAsk(key, ask, options = {}) {
+    return this.runExclusive(async () => {
+      const now = Date.now();
+      const current = (await this.readState()).sessions[key];
+      if (!current) return null;
+      const taken = new Set((current.asks || []).map((record) => record?.id));
+      let id = formatAskId(crypto.randomBytes(4).toString("hex"));
+      while (taken.has(id)) id = formatAskId(crypto.randomBytes(4).toString("hex"));
+      const expiresAt = new Date(now + ask.timeoutMs).toISOString();
+      const prompt = {
+        uid: "",
+        prompt: askPromptText(ask.question, ask.context),
+        selector: "",
+        tag: ASK_TAG,
+        text: String(ask.question).trim().slice(0, 200),
+        target: { type: ASK_TARGET_TYPE, ask_id: id, expects_reply: true, expires_at: expiresAt },
+        ...(Array.isArray(ask.attachments) && ask.attachments.length ? { attachments: ask.attachments } : {}),
+      };
+      const queued = await this.#queuePromptsLocked(key, { prompts: [prompt] }, options);
+      if (!queued || queued.ended || queued.rejected) return queued;
+
+      const state = await this.readState();
+      const session = state.sessions[key];
+      const at = new Date(now).toISOString();
+      const superseded = [];
+      for (const record of session.asks || []) {
+        if (!record || record.id === id || !isOpenAskStatus(askStatus(record, session.prompts, now))) continue;
+        record.status = "superseded";
+        record.closed_at = at;
+        superseded.push(record.id);
+      }
+      if (superseded.length) {
+        // A replaced question the agent has not taken yet never reaches it, and its bubble claims
+        // no delivery it did not have.
+        session.prompts = session.prompts.filter(
+          (pending) => !(isAskPrompt(pending) && superseded.includes(pending.target.ask_id)),
+        );
+        session.pending_prompts = session.prompts.length;
+        markAskEntriesUndelivered(session.chat, superseded);
+      }
+      session.asks = boundAsks(
+        [...(session.asks || []), { id, created_at: at, expires_at: expiresAt }],
+        session.prompts,
+        now,
+      );
+      await this.writeState(state);
+      return { session, ask: { id, expires_at: expiresAt }, superseded };
+    });
+  }
+
   async issueReviewerHandoff(key) {
     return this.runExclusive(async () => {
       const state = await this.readState();
@@ -624,6 +695,14 @@ export class SessionStore {
       if (!session) {
         return { status: "missing" };
       }
+      // A page question that expired while it waited is not handed over: the page stopped waiting.
+      const closedAsks = closedAskIds(session, Date.now());
+      if (closedAsks.length) {
+        session.prompts = (session.prompts || []).filter(
+          (prompt) => !(isAskPrompt(prompt) && closedAsks.includes(prompt.target.ask_id)),
+        );
+        markAskEntriesUndelivered(session.chat, closedAsks);
+      }
       // Prompts queued before the session ended (a browser send-and-end) must still reach the
       // agent, so deliver them before reporting the ended state; the next poll then sees ended.
       const prompts = session.prompts || [];
@@ -632,6 +711,11 @@ export class SessionStore {
       const artifactFailures = Array.isArray(session.artifact_failures) ? session.artifact_failures : [];
       const alreadyEnded = session.status === "ended";
       if (prompts.length === 0 && artifactFailures.length === 0) {
+        if (closedAsks.length) {
+          session.pending_prompts = 0;
+          if (!alreadyEnded) session.status = "open";
+          await this.writeState(state);
+        }
         return alreadyEnded ? { status: "ended", ended_by: session.ended_by } : { status: "waiting" };
       }
       // Seen (docs/delivery-acks.md): this take drains every pending prompt and `queuePrompts`
@@ -707,7 +791,15 @@ export class SessionStore {
     });
   }
 
-  async addAgentReply(key, text, { requireOpen = false, revisionId = "" } = {}) {
+  /**
+   * @param {string} key
+   * @param {string} text
+   * @param {{ requireOpen?: boolean, revisionId?: string, askId?: string }} [options] `askId` names the
+   * page question this reply answers. Without it the reply answers the oldest question the agent has
+   * received and not answered, if any. An `askId` that names no open question throws ASK_NOT_FOUND or
+   * ASK_CLOSED and writes nothing.
+   */
+  async addAgentReply(key, text, { requireOpen = false, revisionId = "", askId = "" } = {}) {
     return this.runExclusive(async () => {
       const state = await this.readState();
       const session = state.sessions[key];
@@ -715,6 +807,8 @@ export class SessionStore {
         return null;
       }
       if (requireOpen && session.status === "ended") return session;
+      const target = replyTargetAsk(session.asks, session.prompts, { askId, now: Date.now() });
+      if ("error" in target) throw askReplyFailure(target.error);
       const at = new Date().toISOString();
       // Done (docs/delivery-acks.md): the reply answers what the agent has seen. Stamped in the same
       // write as the reply, with the reply's own time, and never on an entry no poll has delivered.
@@ -723,12 +817,40 @@ export class SessionStore {
       // The newest revision the artifact declared when the agent replied, so the reply can offer
       // a jump to the blocks that round changed.
       if (revisionId) reply.revision_id = String(revisionId);
+      if (target.ask) {
+        // The reply is the page's answer. A question answered before any poll took it leaves the
+        // queue, so the agent is not handed a question it already answered.
+        reply.ask_id = target.ask.id;
+        target.ask.status = "answered";
+        target.ask.closed_at = at;
+        const before = (session.prompts || []).length;
+        session.prompts = (session.prompts || []).filter(
+          (prompt) => !(isAskPrompt(prompt) && prompt.target.ask_id === target.ask.id),
+        );
+        if (session.prompts.length !== before) {
+          markAskEntriesUndelivered(session.chat, [target.ask.id]);
+          session.pending_prompts = session.prompts.length;
+          if (session.status === "feedback" && session.prompts.length === 0 && !session.artifact_failures?.length) {
+            session.status = "open";
+          }
+        }
+      }
       session.chat = [...(session.chat || []), reply];
       applyTranscriptBound(session);
       session.chat_revision = normalizeRevision(session.chat_revision) + 1;
       session.updated_at = at;
       await this.writeState(state);
       return session;
+    });
+  }
+
+  /** Why a reply cannot answer `askId`, or null. addAgentReply checks again when it writes. */
+  async askReplyError(key, askId) {
+    return this.runExclusive(async () => {
+      const session = (await this.readState()).sessions[key];
+      if (!session) return null;
+      const target = replyTargetAsk(session.asks, session.prompts, { askId, now: Date.now() });
+      return "error" in target ? askReplyFailure(target.error) : null;
     });
   }
 
@@ -872,6 +994,35 @@ function agentFacingPrompt(prompt) {
   const rest = { ...prompt };
   delete rest.prompt_id;
   return rest;
+}
+
+function askReplyFailure(problem) {
+  return Object.assign(new Error(problem.message), {
+    code: problem.code,
+    statusCode: problem.code === "ASK_NOT_FOUND" ? 404 : 409,
+    ...(problem.status ? { ask_status: problem.status } : {}),
+  });
+}
+
+// Ask ids whose question is no longer open (expired, answered, superseded) but whose prompt still
+// waits in the queue.
+function closedAskIds(session, now) {
+  const records = new Map((session.asks || []).filter(Boolean).map((record) => [record.id, record]));
+  const closed = [];
+  for (const prompt of session.prompts || []) {
+    if (!isAskPrompt(prompt)) continue;
+    const record = records.get(prompt.target.ask_id);
+    if (!record || !isOpenAskStatus(askStatus(record, session.prompts, now))) closed.push(prompt.target.ask_id);
+  }
+  return closed;
+}
+
+// A page question that left the queue undelivered keeps its bubble but no receipt: the positional
+// Seen stamp (docs/delivery-acks.md) must not claim a delivery for it.
+function markAskEntriesUndelivered(chat, ids) {
+  for (const entry of Array.isArray(chat) ? chat : []) {
+    if (entry && entry.role === "user" && ids.includes(entry.ask_id) && !entry.delivered_at) entry.receipt = "none";
+  }
 }
 
 function layoutWarningPromptIds(prompt) {

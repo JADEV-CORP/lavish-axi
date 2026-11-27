@@ -270,6 +270,48 @@ A link is a private file in `agent-bindings`, never session JSON, served markup,
 
 Automatic linking keys off the harness conversation (`CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID`, hashed, only when `T3CODE_CLI_PATH` is set). A conversation's thread record in `agent-owners` lets its later sessions link without asking. Reuse never replaces an existing session link (created with a hard link, so racing opens settle on one), and an explicit `--t3-thread` always wins. Every end path emits `ended`, which releases the session's link; `/api/end` reports what it released, and a server start sweeps links whose session ended or vanished while no server ran. Thread records unused for 30 days are pruned at that sweep. Dispatch coalesces concurrent clicks and keeps a 15-second cooldown even after an uncertain failure. `t3 thread send` exiting 0 means T3 queued the message for the thread, not that the agent has read the feedback.
 
+### Versions and gallery (Jadev fork)
+
+`src/version-store.js` keeps every saved change of a page in `versions/<key>/` (index plus gzipped content objects named
+by sha256); `src/version-diff.js` holds the pure text extraction, Myers line diff, word diff and summaries. Rules that
+are easy to break:
+
+- The store is keyed by the session key and validates it (`isValidVersionKey`) before building any path. A route
+  reads versions only under its own `:key`, so one page's versions are never served through another page's key.
+- A read re-hashes the decompressed bytes and refuses a mismatch. Restore writes those exact bytes.
+- Recording dedups against the newest entry's hash only. Going back to earlier content is a new entry that shares the
+  object. "Current" is the newest entry holding the current hash, never every entry with that hash.
+- `#ensureDir` never creates the state directory itself, and the server's `close()`/`done` wait for version writes
+  that were running. A late save must not recreate a state directory a test or reset removed.
+- Every extraction and diff walk is linear and bounded (`versionDiffLimits`): no regex with an unbounded lazy scan,
+  Myers capped at an edit budget, then the middle is reported as replaced (`exact: false`).
+- Restore holds the page's version lock across "record current, write, record restore", so the watcher's save that
+  follows finds the restore already recorded. It sets `reviewerRestores` first; `handleArtifactSaved` skips
+  `markWorking` for the save whose hash matches, because the reviewer's restore is not the agent working.
+- Restore requires same-origin provenance, refuses an ended session, and `lstat`s the page so it never writes through
+  a symlink. The version view carries no SDK and answers `sandbox allow-scripts; frame-ancestors 'self'`.
+- `src/versions-client.js` is a separate classic script after `chrome-client.js`. It must not reach chrome globals
+  other than the `window` functions `setLayerOpen` and `closeMenus`; live updates arrive as the `lavish:versions`
+  document event that `chrome-client.js` dispatches for the `versions` live event.
+
+`src/gallery.js` builds the gallery from `state.json`: status (`galleryStatus`), `~` paths (`shortPath`, also against
+the home folder's real path), project labels, pins (`gallery-pins.json`, written by rename) and a title reader cached
+by mtime and size. Entries never carry the full path. `/` and `/gallery` answer `X-Frame-Options: DENY`; pins and
+reopen are same-origin guarded. Reopening an ended review from the gallery is the reviewer's explicit opt-in, the
+same as `--reopen`.
+
 ### Poll survives a server restart (Jadev fork)
 
 A server replaced or stopped while a poll waits used to end that poll with `SERVER_ERROR`, often right after its `--agent-reply`, so the agent stopped listening. A poll without `--timeout-ms` now re-attaches up to three times, but only through `pollReattachTarget`: after a short settle it adopts or starts a server and re-polls only if that server is healthy and lists no listener for this review. A listener there could be this poll's own claim or another agent's, and re-attaching would collide with it. The re-attached poll never resends the reply or `--takeover`. A reply lost before the old server published it is not recovered; nothing on the server can tell the CLI whether it landed.
+
+### Page apps (Jadev fork)
+
+`window.lavish.store`, `ask`, `files.pick` and `download` (docs/jadev-fork.md, Page apps) share one request channel. The SDK (`createPageApps` in `src/page-apps.js`, serialized into the bundle) posts `lavish:pageApp` through `postArtifactMessage` with an id and a per-document nonce; the chrome answers `lavish:pageAppResult` only while the asking load is current, and the SDK applies a result only from `parent` with its own nonce, like attachment results. A request field must never be called `type`: `postArtifactMessage` spreads the payload over the message's own `type`, which is why a download carries `mime`.
+
+Every hop validates. The SDK refuses early with the shared limits (`pageAppLimits`, threaded through `createSdkJs`), the chrome re-checks with the same limits from the session JSON (it cannot import modules), and the routes check again: `/api/:key/page-store` and `/api/:key/asks` are same-origin guarded and refuse header-less callers, so the frame's opaque origin and any other page are refused. `GET /api/:key/page-data` and `POST /api/:key/page-data/clear` serve `lavish data`: header-less CLI requests pass, a present foreign Origin or Referer does not.
+
+Page storage lives in `<state-dir>/page-data/<session key>.json`, never in `state.json`, owner-only, written atomically under one mutex (`src/page-store.js`). Entries are a `Map` in memory because a page may use `__proto__` as a key. The chrome serializes a page's storage requests so a set followed by a get reads its own write, and sends a value as JSON inside the body, not as a string, so it is not escaped twice and stays under the 2 MB body limit. An unreadable file is moved to `.corrupt` rather than locking the page out.
+
+An ask is an ordinary prompt tagged `ask` with an `ask` target, plus a record in `session.asks` (`src/page-asks.js`). Pending and delivered are derived from whether the prompt still waits in `session.prompts`, so a closed-poll restore needs no extra bookkeeping. A reply answers only a delivered ask unless `--ask` names one, and `poll --agent-reply` publishes its reply before it takes feedback, so a reply written before the agent saw a question never answers it. One open ask per session: a newer one supersedes it, removes its pending prompt, and emits `ask-closed`. `takeFeedback` drops expired or closed ask prompts. A question that left the queue undelivered gets `receipt: "none"`, because the positional Seen stamp would otherwise mark it. A reply with an `--ask` that is not open throws `ASK_NOT_FOUND` or `ASK_CLOSED` before anything is written, and a poll checks it before it claims ownership. The asks route treats a session as listened to when a poll holds it, the agent is working, or a round ended less than a minute ago; otherwise it answers `NO_AGENT` at once.
+
+Picked files reuse the attachment store under `?kind=file`: `detectFileType` admits images and PDF by magic bytes and UTF-8 text without NUL bytes, with the extension from the picked name only when it is a text type. Every other upload stays images only. `statAttachmentForServe` serves images only, so a picked document is never served back over HTTP; the chrome shows it as a named chip. The picker runs in the chrome after user activation and shares the page-wide upload budget, so the page gets ids and names but never the bytes. `download` saves through the chrome only under user activation, after the chrome re-cleans the name and bounds the size.

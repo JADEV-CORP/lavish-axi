@@ -1556,7 +1556,12 @@ test("server status pages use the chrome's square rose tokens without loading an
       host: `attacker.example:${server.port}`,
       headers: { accept: "text/html" },
     });
-    const landing = await rawRequest(server.port, "/", { headers: { accept: "text/html" } });
+    // A host the allowlist refused also gets a refusal on the root URL, which is the gallery
+    // for allowed hosts (Jadev fork).
+    const landing = await rawRequest(server.port, "/", {
+      host: `attacker.example:${server.port}`,
+      headers: { accept: "text/html" },
+    });
     const chromeCss = await readFile(new URL("../src/chrome.css", import.meta.url), "utf8");
     // Drop whitespace and leading zeros only; normalizeCssForAssertions would turn 320.12 into 32.12.
     const tokenValue = (value) =>
@@ -1768,7 +1773,8 @@ test("Tailscale mode binds concrete listeners, serves the MagicDNS link, and tea
       headers: { accept: "text/html" },
     });
     assert.equal(landing.status, 200);
-    assert.match(landing.body, /Lavish Editor is running/);
+    // The root URL is the gallery (Jadev fork), on the same host rules as review pages.
+    assert.match(landing.body, /<title>Pages · Lavish<\/title>/);
 
     const shutdown = await rawRequest(server.port, "/shutdown", {
       method: "POST",
@@ -3674,7 +3680,14 @@ test("event WebSocket preserves initial state and named live-event semantics", a
     }).then((response) => response.json());
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}/events/${opened.key}`, { origin: base });
     const messages = on(socket, "message");
-    const nextMessage = async () => JSON.parse(String((await messages.next()).value[0]));
+    // The version saved on open is announced in the background and can land between any two
+    // events, so this test of the other events skips it.
+    const nextMessage = async () => {
+      for (;;) {
+        const message = JSON.parse(String((await messages.next()).value[0]));
+        if (message.type !== "versions") return message;
+      }
+    };
     await once(socket, "open");
     assert.deepEqual(await nextMessage(), {
       type: "chat-sync",
@@ -6676,7 +6689,7 @@ test("/health and the landing page stay responsive after opening two back-to-bac
       new Promise((_, reject) => setTimeout(() => reject(new Error("/ timed out")), 1000)),
     ]);
     assert.equal(rootRes.status, 200);
-    assert.match(await rootRes.text(), /Lavish Editor/);
+    assert.match(await rootRes.text(), /<title>Pages · Lavish<\/title>/);
 
     assert.ok(Date.now() - start < 1000, "both probes should return well under one second");
   } finally {

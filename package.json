@@ -1,6 +1,6 @@
 {
   "name": "@jadev-corp/lavish",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packageManager": "pnpm@11.1.1",
   "description": "Your agent asks on an HTML page, you answer in one click, and it gets every answer. The JADEV build of lavish-axi.",
   "type": "module",
